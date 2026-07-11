@@ -20,7 +20,7 @@ export type SigilConfig = {
     baseBranch: string;
     testReport?: { path: string; format: "junit" };
   };
-  review: { reviewer: string };
+  review: { reviewer: string; followUpReviews: number };
 };
 
 export const CONFIG_FILE = "sigil.config.json";
@@ -43,7 +43,7 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
     branchPrefix: "sigil/",
     baseBranch: "main",
   },
-  review: { reviewer: "reviewer" },
+  review: { reviewer: "reviewer", followUpReviews: 0 },
 };
 
 export const AgentBindingSchema = z.object({
@@ -71,7 +71,10 @@ const ConfigSchema: z.ZodType<SigilConfig> = z.object({
     baseBranch: z.string().min(1),
     testReport: z.object({ path: z.string().min(1), format: z.literal("junit") }).optional(),
   }),
-  review: z.object({ reviewer: z.string().min(1) }),
+  review: z.object({
+    reviewer: z.string().min(1),
+    followUpReviews: z.number().int().nonnegative().default(0),
+  }),
 });
 
 export function loadConfig(rootDir = process.cwd()): SigilConfig {

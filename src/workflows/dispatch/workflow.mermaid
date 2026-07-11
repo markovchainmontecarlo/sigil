@@ -16,7 +16,7 @@ flowchart TD
     SoftwareChange["call softwareChange in item context on item branch from refreshed delivery base"]
     Ready{"change valid and issue-free?"}
     Repair["repair existing branch from exact gate, review, or weakened-test evidence"]
-    VerifyRepair["run all gates and fresh structured reviews"]
+    VerifyRepair["run all gates and configured follow-up reviews"]
     Publish["idempotently publish item PR to delivery base"]
     Merge["enable auto-merge and poll until green and merged"]
     VerifyBase["fetch origin delivery base and detach worktree there; run build and test on updated delivery base after synced checkout"]

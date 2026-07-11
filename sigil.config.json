@@ -51,6 +51,7 @@
     "baseBranch": "main"
   },
   "review": {
-    "reviewer": "reviewer"
+    "reviewer": "reviewer",
+    "followUpReviews": 0
   }
 }

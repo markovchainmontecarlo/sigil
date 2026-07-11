@@ -38,6 +38,7 @@ describe("loadConfig", () => {
     expect(config.evals.build).toBe("bun run typecheck");
     expect(config.context).toEqual([]);
     expect(config.plan.planners).toEqual(["explorer", "implementer"]);
+    expect(config.review.followUpReviews).toBe(0);
   });
 
   test("context entries parse with update defaulting false", () => {

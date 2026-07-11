@@ -31,7 +31,10 @@ function git(repo: string, args: string[]): string {
   return execFileSync("git", args, { cwd: repo, encoding: "utf8" });
 }
 
-function fixture(repairLimit = 2): { repo: string; base: string } {
+function fixture(
+  repairLimit = 2,
+  followUpReviews = 0,
+): { repo: string; base: string } {
   const repo = mkdtempSync(join(tmpdir(), "sigil-review-test-"));
   git(repo, ["init", "-b", "main"]);
   git(repo, ["config", "user.email", "test@example.com"]);
@@ -46,7 +49,7 @@ function fixture(repairLimit = 2): { repo: string; base: string } {
     context: [],
     plan: { planners: ["reviewer"], synthesizer: "reviewer" },
     implement: { coder: "coder", batchSize: 5, repairLimit, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "reviewer" },
+    review: { reviewer: "reviewer", followUpReviews },
   }, null, 2));
   writeFileSync(join(repo, "app.txt"), "before\n");
   git(repo, ["add", "."]);
@@ -95,7 +98,7 @@ describe("structured software-change review", () => {
     expect(result.fixRan).toBe(false);
   });
 
-  test("repairs a high finding and requires a fresh review", async () => {
+  test("repairs a high finding without a follow-up review by default", async () => {
     const { repo, base } = fixture();
     changeApp(repo);
     const actions: AgentAction[] = [
@@ -104,7 +107,6 @@ describe("structured software-change review", () => {
         writeFileSync(join(repo, "app.txt"), "atomic\n");
         return "fixed";
       },
-      () => ({ findings: [] }),
     ];
 
     const result = await review({ repo, base, autofix: true }, context(repo, actions));
@@ -115,8 +117,8 @@ describe("structured software-change review", () => {
     expect(actions).toHaveLength(0);
   });
 
-  test("lets the reviewer recommend a bounded medium repair", async () => {
-    const { repo, base } = fixture();
+  test("runs the configured number of follow-up reviews", async () => {
+    const { repo, base } = fixture(2, 1);
     changeApp(repo);
     const actions: AgentAction[] = [
       () => ({ findings: [finding({ severity: "medium" })] }),
@@ -142,8 +144,8 @@ describe("structured software-change review", () => {
     expect(result.structuredFindings).toHaveLength(1);
   });
 
-  test("repairs weakened tests and runs fresh integrity review", async () => {
-    const { repo, base } = fixture();
+  test("repairs weakened tests and runs a configured integrity follow-up", async () => {
+    const { repo, base } = fixture(2, 1);
     mkdirSync(join(repo, "test"));
     writeFileSync(join(repo, "test", "app.test.ts"), "expect(value).toBe(2);\n");
     git(repo, ["add", "."]);
@@ -173,7 +175,7 @@ describe("structured software-change review", () => {
   });
 
   test("stops only after one stable finding exhausts its repair budget", async () => {
-    const { repo, base } = fixture(1);
+    const { repo, base } = fixture(1, 1);
     changeApp(repo);
     const actions: AgentAction[] = [
       () => ({ findings: [finding()] }),

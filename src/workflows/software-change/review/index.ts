@@ -184,6 +184,7 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
   const config = loadConfig(input.repo);
   const findingsFile = ctx.artifacts.path("review-findings.md");
   const attempts = new Map<string, number>();
+  let followUpReviewsRemaining = config.review.followUpReviews;
   let fixRan = false;
 
   try {
@@ -244,6 +245,15 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
         continue;
       }
 
+      if (followUpReviewsRemaining === 0) {
+        reviewed = {
+          ...reviewed,
+          findings: reviewed.findings.filter((finding) => !actionable(finding)),
+        };
+        break;
+      }
+
+      followUpReviewsRemaining -= 1;
       reviewed = await collectFindings(
         ctx,
         input,
