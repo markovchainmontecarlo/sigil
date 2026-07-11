@@ -125,7 +125,7 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 | `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>]` | Apply a task graph, review it, then push and open a PR. | PR creation succeeded, review is not blocking, and no failed tasks or issues were reported. |
 | `sigil review --repo <dir> --base <ref> [--no-autofix] [--context <text>]` | Review the current diff. | There are no unresolved high findings and no issues. |
 | `sigil breakdown --repo <dir> --mission <text> [--out <file>]` | Turn a mission into a backlog. | The produced backlog is valid. |
-| `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch [--integration-branch <branch>]` | Deliver a backlog in dependency order through main or an accumulating integration branch. | Dispatch finished without stopping. |
+| `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch [--integration-branch <branch>] [--final-action openPullRequest\|mergeWhenGreen] [--production-gate <name>]` | Deliver a backlog in dependency order through main or an accumulating integration branch. | Dispatch finished without stopping. |
 | `sigil validate-workflow [--repo <dir>] <workflow-file>` | Validate a static YAML workflow. | The workflow error array is empty. |
 | `sigil run-workflow --repo <dir> --file <workflow-file>` | Run a static YAML workflow inline. | The workflow completed without recorded issues. |
 | `sigil validate-sigil <workflow.ts>` | Validate a TypeScript sigil without running it. | The workflow imports and has a callable export. |
@@ -160,7 +160,7 @@ env -u CLAUDECODE sigil probe --repo /path/to/repo --intent "<usage or product i
 env -u CLAUDECODE sigil software-change --repo /path/to/repo --intent "<same intent>" --task-file /path/to/repo/.sigil/runs/task-graph.json
 ```
 
-For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. `dispatch` consumes that backlog, calls `softwareChange` for each deliverable item, then owns publishing, merge, and delivery-base verification. Use `integrationBranch` to accumulate item PRs away from main and open one final PR. Use `mergeWhenGreen` only when every verified item should merge directly to main.
+For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. `dispatch` consumes that backlog, calls `softwareChange` for each deliverable item, then owns repair convergence, publishing, merge, and delivery-base verification. Its run artifact directory contains `dispatch-state.json`; rerun with the same run context to resume the active branch and stage. Pull-request creation is idempotent, merge waits for green checks, and delivered items are not replayed. Use `integrationBranch` to accumulate item PRs away from main. The default final action opens one final PR. `--final-action mergeWhenGreen` also merges that PR, and `--production-gate <name>` verifies the configured deployment gate afterward. Use the direct `mergeWhenGreen` policy only when every verified item should merge directly to main.
 
 ```sh
 env -u CLAUDECODE sigil breakdown --repo /path/to/repo --mission "<mission>" --out /path/to/repo/.sigil/runs/backlog.json

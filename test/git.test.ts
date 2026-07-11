@@ -8,6 +8,7 @@ import {
   checkoutFreshBranch,
   checkoutIntegrationBranch,
   commitAll,
+  createPr,
   mergePr,
   publish,
   push,
@@ -31,6 +32,20 @@ function repo(): string {
 }
 
 describe("git helpers", () => {
+  test("createPr reuses an existing pull request", async () => {
+    const calls: string[][] = [];
+    const result = await createPr("/repo", { title: "Title", body: "Body", base: "main", head: "change" }, {
+      gh: async (_repo, args) => {
+        calls.push(args);
+        return { code: 0, stdout: "1\n", stderr: "", log: "" };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.slice(0, 2)).toEqual(["pr", "list"]);
+  });
+
   test("commitAll commits changes and reports nothing on a clean tree", async () => {
     const dir = repo();
     writeFileSync(join(dir, "tracked.txt"), "two\n");
@@ -246,7 +261,9 @@ describe("git helpers", () => {
     const result = await mergePr("/repo", { branch: "sigil/change", base: "main" }, {
       gh: async (_repo, args) => {
         ghCalls.push(args);
-        return { code: 0, stdout: "", stderr: "", log: "merged" };
+        return args[1] === "view"
+          ? { code: 0, stdout: "MERGED\n", stderr: "", log: "" }
+          : { code: 0, stdout: "", stderr: "", log: "merged" };
       },
       git: async (_repo, args) => {
         gitCalls.push(args);
@@ -255,7 +272,10 @@ describe("git helpers", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(ghCalls).toEqual([["pr", "merge", "sigil/change", "--merge"]]);
+    expect(ghCalls).toEqual([
+      ["pr", "merge", "sigil/change", "--merge", "--auto"],
+      ["pr", "view", "sigil/change", "--json", "state", "--jq", ".state"],
+    ]);
     expect(ghCalls[0]).not.toContain("--delete-branch");
     expect(gitCalls).toEqual([
       ["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"],
@@ -268,7 +288,9 @@ describe("git helpers", () => {
     const gitCalls: string[][] = [];
 
     const result = await mergePr("/repo", { branch: "sigil/change", base: "main" }, {
-      gh: async () => ({ code: 0, stdout: "", stderr: "", log: "merged" }),
+      gh: async (_repo, args) => args[1] === "view"
+        ? { code: 0, stdout: "MERGED\n", stderr: "", log: "" }
+        : { code: 0, stdout: "", stderr: "", log: "merged" },
       git: async (_repo, args) => {
         gitCalls.push(args);
         return { code: 1, stdout: "", stderr: "fetch failed", log: "fetch failed" };

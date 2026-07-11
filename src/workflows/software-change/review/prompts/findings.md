@@ -8,6 +8,4 @@ Changed paths:
 Diff statistics:
 {{DIFF_STAT}}
 
-For each finding give: SEVERITY, file:line, the concrete failure scenario, and a one-line statement of the defect. Severity scale: HIGH = wrong behavior, data loss, security, a broken gate, or shipping failed work; MEDIUM = a real defect with a workaround or a narrow blast radius; LOW = style or cleanup. Rank most-severe first. If you find nothing real, say so. Do not invent findings to fill space.
-
-Write your findings to {{OUT_FILE}}.
+Return one structured finding for each real defect. Use a stable descriptive id. Include severity, path, optional line, concrete failure scenario, defect, required change, and whether repair is recommended. HIGH findings always recommend repair. Recommend repair for a MEDIUM only when the correction is small, low-risk, and inside this change's scope. LOW findings never recommend repair. Severity scale: HIGH = wrong behavior, data loss, security, a broken gate, or shipping failed work; MEDIUM = a real defect with a workaround or a narrow blast radius; LOW = style or cleanup. Rank most-severe first. Return an empty findings array when there is no real defect.

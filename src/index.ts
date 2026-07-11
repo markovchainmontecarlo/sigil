@@ -143,7 +143,7 @@ export {
   type MigrationItemResult,
   type MigrationResult,
 } from "./workflows/migrate/index.js";
-export { parseUnresolvedHigh, review, type ReviewInput, type ReviewResult } from "./workflows/software-change/review/index.js";
+export { review, ReviewFindingSchema, type ReviewFinding, type ReviewInput, type ReviewResult } from "./workflows/software-change/review/index.js";
 export { reviewPrompts } from "./workflows/software-change/review/prompts.js";
 export { compileYamlWorkflow } from "./yaml/compile.js";
 export { parseYamlWorkflow, validateYamlWorkflow, validateYamlWorkflowFile } from "./yaml/validate.js";

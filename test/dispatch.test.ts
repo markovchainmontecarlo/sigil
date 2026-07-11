@@ -6,9 +6,19 @@ import { describe, expect, test } from "bun:test";
 import { BACKLOG_CONTRACT_VERSION, type Backlog } from "../src/contracts/backlog.js";
 import { CONTRACT_VERSION, type TaskGraph } from "../src/contracts/task-graph.js";
 import { createContext } from "../src/context.js";
-import { createDispatch, dispatchWithOptions as dispatch, verifyBase } from "../src/workflows/dispatch/index.js";
+import {
+  createDispatch,
+  dispatchWithOptions,
+  verifyBase,
+  type DispatchInput,
+  type DispatchOptions,
+} from "../src/workflows/dispatch/index.js";
 import type { AttemptResult, PublishResult } from "../src/git.js";
 import type { SoftwareChangeInput, SoftwareChangeResult } from "../src/workflows/software-change/workflow.js";
+
+function dispatch(input: DispatchInput, options: DispatchOptions) {
+  return dispatchWithOptions(input, { wait: async () => {}, ...options });
+}
 
 function tempRepo(evals: Record<string, string> = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "sigil-dispatch-test-"));
@@ -413,12 +423,12 @@ describe("dispatch", () => {
     expect(result.stoppedAt).toBe("feature");
     expect(result.results.map((item) => item.item)).toEqual(["base", "feature"]);
     expect(changeCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature"]);
-    expect(mergeCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature"]);
+    expect(mergeCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature", "sigil/feature", "sigil/feature", "sigil/feature"]);
     expect(verifyCalls).toHaveLength(1);
     expect(result.results[1].issues).toContain("merge failed: merge red");
   });
 
-  test("mergeWhenGreen stops on base verification failure after merge", async () => {
+  test("mergeWhenGreen retries base verification and continues", async () => {
     const repo = tempRepo();
     const changeCalls: ChangeCall[] = [];
     const mergeCalls: Array<{ repo: string; branch: string; base: string }> = [];
@@ -431,13 +441,12 @@ describe("dispatch", () => {
       verifyBase: makeVerifyBaseStub(verifyCalls, [{ ok: true, log: "base ok" }, { ok: false, log: "verify red" }]),
     });
 
-    expect(result.delivered).toEqual(["base"]);
-    expect(result.stoppedAt).toBe("feature");
-    expect(result.results.map((item) => item.item)).toEqual(["base", "feature"]);
-    expect(changeCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature"]);
-    expect(mergeCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature"]);
-    expect(verifyCalls).toHaveLength(2);
-    expect(result.results[1].issues).toContain("base verification failed: verify red");
+    expect(result.delivered).toEqual(["base", "feature", "polish"]);
+    expect(result.stoppedAt).toBeUndefined();
+    expect(result.results.map((item) => item.item)).toEqual(["base", "feature", "polish"]);
+    expect(changeCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature", "sigil/polish"]);
+    expect(mergeCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature", "sigil/polish"]);
+    expect(verifyCalls).toHaveLength(4);
   });
 
   test("mergeWhenGreen stops failed tasks before publishing, merging, or verification", async () => {
@@ -565,6 +574,29 @@ describe("dispatch", () => {
     expect(publishCalls.map((call) => call.branch)).toEqual(["sigil/base"]);
   });
 
+  test("repairs an undeliverable result on its existing branch and continues delivery", async () => {
+    const repo = tempRepo();
+    const repairCalls: string[][] = [];
+    const publishCalls: Array<{ repo: string; branch: string; title: string; body: string; base: string }> = [];
+
+    const result = await dispatch({ repo, backlogFile: backlogFile(repo, backlog()), deliveryPolicy: "mergeWhenGreen" }, {
+      softwareChange: makeSoftwareChangeStub([], {
+        "sigil/base": { valid: false, reviewBlocking: true, issues: ["weakened tests"] },
+      }),
+      repairChange: async (_ctx, input) => {
+        repairCalls.push([input.branch, ...input.issues]);
+        return changeResult({ repo, intent: input.item.brief, branch: input.branch, taskFile: input.taskFile });
+      },
+      publish: makePublishStub(publishCalls),
+      merge: makeMergeStub(),
+      verifyBase: makeVerifyBaseStub(),
+    });
+
+    expect(result.delivered).toEqual(["base", "feature", "polish"]);
+    expect(repairCalls).toEqual([["sigil/base", "weakened tests", "review blocked delivery for base"]]);
+    expect(publishCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature", "sigil/polish"]);
+  });
+
   test("publish PR failure stops at the failed item", async () => {
     const repo = tempRepo();
     const changeCalls: ChangeCall[] = [];
@@ -582,7 +614,7 @@ describe("dispatch", () => {
     expect(result.results.map((item) => item.item)).toEqual(["base", "feature"]);
     expect(result.results[1].prCreated).toBe(false);
     expect(result.results[1].issues).toContain("pr create failed: no pr");
-    expect(publishCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature"]);
+    expect(publishCalls.map((call) => call.branch)).toEqual(["sigil/base", "sigil/feature", "sigil/feature", "sigil/feature", "sigil/feature"]);
   });
 
   test("diagram documents dispatch-owned delivery and software-change dependency direction", () => {

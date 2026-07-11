@@ -111,12 +111,14 @@ export const commandHelps = [
   {
     name: "dispatch",
     summary: "Call software-change for backlog items, then merge and verify by policy.",
-    usage: "sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen|integrationBranch [--integration-branch <branch>]",
+    usage: "sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen|integrationBranch [--integration-branch <branch>] [--final-action openPullRequest|mergeWhenGreen] [--production-gate <name>]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--backlog <file>", description: "Required. Backlog JSON file." },
       { name: "--policy mergeWhenGreen|integrationBranch", description: "Required delivery policy." },
       { name: "--integration-branch <branch>", description: "Required with integrationBranch. Accumulating branch for item changes." },
+      { name: "--final-action openPullRequest|mergeWhenGreen", description: "Integration delivery action after all items pass. Defaults to openPullRequest." },
+      { name: "--production-gate <name>", description: "Configured gate run after a successful final merge." },
     ],
     exitCode: "0 when dispatch finishes without stopping; 1 when it stops at a backlog item.",
   },

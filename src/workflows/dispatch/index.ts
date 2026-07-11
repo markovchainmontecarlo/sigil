@@ -8,6 +8,7 @@ import { evalGate } from "../../gate.js";
 import {
   checkoutIntegrationBranch,
   createPr,
+  git,
   mergePr,
   publish,
   type AttemptResult,
@@ -18,12 +19,24 @@ import {
   type SoftwareChangeInput,
   type SoftwareChangeResult,
 } from "../software-change/workflow.js";
+import { repairExistingChange, type ExistingBranchRepairInput } from "./recovery.js";
+import {
+  dispatchBacklogDigest,
+  loadDispatchCheckpoint,
+  writeDispatchCheckpoint,
+  type DispatchCheckpoint,
+} from "./state.js";
 
 export type DeliveryPolicy = "mergeWhenGreen" | "integrationBranch";
 type DispatchBaseInput = { backlogFile: string; repo: string };
 export type DispatchInput = DispatchBaseInput & (
   | { deliveryPolicy: "mergeWhenGreen" }
-  | { deliveryPolicy: "integrationBranch"; integrationBranch: string }
+  | {
+      deliveryPolicy: "integrationBranch";
+      integrationBranch: string;
+      finalAction?: "openPullRequest" | "mergeWhenGreen";
+      productionGate?: string;
+    }
 );
 type DispatchWorkItem = WorkItem & { taskFile?: string };
 export type DispatchItemResult = {
@@ -37,6 +50,8 @@ export type FinalPullRequestResult = {
   branch: string;
   base: string;
   created: boolean;
+  merged?: boolean;
+  productionVerified?: boolean;
   issues: string[];
 };
 export type DispatchResult = {
@@ -54,6 +69,8 @@ export type DispatchOptions = {
   createPullRequest?: typeof createPr;
   verifyBase?: (repo: string) => Promise<VerifyBaseResult>;
   prepareIntegrationBranch?: typeof checkoutIntegrationBranch;
+  repairChange?: (ctx: SigilContext, input: ExistingBranchRepairInput) => Promise<SoftwareChangeResult>;
+  wait?: (milliseconds: number) => Promise<void>;
 };
 
 type DispatchChangeResult = Pick<
@@ -67,12 +84,52 @@ type DispatchChangeResult = Pick<
   | "failedTasks"
 >;
 
-async function readJson(path: string): Promise<unknown> {
-  return JSON.parse(await readFile(path, "utf8"));
-}
-
 function itemBranch(repo: string, item: WorkItem): string {
   return `${loadConfig(repo).implement.branchPrefix}${item.id}`;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function retryResult<T>(
+  run: () => Promise<T>,
+  successful: (value: T) => boolean,
+  limit: number,
+  wait: (milliseconds: number) => Promise<void>,
+): Promise<T> {
+  let value = await run();
+  for (let attempt = 1; !successful(value) && attempt <= limit; attempt++) {
+    await wait(5_000);
+    value = await run();
+  }
+  return value;
+}
+
+async function currentCommit(repo: string, ref: string): Promise<string | undefined> {
+  const result = await git(repo, ["rev-parse", ref]);
+  return result.code === 0 ? result.stdout.trim() || undefined : undefined;
+}
+
+function changeIssues(item: WorkItem, changed: DispatchChangeResult): string[] {
+  return resultForUndeliverableWorkflow(item, changed).issues;
+}
+
+function resumedChange(state: DispatchCheckpoint, taskFile: string): SoftwareChangeResult {
+  if (!state.active?.prBody) throw new Error("dispatch checkpoint is missing the active pull request body");
+  return {
+    stage: "implementation",
+    taskFile,
+    taskCount: 0,
+    valid: true,
+    plan: { taskFile, taskCount: 0, valid: true, issues: [], failures: [] },
+    branch: state.active.branch,
+    prBody: state.active.prBody,
+    reviewBlocking: false,
+    issues: [],
+    failedTasks: [],
+    noopTasks: [],
+  };
 }
 
 function deliveryBase(input: DispatchInput, mainBranch: string): string {
@@ -246,21 +303,31 @@ async function runDispatch(
   input: DispatchInput,
   options: DispatchOptions = {},
 ): Promise<DispatchResult> {
-  const backlog = validateBacklog(await readJson(input.backlogFile));
+  const backlogContents = await readFile(input.backlogFile, "utf8");
+  const backlog = validateBacklog(JSON.parse(backlogContents));
   const items = orderItems(backlog) as DispatchWorkItem[];
-  const delivered: string[] = [];
-  const deliveredSet = new Set<string>();
   const results: DispatchItemResult[] = [];
   const runSoftwareChange = options.softwareChange ?? softwareChange;
   const runPublish = options.publish ?? publish;
   const runMerge = options.merge ?? mergePr;
   const runCreatePullRequest = options.createPullRequest ?? createPr;
   const runVerifyBase = options.verifyBase ?? verifyBase;
+  const runRepairChange = options.repairChange ?? repairExistingChange;
+  const wait = options.wait ?? delay;
   const prepareIntegrationBranch =
     options.prepareIntegrationBranch ?? checkoutIntegrationBranch;
-  const mainBranch = loadConfig(input.repo).implement.baseBranch;
+  const config = loadConfig(input.repo);
+  const mainBranch = config.implement.baseBranch;
   const baseBranch = deliveryBase(input, mainBranch);
   const implementationBase = deliveryBaseRef(baseBranch);
+  const checkpointFile = ctx.artifacts.path("dispatch-state.json");
+  const state = await loadDispatchCheckpoint(checkpointFile, {
+    backlogDigest: dispatchBacklogDigest(backlogContents),
+    deliveryPolicy: input.deliveryPolicy,
+    deliveryBase: baseBranch,
+  });
+  const delivered = state.delivered.map((item) => item.id);
+  const deliveredSet = new Set(delivered);
 
   if (input.deliveryPolicy === "integrationBranch") {
     await prepareIntegrationBranch(
@@ -271,6 +338,8 @@ async function runDispatch(
   }
 
   for (const item of items) {
+    if (deliveredSet.has(item.id)) continue;
+
     const missingDependencies = item.dependsOn.filter(
       (dependency) => !deliveredSet.has(dependency),
     );
@@ -284,71 +353,158 @@ async function runDispatch(
       artifactRoot: ctx.artifacts.path(join("dispatch", item.id)),
       operationPath: `dispatch/${item.id}`,
     });
-    const changed = await itemContext.run(
-      runSoftwareChange,
-      changeInput(
-        input,
-        item,
+    const taskFile = state.active?.id === item.id
+      ? state.active.taskFile
+      : itemContext.artifacts.path("task-graph.json");
+    let changed: SoftwareChangeResult;
+    const resumedStage = state.active?.id === item.id ? state.active.stage : undefined;
+
+    if (resumedStage === "publish" || resumedStage === "merge" || resumedStage === "verify-base") {
+      changed = resumedChange(state, taskFile);
+    } else if (resumedStage === "repair") {
+      changed = await runRepairChange(itemContext, {
+        repo: input.repo,
         branch,
-        implementationBase,
-        itemContext.artifacts.path("task-graph.json"),
-      ),
-    );
+        baseBranch: implementationBase,
+        taskFile,
+        item,
+        issues: state.active?.issues ?? [],
+      });
+    } else {
+      state.active = { id: item.id, branch, taskFile, stage: "software-change", issues: [] };
+      await writeDispatchCheckpoint(checkpointFile, state);
+      changed = await itemContext.run(
+        runSoftwareChange,
+        changeInput(input, item, branch, implementationBase, taskFile),
+      );
+    }
+
     if (!changed.branch || !changed.prBody) {
+      state.active = { id: item.id, branch, taskFile, stage: "repair", issues: resultForWorkflowFailure(item, changed).issues };
+      await writeDispatchCheckpoint(checkpointFile, state);
       results.push(resultForWorkflowFailure(item, changed));
       return { delivered, stoppedAt: item.id, results };
     }
     if (!workflowDeliverable(changed)) {
-      results.push(resultForUndeliverableWorkflow(item, changed));
-      return { delivered, stoppedAt: item.id, results };
+      state.active = { id: item.id, branch, taskFile, stage: "repair", issues: changeIssues(item, changed) };
+      await writeDispatchCheckpoint(checkpointFile, state);
+      changed = await runRepairChange(itemContext, {
+        repo: input.repo,
+        branch,
+        baseBranch: implementationBase,
+        taskFile,
+        item,
+        issues: state.active.issues,
+      });
+      if (!workflowDeliverable(changed)) {
+        state.active.issues = changeIssues(item, changed);
+        await writeDispatchCheckpoint(checkpointFile, state);
+        results.push(resultForUndeliverableWorkflow(item, changed));
+        return { delivered, stoppedAt: item.id, results };
+      }
     }
 
-    const published = await runPublish(input.repo, {
-      branch: changed.branch,
-      title: changed.branch,
-      body: changed.prBody,
-      base: baseBranch,
-    });
+    let published: PublishResult = { push: { ok: true, log: "resumed" }, pr: { ok: true, log: "resumed" } };
+    if (resumedStage !== "merge" && resumedStage !== "verify-base") {
+      state.active = { id: item.id, branch, taskFile, stage: "publish", issues: [], prBody: changed.prBody };
+      await writeDispatchCheckpoint(checkpointFile, state);
+      published = await retryResult(
+        () => runPublish(input.repo, {
+          branch: changed.branch!,
+          title: changed.branch!,
+          body: changed.prBody!,
+          base: baseBranch,
+        }),
+        (value) => value.push.ok && value.pr?.ok === true,
+        config.implement.repairLimit,
+        wait,
+      );
+    }
     const result = resultForDelivery(item, changed, published);
     results.push(result);
     if (!result.prCreated || result.issues.length > 0) {
+      if (state.active) state.active.issues = result.issues;
+      await writeDispatchCheckpoint(checkpointFile, state);
       return { delivered, stoppedAt: item.id, results };
     }
 
-    const merged = await runMerge(input.repo, {
-      branch: changed.branch,
-      base: baseBranch,
-    });
+    let merged: AttemptResult = { ok: true, log: "resumed" };
+    if (resumedStage !== "verify-base") {
+      if (state.active) state.active.stage = "merge";
+      await writeDispatchCheckpoint(checkpointFile, state);
+      merged = await retryResult(
+        () => runMerge(input.repo, { branch: changed.branch!, base: baseBranch }),
+        (value) => value.ok,
+        config.implement.repairLimit,
+        wait,
+      );
+    }
     if (!merged.ok) {
       result.issues.push(`merge failed: ${merged.log}`);
+      if (state.active) state.active.issues = result.issues;
+      await writeDispatchCheckpoint(checkpointFile, state);
       return { delivered, stoppedAt: item.id, results };
     }
 
-    const verified = await runVerifyBase(input.repo);
+    if (state.active) state.active.stage = "verify-base";
+    await writeDispatchCheckpoint(checkpointFile, state);
+    const verified = await retryResult(
+      () => runVerifyBase(input.repo),
+      (value) => value.ok,
+      config.implement.repairLimit,
+      wait,
+    );
     if (!verified.ok) {
       result.issues.push(`base verification failed: ${verified.log}`);
+      if (state.active) state.active.issues = result.issues;
+      await writeDispatchCheckpoint(checkpointFile, state);
       return { delivered, stoppedAt: item.id, results };
     }
 
     delivered.push(item.id);
     deliveredSet.add(item.id);
+    state.delivered.push({ id: item.id, commit: await currentCommit(input.repo, deliveryBaseRef(baseBranch)) });
+    state.active = undefined;
+    await writeDispatchCheckpoint(checkpointFile, state);
   }
 
   if (input.deliveryPolicy === "integrationBranch") {
-    const created = await runCreatePullRequest(input.repo, {
-      title: backlog.mission,
-      body: finalPullRequestBody(results),
-      base: mainBranch,
-      head: input.integrationBranch,
-    });
+    const created = await retryResult(
+      () => runCreatePullRequest(input.repo, {
+        title: backlog.mission,
+        body: finalPullRequestBody(results),
+        base: mainBranch,
+        head: input.integrationBranch,
+      }),
+      (value) => value.ok,
+      config.implement.repairLimit,
+      wait,
+    );
     const finalPullRequest = finalPullRequestResult(
       input.integrationBranch,
       mainBranch,
       created,
     );
+    if (finalPullRequest.created && input.finalAction === "mergeWhenGreen") {
+      const merged = await retryResult(
+        () => runMerge(input.repo, { branch: input.integrationBranch, base: mainBranch }),
+        (value) => value.ok,
+        config.implement.repairLimit,
+        wait,
+      );
+      finalPullRequest.merged = merged.ok;
+      if (!merged.ok) finalPullRequest.issues.push(`final merge failed: ${merged.log}`);
+
+      if (merged.ok && input.productionGate) {
+        const production = await ctx.evals(input.productionGate);
+        finalPullRequest.productionVerified = !production.skipped && production.ok;
+        if (production.skipped) finalPullRequest.issues.push(`production gate ${input.productionGate} is not configured`);
+        else if (!production.ok) finalPullRequest.issues.push(`production verification failed: ${production.log}`);
+      }
+    }
     return {
       delivered,
-      stoppedAt: finalPullRequest.created ? undefined : "final-pull-request",
+      stoppedAt: finalPullRequest.issues.length === 0 ? undefined : "final-pull-request",
       results,
       finalPullRequest,
     };

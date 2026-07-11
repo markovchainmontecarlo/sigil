@@ -355,7 +355,7 @@ The public TypeScript entrypoint exports these async functions and their input/r
 - `review`: reviews the diff against a base branch and can run an autofix pass for actionable findings.
 - `probePlan`: runs sandboxed probes and produces a typed task graph for implementation.
 - `breakdown`: turns a mission into an ordered backlog file.
-- `dispatch`: calls `softwareChange` for backlog items, then owns publish, optional merge, and base verification policy.
+- `dispatch`: calls `softwareChange` for backlog items, repairs actionable review and weakened-test findings on the existing branch, and owns resumable publish, green-check merge, and base verification policy.
 - `refactor`: applies one bounded structural change with protected-path checks and independent reviews.
 - `migrate`: runs checkpointed repository migration items through `refactor` from an external run directory.
 
