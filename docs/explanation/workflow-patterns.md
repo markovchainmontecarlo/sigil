@@ -4,6 +4,8 @@ Workflow patterns are reusable orchestration shapes built from Sigil primitives.
 
 Use these patterns when the task is large enough to benefit from orchestration. Do not turn a seconds-long check into a multi-agent workflow just because the pattern exists.
 
+For diagram-first patterns with copyable prompts, see [Ephemeral Sigil pattern catalog](./ephemeral-sigil-patterns.md).
+
 ## Parallel analysis and synthesis
 
 Use several isolated agents to analyze a question, then have a fresh agent synthesize the reports.
