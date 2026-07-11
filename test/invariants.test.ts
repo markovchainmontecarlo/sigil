@@ -33,7 +33,8 @@ const complexWorkflowDiagrams: DiagramExpectation[] = [
     labels: [
       "read and validate backlog",
       "serial dependency-ordered item loop",
-      "call softwareChange on item branch from delivery base",
+      "fork dispatch item artifact context",
+      "call softwareChange in item context",
       "publish one final integration PR to main",
       "run build and test on updated delivery base",
     ],

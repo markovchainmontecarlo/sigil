@@ -5,7 +5,6 @@ import { describe, expect, test } from "bun:test";
 
 import type { SigilAgent } from "../src/agents.js";
 import { createContext, loadConfiguredContext, renderContextBlock, sigil, type SigilContext } from "../src/context.js";
-import { artifactDir } from "../src/paths.js";
 
 function tempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "sigil-context-test-"));
@@ -30,13 +29,13 @@ describe("createContext", () => {
     expect(ctx.issues).toEqual(["first", "second"]);
   });
 
-  test("artifacts.path stays inside artifactDir(repo)", () => {
+  test("artifacts.path stays inside an isolated local run", () => {
     const repo = tempRepo();
     const ctx = createContext(repo);
     const path = ctx.artifacts.path("task-graph.json");
-    const rel = relative(artifactDir(repo), path);
+    const rel = relative(ctx.artifacts.dir, path);
 
-    expect(ctx.artifacts.dir).toBe(artifactDir(repo));
+    expect(ctx.artifacts.dir.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
     expect(rel).not.toStartWith("..");
     expect(rel).not.toBe("");
   });
@@ -169,7 +168,8 @@ describe("createContext", () => {
 
     const result = await wrapped({ repo });
 
-    expect(result).toEqual({ repo, artifactDir: artifactDir(repo) });
+    expect(result.repo).toBe(repo);
+    expect(result.artifactDir.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
   });
 
   test("sigil wrapper passes the supplied context override through unchanged", async () => {

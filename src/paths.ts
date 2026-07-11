@@ -1,15 +1,32 @@
-import { createHash } from "node:crypto";
-import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+const RUN_STORAGE_IGNORE = "/.sigil/runs/";
+
 /**
- * Durable directory outside the target working tree where pipeline artifacts live
- * (the task graph, plan working files, review findings). Keyed by the repo's
- * resolved path so repeated runs against the same repo agree on a location
- * without threading it, and no artifact ever lands in the tree that
- * `implement` requires to be clean.
+ * Creates an isolated artifact root for one workflow invocation. Git ignore
+ * configuration owns the cleanliness boundary for durable local run state.
  */
-export function artifactDir(repo: string): string {
-  const key = createHash("sha256").update(resolve(repo)).digest("hex").slice(0, 16);
-  return join(homedir(), ".sigil", "runs", "repositories", key);
+export function createArtifactRoot(repo: string): string {
+  ensureRunStorageIgnored(repo);
+  const runs = join(resolve(repo), ".sigil", "runs");
+  mkdirSync(runs, { recursive: true });
+  return join(mkdtempSync(join(runs, "run-")), "artifacts");
+}
+
+export function ensureRunStorageIgnored(repo: string): void {
+  const resolved = spawnSync(
+    "git",
+    ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"],
+    { cwd: repo, encoding: "utf8" },
+  );
+  if (resolved.status !== 0) return;
+
+  const excludeFile = resolved.stdout.trim();
+  const current = readFileSync(excludeFile, "utf8");
+  if (current.split(/\r?\n/).includes(RUN_STORAGE_IGNORE)) return;
+
+  const separator = current.length === 0 || current.endsWith("\n") ? "" : "\n";
+  appendFileSync(excludeFile, `${separator}${RUN_STORAGE_IGNORE}\n`);
 }

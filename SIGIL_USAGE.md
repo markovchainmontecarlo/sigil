@@ -149,7 +149,7 @@ env -u CLAUDECODE sigil implement --repo /path/to/repo --task-file /path/to/repo
 env -u CLAUDECODE sigil review --repo /path/to/repo --base main
 ```
 
-When the right change is unclear until the tool is exercised, run probe planning first. `probe` asks agents for falsifiable hypotheses, runs generated commands in a sandbox clone, writes evidence and findings outside the target tree, checks that the target working tree is preserved, and produces the same task graph contract consumed by `implement` and `software-change --task-file`.
+When the right change is unclear until the tool is exercised, run probe planning first. `probe` asks agents for falsifiable hypotheses, runs generated commands in a sandbox clone, writes evidence and findings under the active run, checks that tracked project files are preserved, and produces the same task graph contract consumed by `implement` and `software-change --task-file`.
 
 ```sh
 env -u CLAUDECODE sigil probe --repo /path/to/repo --intent "<usage or product improvement intent>" --out /path/to/repo/.sigil/runs/task-graph.json
@@ -232,7 +232,7 @@ env -u CLAUDECODE sigil run-sigil \
 
 `run-sigil` validates the launch inputs, starts a detached worker, and returns the run handle. The worker writes status, events, logs, artifacts, results, and errors into the run directory. The CLI-resolved `--repo` value is authoritative. If `input.json` contains a `repo` field, the runner replaces it with the resolved command-line repository path. `--input` must be a JSON object.
 
-Run persistence defaults to `durable`. Durable runs reject repositories, workflow files, inputs, outputs, and run directories beneath operating-system temporary storage. When `--run-dir` is omitted, Sigil creates the run under `<repo>/.sigil/runs/`. `sigil setup` adds that directory to `.gitignore`. Built-in workflow artifacts that must remain outside the worktree live under `~/.sigil/runs/repositories/`.
+Run persistence defaults to `durable`. Durable runs reject repositories, workflow files, inputs, outputs, and run directories beneath operating-system temporary storage. When `--run-dir` is omitted, Sigil creates an isolated run under `<repo>/.sigil/runs/`. `sigil setup` adds that directory to `.gitignore`, and Sigil also registers the path in the repository's local exclude file. Built-in and nested workflows inherit the active run artifact root.
 
 Use `--persistence ephemeral` only when every run input and artifact is intentionally disposable. Ephemeral mode permits operating-system temporary directories and makes their loss an accepted outcome.
 

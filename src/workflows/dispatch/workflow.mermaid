@@ -18,7 +18,8 @@ flowchart TD
     NextItem{"next item?"}
     DependencyGate{"dependencies delivered?"}
     DependencySkip["record dependency skip"]
-    SoftwareChange["call softwareChange on item branch from delivery base using refreshed origin delivery ref"]
+    ItemContext["fork dispatch item artifact context"]
+    SoftwareChange["call softwareChange in item context on item branch from refreshed delivery base"]
     WorkflowReady{"branch and PR body ready?"}
     ReviewGate{"change valid and issue-free, review nonblocking, and no failed tasks?"}
     Publish["publish item PR to delivery base"]
@@ -34,7 +35,8 @@ flowchart TD
     NextItem -->|item| DependencyGate
     DependencyGate -->|no| DependencySkip
     DependencySkip --> NextItem
-    DependencyGate -->|yes| SoftwareChange
+    DependencyGate -->|yes| ItemContext
+    ItemContext --> SoftwareChange
     SoftwareChange --> WorkflowReady
     WorkflowReady -->|no| ItemFailure
     WorkflowReady -->|yes| ReviewGate

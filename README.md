@@ -164,7 +164,7 @@ sigil validate-sigil workflow.ts
 sigil run-sigil --repo /path/to/repo --file workflow.ts --input input.json --run-dir /path/to/repo/.sigil/runs/custom-workflow
 ```
 
-Custom runs default to durable persistence. Sigil rejects temporary repositories, workflow files, inputs, outputs, and run directories unless the command explicitly selects `--persistence ephemeral`. Durable custom runs default to the ignored `<repo>/.sigil/runs/` directory, while built-in workflow artifacts that must remain outside the worktree are stored beneath `~/.sigil/runs/repositories/`.
+Runs default to durable persistence. Sigil rejects temporary repositories, workflow files, inputs, outputs, and run directories unless the command explicitly selects `--persistence ephemeral`. Built-in and custom workflows keep their artifacts beneath an isolated run in the ignored `<repo>/.sigil/runs/` directory. Nested workflows inherit that run instead of selecting another artifact root.
 
 For a dedicated nested-workflow example, see [examples/05-nested-workflow.ts](./examples/05-nested-workflow.ts). For a fuller workflow that combines structured branching, parallel jobs, artifact handoff, an eval gate, and nested shipped workflows together, see [examples/06-issue-workflow.ts](./examples/06-issue-workflow.ts).
 

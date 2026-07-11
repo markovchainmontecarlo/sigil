@@ -1,12 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import type { SigilAgent } from "../src/agents.js";
 import { createContext } from "../src/context.js";
-import { artifactDir } from "../src/paths.js";
 import { parseUnresolvedHigh, review } from "../src/workflows/software-change/review/index.js";
 
 class StubAgent implements SigilAgent {
@@ -108,9 +107,9 @@ describe("review", () => {
     expect(agent.calls[1]).toContain(findings);
   });
 
-  test("defaults findings outside the target working tree", async () => {
+  test("defaults findings inside ignored local run storage", async () => {
     const { dir, base } = repo();
-    rmSync(artifactDir(dir), { recursive: true, force: true });
+    rmSync(join(dir, ".sigil", "runs"), { recursive: true, force: true });
     writeFileSync(join(dir, "app.txt"), "after\n");
     run(dir, ["add", "."]);
     run(dir, ["commit", "-m", "change"]);
@@ -121,7 +120,7 @@ describe("review", () => {
     const result = await review({ repo: dir, base, autofix: false }, createContext(dir, { createAgent: () => agent }));
 
     expect(result.findings).toBe("MEDIUM app.txt:1 narrow defect");
-    expect(relative(dir, result.findingsFile).startsWith("..")).toBe(true);
+    expect(result.findingsFile.startsWith(join(dir, ".sigil", "runs"))).toBe(true);
   });
 
   test("skips test-integrity reviewer when only non-test files changed", async () => {

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { loadConfig } from "../../config.js";
+import { sigil, type SigilContext } from "../../context.js";
 import { orderItems, validateBacklog, type WorkItem } from "../../contracts/backlog.js";
 import { evalGate } from "../../gate.js";
 import {
@@ -12,7 +13,6 @@ import {
   type AttemptResult,
   type PublishResult,
 } from "../../git.js";
-import { artifactDir } from "../../paths.js";
 import {
   softwareChange,
   type SoftwareChangeInput,
@@ -71,10 +71,6 @@ async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
-function taskGraphFile(repo: string, item: WorkItem): string {
-  return join(artifactDir(repo), "dispatch", item.id, "task-graph.json");
-}
-
 function itemBranch(repo: string, item: WorkItem): string {
   return `${loadConfig(repo).implement.branchPrefix}${item.id}`;
 }
@@ -94,12 +90,13 @@ function changeInput(
   item: DispatchWorkItem,
   branch: string,
   baseBranch: string,
+  taskGraphFile: string,
 ): SoftwareChangeInput {
   return {
     branch,
     baseBranch,
     intent: item.brief,
-    outFile: item.taskFile ? undefined : taskGraphFile(input.repo, item),
+    outFile: item.taskFile ? undefined : taskGraphFile,
     repo: input.repo,
     taskFile: item.taskFile,
   };
@@ -244,7 +241,8 @@ export async function verifyBase(repo: string): Promise<VerifyBaseResult> {
  * base, and verifies that base before continuing. Integration-branch delivery opens
  * one final pull request to main without merging it.
  */
-export async function dispatch(
+async function runDispatch(
+  ctx: SigilContext,
   input: DispatchInput,
   options: DispatchOptions = {},
 ): Promise<DispatchResult> {
@@ -282,8 +280,19 @@ export async function dispatch(
     }
 
     const branch = itemBranch(input.repo, item);
-    const changed = await runSoftwareChange(
-      changeInput(input, item, branch, implementationBase),
+    const itemContext = ctx.fork({
+      artifactRoot: ctx.artifacts.path(join("dispatch", item.id)),
+      operationPath: `dispatch/${item.id}`,
+    });
+    const changed = await itemContext.run(
+      runSoftwareChange,
+      changeInput(
+        input,
+        item,
+        branch,
+        implementationBase,
+        itemContext.artifacts.path("task-graph.json"),
+      ),
     );
     if (!changed.branch || !changed.prBody) {
       results.push(resultForWorkflowFailure(item, changed));
@@ -346,4 +355,19 @@ export async function dispatch(
   }
 
   return { delivered, results };
+}
+
+export function createDispatch(options: DispatchOptions = {}) {
+  return sigil<DispatchInput, DispatchResult>("dispatch", (ctx, input) =>
+    runDispatch(ctx, input, options));
+}
+
+export const dispatch = createDispatch();
+
+export function dispatchWithOptions(
+  input: DispatchInput,
+  options: DispatchOptions,
+  ctx?: SigilContext,
+): Promise<DispatchResult> {
+  return createDispatch(options)(input, ctx);
 }

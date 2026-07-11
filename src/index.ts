@@ -93,7 +93,7 @@ export {
   type PublishInput,
   type PublishResult,
 } from "./git.js";
-export { artifactDir } from "./paths.js";
+export { createArtifactRoot } from "./paths.js";
 export {
   recover,
   type FailureKind,
@@ -147,7 +147,7 @@ export { parseUnresolvedHigh, review, type ReviewInput, type ReviewResult } from
 export { reviewPrompts } from "./workflows/software-change/review/prompts.js";
 export { compileYamlWorkflow } from "./yaml/compile.js";
 export { parseYamlWorkflow, validateYamlWorkflow, validateYamlWorkflowFile } from "./yaml/validate.js";
-export { defaultYamlRunDir, runYamlWorkflowFile } from "./yaml/run.js";
+export { runYamlWorkflowFile } from "./yaml/run.js";
 export type {
   CompiledYamlAgentJob,
   CompiledYamlDeterministicJob,

@@ -1,18 +1,13 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import type { SigilAgent } from "../src/agents.js";
 import { CONTRACT_VERSION, validateTaskGraph } from "../src/contracts/task-graph.js";
 import { createContext } from "../src/context.js";
-import { artifactDir } from "../src/paths.js";
 import { plan } from "../src/workflows/software-change/planning/index.js";
-
-function outsideRepo(repo: string, path: string): boolean {
-  return relative(repo, path).startsWith("..");
-}
 
 class StubAgent implements SigilAgent {
   calls: string[] = [];
@@ -159,9 +154,9 @@ describe("plan", () => {
     expect(synth.agent.calls[2]).not.toContain(synth.files.divergenceVerified);
   });
 
-  test("defaults every artifact outside the target working tree", async () => {
+  test("defaults every artifact inside ignored local run storage", async () => {
     const repo = tempRepo(["planner-a", "planner-b"]);
-    rmSync(artifactDir(repo), { recursive: true, force: true });
+    rmSync(join(repo, ".sigil", "runs"), { recursive: true, force: true });
     const plannerA = writePlanAgent("PLAN A");
     const plannerB = writePlanAgent("PLAN B");
     const synth = synthAgent(repo);
@@ -172,9 +167,9 @@ describe("plan", () => {
     );
 
     expect(result.valid).toBe(true);
-    expect(outsideRepo(repo, result.taskFile)).toBe(true);
+    expect(result.taskFile.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
     for (const file of Object.values(synth.files)) {
-      expect(outsideRepo(repo, file)).toBe(true);
+      expect(file.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
     }
   });
 
