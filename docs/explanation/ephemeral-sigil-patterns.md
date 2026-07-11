@@ -6,6 +6,30 @@ Sigil already owns durable run storage, validation, detached execution, status, 
 
 Use a built-in workflow when it already fits. Use a normal assistant answer for a short investigation or simple edit. A custom Sigil earns its cost when agent roles, parallel work, artifacts, gates, branching, or repair behavior materially improve the result.
 
+## Choose a pattern
+
+| Pattern | Use it to | Example |
+| --- | --- | --- |
+| [Parallel analysis and synthesis](#parallel-analysis-and-synthesis) | Combine independent perspectives without hiding disagreement. | Architecture decision |
+| [Proposal and independent verification](#proposal-and-independent-verification) | Separate idea generation from factual verification. | Technical plan |
+| [Hypothesis testing](#hypothesis-testing) | Let evidence determine the next investigation step. | Failure diagnosis |
+| [Draft, review, and repair](#draft-review-and-repair) | Produce an artifact and repair independently reported defects. | Documentation or specification |
+| [Repository and ecosystem fit](#repository-and-ecosystem-fit) | Join local constraints with current external options. | Package selection |
+| [Goal-directed execution with verification](#goal-directed-execution-with-verification) | Act, verify, adapt, and stop at protected boundaries. | Repository repair |
+| [Research-backed roadmap and dispatch](#research-backed-roadmap-and-dispatch) | Convert evidence into an executable backlog and deliver it. | Product development program |
+
+These patterns form a progression from analysis to verified execution:
+
+```mermaid
+flowchart LR
+  Analyze[Analyze] --> Verify[Verify]
+  Verify --> Diagnose[Diagnose]
+  Diagnose --> Produce[Produce and repair]
+  Produce --> Decide[Context-specific decision]
+  Decide --> Execute[Verified execution]
+  Execute --> Program[Roadmap delivery]
+```
+
 ## Parallel analysis and synthesis
 
 ```mermaid
@@ -22,65 +46,22 @@ flowchart TD
 
 ### Use when
 
-Use this pattern when a decision benefits from independent perspectives, domain specialization, or visible disagreement. Typical uses include architecture proposals, product workflow design, dependency evaluation, and comparative research.
+Use this pattern when a decision benefits from independent perspectives, domain specialization, or visible disagreement. Typical uses include architecture proposals, product workflow design, security reviews, and comparative analysis.
 
 ### Avoid when
 
 Avoid it when every branch would read the same small source and reach the same conclusion, or when one sequential investigation would be clearer.
 
-### How it works
-
-Independent agents receive distinct questions without sharing context. Their reports become explicit artifacts or typed values. A fresh agent compares the reports, preserves useful disagreement, and produces one recommendation.
-
 ### Example prompt
 
 > Create and run an ephemeral Sigil to develop an architecture proposal for **[QUESTION]**. Have independent agents investigate the current implementation, state ownership, alternative designs, and operational risks. Synthesize a recommended design, rejected alternatives, unresolved questions, and implementation brief. Preserve meaningful disagreement and do not implement the proposal.
 
-### Common variations
+### Common applications
 
-- Security, reliability, and data-model reviews
+- Multi-dimensional workflow audits
+- Reliability, security, and data-model reviews
 - Build-versus-buy decisions
-- Repository orientation
-- API design comparisons
-
-## Draft, review, and repair
-
-```mermaid
-flowchart TD
-  Request[Artifact requirements] --> Research[Research]
-  Research --> Draft[Draft artifact]
-  Draft --> Correctness[Correctness review]
-  Draft --> Usability[Usability review]
-  Correctness --> Findings{Actionable findings?}
-  Usability --> Findings
-  Findings -->|yes| Repair[Repair artifact]
-  Repair --> Correctness
-  Repair --> Usability
-  Findings -->|no| Final[Final artifact]
-```
-
-### Use when
-
-Use this pattern for documentation, specifications, runbooks, prompts, plans, and other artifacts that benefit from independent criticism and bounded revision.
-
-### Avoid when
-
-Avoid it when the artifact is trivial, the review criteria are undefined, or repeated review cannot produce a meaningful stopping condition.
-
-### How it works
-
-One agent researches and drafts. Independent reviewers return structured findings. Actionable findings go back to the drafting role for repair. Every repair receives fresh review until no actionable findings remain or a stable finding exhausts its repair budget.
-
-### Example prompt
-
-> Create and run an ephemeral Sigil that produces **[ARTIFACT]**. Use one agent to investigate source material, another to draft, and independent reviewers to evaluate correctness, completeness, usability, and consistency with repository behavior. Route actionable findings back for bounded repair and require fresh review after each repair. Do not write to tracked project files.
-
-### Common variations
-
-- Documentation verification and correction
-- Prompt development
-- Design specification review
-- Release runbook creation
+- Divergent creative generation followed by selection
 
 ## Proposal and independent verification
 
@@ -110,20 +91,16 @@ Use this pattern when plausible plans depend on contested facts about source, de
 
 Avoid it when the work is already understood and can be expressed directly as a task graph.
 
-### How it works
-
-Planning and verification are separate responsibilities. Planners propose independently. Verification agents test concrete claims without defending a preferred plan. The synthesizer retains only approaches supported by evidence.
-
 ### Example prompt
 
 > Create and run an ephemeral Sigil to plan **[CHANGE]**. Have planning agents independently propose approaches. Then have separate agents test their claims against current source, configuration, dependency behavior, and safe runtime probes. Produce a recommended design, rejected alternatives, affected boundaries, acceptance criteria, risks, open questions, and an implementation-ready task graph. Do not implement it.
 
-### Common variations
+### Common applications
 
 - Documentation claims verified against behavior
 - Technology selection
+- Adversarial decision review
 - Existing plan review
-- Refactor design
 
 ## Hypothesis testing
 
@@ -151,210 +128,165 @@ Use this pattern for subtle failures, inconsistent runtime behavior, performance
 
 Avoid it when the failure and repair are already demonstrated by direct evidence.
 
-### How it works
-
-An initial trace grounds the investigation. Agents produce falsifiable hypotheses and probes chosen to distinguish them. Evidence updates or eliminates hypotheses. The loop stops with a supported diagnosis or an explicit account of unresolved uncertainty.
-
 ### Example prompt
 
 > Create and run an ephemeral Sigil to investigate **[FAILURE]**. Trace the execution path, develop falsifiable root-cause hypotheses, and use repository evidence and safe probes to distinguish them. Produce the most likely cause, competing hypotheses, affected paths, second-order effects, the smallest correct repair, and tests that would prove it. Do not modify the repository.
 
-### Common variations
+### Common applications
 
 - Deployment failure analysis
 - Performance investigation
 - Dependency behavior investigation
 - Concurrency defect analysis
 
-## Adversarial decision review
+## Draft, review, and repair
 
 ```mermaid
 flowchart TD
-  Decision[Proposed decision]
-  Decision --> Evidence[Evidence review]
-  Decision --> Alternatives[Alternative review]
-  Evidence --> Preliminary[Preliminary recommendation]
-  Alternatives --> Preliminary
-  Preliminary --> Challenge[Independent challenge]
-  Challenge --> Final[Final decision and conditions]
+  Request[Artifact requirements] --> Research[Research]
+  Research --> Draft[Draft artifact]
+  Draft --> Correctness[Correctness review]
+  Draft --> Usability[Usability review]
+  Correctness --> Findings{Actionable findings?}
+  Usability --> Findings
+  Findings -->|yes| Repair[Repair artifact]
+  Repair --> Correctness
+  Repair --> Usability
+  Findings -->|no| Final[Final artifact]
 ```
 
 ### Use when
 
-Use this pattern when a consequential decision could be weakened by premature consensus, hidden assumptions, or an attractive but fragile narrative.
+Use this pattern for documentation, specifications, runbooks, prompts, plans, and other artifacts that benefit from independent criticism and bounded revision.
 
 ### Avoid when
 
-Avoid it for reversible low-cost choices or when the decision can be settled by one deterministic fact.
-
-### How it works
-
-Independent agents review evidence and alternatives. A synthesizer produces a preliminary recommendation. A fresh adversarial reviewer argues the strongest evidence-based case against it. Final synthesis must address rather than merely append the challenge.
+Avoid it when the artifact is trivial, review criteria are undefined, or repeated review cannot produce a meaningful stopping condition.
 
 ### Example prompt
 
-> Create and run an ephemeral Sigil to evaluate this decision: **[DECISION]**. Have independent agents examine evidence, assumptions, alternatives, implementation consequences, and failure scenarios. Ask a fresh agent to argue the strongest case against the preliminary recommendation. Produce a final decision, rationale, rejected alternatives, risks, open questions, and evidence that would justify revisiting it.
+> Create and run an ephemeral Sigil that produces **[ARTIFACT]**. Use one agent to investigate source material, another to draft, and independent reviewers to evaluate correctness, completeness, usability, and consistency with repository behavior. Route actionable findings back for bounded repair and require fresh review after each repair. Do not write to tracked project files.
 
-### Common variations
+### Common applications
 
-- Architecture decision records
-- Vendor selection
-- Release approval
-- Product investment decisions
+- Documentation verification and correction
+- Prompt development
+- Design specification review
+- Release runbook creation
 
-## Divergent generation and selection
+## Repository and ecosystem fit
 
 ```mermaid
 flowchart TD
-  Goal[Creative or product goal]
-  Goal --> A[Direction A]
-  Goal --> B[Direction B]
-  Goal --> C[Direction C]
-  A --> Cross[Cross-review]
-  B --> Cross
-  C --> Cross
-  Cross --> Compare[Comparative evaluation]
-  Compare --> Final[Selected direction and prototype brief]
+  Goal[Capability need]
+  Goal --> Repo[Repository investigation]
+  Goal --> Ecosystem[Ecosystem research]
+  Repo --> Requirements[Repository requirements]
+  Repo --> Constraints[Architecture and operational constraints]
+  Ecosystem --> Candidates[Candidate packages or services]
+  Ecosystem --> External[Maintenance, security, and adoption evidence]
+  Requirements --> Evaluate[Context-specific fit evaluation]
+  Constraints --> Evaluate
+  Candidates --> Evaluate
+  External --> Evaluate
+  Evaluate --> Shortlist[Shortlist]
+  Shortlist --> Probes[Local compatibility probes]
+  Probes --> Decision[Recommendation and implementation brief]
 ```
 
 ### Use when
 
-Use this pattern when the value comes from materially different possibilities rather than one optimized answer. Typical uses include product concepts, naming systems, user workflows, and creative direction.
+Use this pattern when an external package, service, platform, model, or tool must fit the actual needs and constraints of a specific repository.
 
 ### Avoid when
 
-Avoid it when constraints already determine the solution or when agents are likely to produce superficial variations.
-
-### How it works
-
-Independent agents are explicitly asked for different approaches. Cross-review exposes weaknesses and reusable elements. A comparative reviewer evaluates fit and distinctiveness before synthesis selects a direction.
+Avoid it when the repository already standardizes the choice, the decision is inconsequential, or current external evidence would not change the result.
 
 ### Example prompt
 
-> Create and run an ephemeral Sigil to develop options for **[GOAL]**. Have independent agents produce materially different approaches rather than minor variations. Use cross-review to evaluate distinctiveness, fit, feasibility, clarity, and likely user response. Produce the strongest direction, useful elements from rejected options, remaining uncertainties, and a prototype brief. Do not implement it.
+> Create and run an ephemeral Sigil to determine the best package or service for **[CAPABILITY]** in this repository. Derive concrete requirements and constraints from the current codebase. Independently research the current ecosystem using primary sources. Evaluate candidates for repository-specific fit, maintenance, security, integration cost, failure behavior, and exit strategy. Run safe local compatibility probes for the strongest candidates when useful. Produce a recommendation, comparison table, rejected alternatives, and implementation brief. Do not change dependencies.
 
-### Common variations
+### Common applications
 
-- Product concept exploration
-- Naming and messaging systems
-- Information architecture
-- Interaction design alternatives
+- npm package selection
+- Database, queue, or hosting selection
+- Framework and SDK evaluation
+- External release impact analysis
 
-## Dependency-ordered migration planning
+## Goal-directed execution with verification
 
 ```mermaid
 flowchart TD
-  Current[Current state] --> Analysis[Repository and dependency analysis]
-  Target[Target state] --> Analysis
-  Analysis --> A[Strategy A]
-  Analysis --> B[Strategy B]
-  Analysis --> C[Strategy C]
-  A --> Risk[Risk and sequencing review]
-  B --> Risk
-  C --> Risk
-  Risk --> Graph[Dependency graph]
-  Graph --> Backlog[Ordered migration backlog]
-  Backlog --> Validate[Backlog validation]
+  Goal[Desired outcome] --> Inspect[Inspect current state]
+  Inspect --> Plan[Choose next bounded action]
+  Plan --> Execute[Execute action]
+  Execute --> Verify[Deterministic verification]
+  Verify --> Done{Goal satisfied?}
+  Done -->|no| Diagnose[Diagnose remaining gap]
+  Diagnose --> Plan
+  Done -->|yes| Result[Verified result]
+  Verify -->|unsafe or exhausted| Stop[Stop with evidence]
 ```
 
 ### Use when
 
-Use this pattern when a target architecture must be reached through several dependent, independently verifiable changes.
+Use this pattern when the desired outcome is clear but the correct sequence of actions depends on what each action reveals. Deterministic checks can verify progress while agents choose bounded repairs.
 
 ### Avoid when
 
-Avoid it when one bounded refactor or one pull request can accomplish the change safely.
-
-### How it works
-
-Agents investigate the current and target states, propose competing strategies, and review sequencing risks. Synthesis converts the selected design into a dependency graph and validates that each backlog item has a coherent outcome and verification boundary.
+Avoid it when actions are destructive, irreversible, or insufficiently bounded, or when a fixed implementation plan already describes the work correctly.
 
 ### Example prompt
 
-> Create and run an ephemeral Sigil to design a migration from **[CURRENT STATE]** to **[TARGET STATE]**. Investigate repository-wide dependencies, state ownership, sequencing constraints, rollback needs, and verification gates. Compare migration strategies and produce a target design, dependency-ordered backlog, checkpoint strategy, risks, and completion criteria. Do not execute the migration.
+> Create and run an ephemeral Sigil that achieves **[OUTCOME]** within **[BOUNDARIES]**. Inspect the current state, choose one bounded action, execute it, and verify the resulting state. Continue only when deterministic checks show progress. Preserve evidence for failed actions, use bounded repair, and stop before crossing protected paths or external-effect boundaries.
 
-### Common variations
+### Common applications
 
-- Framework migration
-- Data ownership migration
-- Module-boundary redesign
-- Service extraction
+- Repository and environment repair
+- Configuration reconciliation
+- Dependency modernization
+- Test-suite stabilization
 
-## Multi-dimensional workflow audit
+## Research-backed roadmap and dispatch
 
 ```mermaid
 flowchart TD
-  Workflow[Existing workflow] --> Model[Reconstruct control and state flow]
-  Model --> State[State ownership review]
-  Model --> Recovery[Recovery review]
-  Model --> Authority[Authority review]
-  Model --> Operations[Observability and operator review]
-  State --> Probes[Safe failure probes]
-  Recovery --> Probes
-  Authority --> Probes
-  Operations --> Probes
-  Probes --> Findings[Prioritized findings and repairs]
+  Goal[Product goal]
+  Goal --> Repo[Current capability analysis]
+  Goal --> Users[User workflow evidence]
+  Goal --> Market[Ecosystem and competitor research]
+  Repo --> Options[Candidate investments]
+  Users --> Options
+  Market --> Options
+  Options --> Evaluate[Value, differentiation, cost, and risk]
+  Evaluate --> Review[Independent roadmap review]
+  Review --> Roadmap[Prioritized roadmap]
+  Roadmap --> Approval{Approved for delivery?}
+  Approval -->|revise| Options
+  Approval -->|yes| Backlog[Dependency-ordered backlog]
+  Backlog --> Dispatch[Dispatch through integration branch]
+  Dispatch --> Verify[Verify accumulated product]
+  Verify --> FinalPR[Final pull request to main]
 ```
 
 ### Use when
 
-Use this pattern to assess automation, delivery pipelines, agent workflows, and other systems whose failures emerge from interactions between control flow, state, recovery, authority, and operations.
+Use this pattern when product decisions should be grounded in repository capabilities, user needs, and current external evidence, then translated into independently deliverable work.
 
 ### Avoid when
 
-Avoid it for a narrow local defect with a known execution path.
-
-### How it works
-
-A lead agent first reconstructs the workflow so parallel reviewers share the same object. Reviewers inspect distinct system properties. Safe probes test important failure paths. Synthesis prioritizes concrete scenarios rather than collecting generic concerns.
+Avoid it when the requested outcome is already decided, the work fits one pull request, or research evidence should not authorize implementation without a separate decision.
 
 ### Example prompt
 
-> Create and run an ephemeral Sigil to audit **[WORKFLOW]**. Trace its control flow and persisted state, then have independent agents examine correctness, recovery, idempotency, authority boundaries, observability, and operator experience. Test important failure paths safely. Produce prioritized findings, recommended changes, and verification criteria. Do not modify or trigger external effects.
+> Create and run a Sigil that develops and executes a research-backed roadmap for **[PRODUCT GOAL]**. Build a current capability model from the repository, investigate user workflows and current external alternatives, and generate candidate product investments. Evaluate user value, differentiation, evidence quality, implementation cost, operational risk, reversibility, and dependencies. Use independent reviewers to challenge weak claims and unnecessary scope. Produce a dependency-ordered backlog and stop for approval. Once approved, dispatch the backlog through an integration branch and leave the final pull request to main open for review.
 
-### Common variations
+### Common applications
 
-- CI and deployment audits
-- Agent workflow reliability reviews
-- Security-sensitive automation reviews
-- Background job processing reviews
-
-## Conditional workflow selection
-
-```mermaid
-flowchart TD
-  Process[Repeated process] --> Investigate[Investigate inputs, decisions, and effects]
-  Investigate --> Shape{Topology fixed before run?}
-  Shape -->|yes| Static[Design static YAML workflow]
-  Shape -->|no| Dynamic[Design TypeScript Sigil]
-  Static --> Contract[Inputs, outputs, gates, and recovery]
-  Dynamic --> Contract
-  Contract --> Review[Workflow contract review]
-  Review --> Brief[Implementation brief]
-```
-
-### Use when
-
-Use this pattern when the first design question is which automation surface fits the process. It is useful for repeated operational, research, content, and engineering workflows.
-
-### Avoid when
-
-Avoid it when a built-in Sigil already implements the required workflow or when the task should remain a human procedure.
-
-### How it works
-
-The workflow investigates process boundaries before choosing an implementation surface. Fixed stages and references favor static YAML. Runtime discovery, iteration, and dynamic branching favor TypeScript. Both paths converge on explicit contracts, gates, external effects, and recovery behavior.
-
-### Example prompt
-
-> Create and run an ephemeral Sigil to design automation for **[PROCESS]**. Investigate its inputs, outputs, decision points, external effects, failure handling, and human approval boundaries. Decide whether static YAML, a TypeScript Sigil, or an existing built-in workflow is the right surface. Produce the recommended workflow, contracts, stages, agent roles, gates, recovery behavior, and implementation brief.
-
-### Common variations
-
-- Research automation
-- Content production pipelines
-- Operational review workflows
-- Repository maintenance routines
+- Product capability programs
+- Platform modernization roadmaps
+- Competitive-response planning
+- Research-to-delivery automation
 
 ## From pattern to workflow
 
