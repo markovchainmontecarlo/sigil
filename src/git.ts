@@ -10,7 +10,13 @@ export type PublishDeps = {
   createPr?: (repo: string, args: { title: string; body: string; base: string; head: string }) => Promise<AttemptResult>;
 };
 export type PublishResult = { push: AttemptResult; pr: AttemptResult | null };
-export type MergePrDeps = { gh?: typeof gh; git?: typeof git };
+export type MergePrDeps = {
+  gh?: typeof gh;
+  git?: typeof git;
+  wait?: (milliseconds: number) => Promise<void>;
+  pollLimit?: number;
+};
+export type CreatePrDeps = { gh?: typeof gh };
 
 function run(executable: "git" | "gh", args: string[], repo: string): Promise<CommandResult> {
   return new Promise((resolve) => {
@@ -159,16 +165,40 @@ export function push(repo: string, branch: string): Promise<AttemptResult> {
   return retry(3, () => git(repo, ["push", "-u", "origin", branch]));
 }
 
-export function createPr(repo: string, args: { title: string; body: string; base: string; head: string }): Promise<AttemptResult> {
-  return retry(3, () => gh(repo, ["pr", "create", "--title", args.title, "--body", args.body, "--base", args.base, "--head", args.head]));
+export async function createPr(
+  repo: string,
+  args: { title: string; body: string; base: string; head: string },
+  deps: CreatePrDeps = {},
+): Promise<AttemptResult> {
+  const runGh = deps.gh ?? gh;
+  const existing = await runGh(repo, [
+    "pr", "list", "--head", args.head, "--base", args.base,
+    "--state", "open", "--json", "number", "--jq", "length",
+  ]);
+  if (existing.code !== 0) return { ok: false, log: existing.log || "failed to inspect existing pull requests" };
+  if (Number(existing.stdout.trim()) > 0) return { ok: true, log: "pull request already exists" };
+  return retry(3, () => runGh(repo, ["pr", "create", "--title", args.title, "--body", args.body, "--base", args.base, "--head", args.head]));
 }
 
 export async function mergePr(repo: string, args: { branch: string; base: string }, deps: MergePrDeps = {}): Promise<AttemptResult> {
   const runGh = deps.gh ?? gh;
   const runGit = deps.git ?? git;
+  const wait = deps.wait ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+  const pollLimit = deps.pollLimit ?? 120;
 
-  const merge = await runGh(repo, ["pr", "merge", args.branch, "--merge"]);
+  const merge = await runGh(repo, ["pr", "merge", args.branch, "--merge", "--auto"]);
   if (merge.code !== 0) return { ok: false, log: merge.log };
+
+  let state = "";
+  for (let poll = 0; poll < pollLimit; poll++) {
+    const viewed = await runGh(repo, ["pr", "view", args.branch, "--json", "state", "--jq", ".state"]);
+    if (viewed.code !== 0) return { ok: false, log: viewed.log || "failed to inspect pull request state" };
+    state = viewed.stdout.trim().toUpperCase();
+    if (state === "MERGED") break;
+    if (state === "CLOSED") return { ok: false, log: "pull request closed without merging" };
+    await wait(5_000);
+  }
+  if (state !== "MERGED") return { ok: false, log: "timed out waiting for pull request to merge" };
 
   const fetched = await fetchOriginBranch(repo, args.base, runGit);
   if (!fetched.ok) return fetched;

@@ -26,6 +26,8 @@ function dispatchInput(
   backlogFile: string,
   rawPolicy: string | undefined,
   integrationBranch: string | undefined,
+  finalAction: string | undefined,
+  productionGate: string | undefined,
 ): DispatchInput {
   const policy = deliveryPolicy(rawPolicy);
   if (policy === "mergeWhenGreen") {
@@ -34,7 +36,17 @@ function dispatchInput(
   if (!integrationBranch) {
     throw new UsageError("missing required --integration-branch");
   }
-  return { repo, backlogFile, deliveryPolicy: policy, integrationBranch };
+  if (finalAction !== undefined && finalAction !== "openPullRequest" && finalAction !== "mergeWhenGreen") {
+    throw new UsageError(`invalid --final-action: ${finalAction}`);
+  }
+  return {
+    repo,
+    backlogFile,
+    deliveryPolicy: policy,
+    integrationBranch,
+    finalAction: finalAction ?? "openPullRequest",
+    productionGate,
+  };
 }
 
 export async function probeCommand(args: string[]): Promise<number> {
@@ -151,6 +163,8 @@ export async function dispatchCommand(args: string[]): Promise<number> {
     backlog: { type: "string" },
     policy: { type: "string" },
     "integration-branch": { type: "string" },
+    "final-action": { type: "string" },
+    "production-gate": { type: "string" },
   });
   rejectPositionals(parsed);
 
@@ -159,6 +173,8 @@ export async function dispatchCommand(args: string[]): Promise<number> {
     requireValue(parsed, "backlog"),
     value(parsed, "policy"),
     value(parsed, "integration-branch"),
+    value(parsed, "final-action"),
+    value(parsed, "production-gate"),
   );
   const result = await dispatch(input);
   printJson(result);

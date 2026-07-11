@@ -18,7 +18,7 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]
 .br
-.B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>]
+.B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>] [\-\-final\-action openPullRequest|mergeWhenGreen] [\-\-production\-gate <name>]
 .br
 .B sigil validate [\-\-repo <dir>] <task\-file>
 .br
@@ -212,7 +212,7 @@ Exit codes: 0 when the produced backlog is valid; 1 otherwise.
 .SS dispatch
 Call software\-change for backlog items, then merge and verify by policy.
 .P
-Usage: \fBsigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>]\fR
+Usage: \fBsigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>] [\-\-final\-action openPullRequest|mergeWhenGreen] [\-\-production\-gate <name>]\fR
 .P
 Arguments and flags:
 .TP
@@ -227,6 +227,12 @@ Required delivery policy.
 .TP
 \fB\-\-integration\-branch <branch>\fR
 Required with integrationBranch. Accumulating branch for item changes.
+.TP
+\fB\-\-final\-action openPullRequest|mergeWhenGreen\fR
+Integration delivery action after all items pass. Defaults to openPullRequest.
+.TP
+\fB\-\-production\-gate <name>\fR
+Configured gate run after a successful final merge.
 .P
 Exit codes: 0 when dispatch finishes without stopping; 1 when it stops at a backlog item.
 .SS validate

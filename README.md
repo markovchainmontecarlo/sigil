@@ -26,7 +26,7 @@ In the repository you want to run Sigil against, create the default config:
 sigil setup
 ```
 
-Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` commands for that repo, such as build and test. Unconfigured evals are skipped.
+Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` commands for that repo, such as build and test. Repositories that need dependencies or generated tool state before baseline gates can also define `workspace.bootstrap`. Unconfigured evals are skipped.
 
 ## CLI
 
@@ -355,7 +355,7 @@ The public TypeScript entrypoint exports these async functions and their input/r
 - `review`: reviews the diff against a base branch and can run an autofix pass for actionable findings.
 - `probePlan`: runs sandboxed probes and produces a typed task graph for implementation.
 - `breakdown`: turns a mission into an ordered backlog file.
-- `dispatch`: calls `softwareChange` for backlog items, then owns publish, optional merge, and base verification policy.
+- `dispatch`: calls `softwareChange` for backlog items, repairs actionable review and weakened-test findings on the existing branch, and owns resumable publish, green-check merge, and base verification policy.
 - `refactor`: applies one bounded structural change with protected-path checks and independent reviews.
 - `migrate`: runs checkpointed repository migration items through `refactor` from an external run directory.
 
@@ -478,6 +478,7 @@ Each target repo needs a [`sigil.config.json`](./sigil.config.json). `loadConfig
 
 - `agents` (`codex`, `claude`, or `copilot` provider/model bindings)
 - `evals`
+- `workspace`
 - `plan`
 - `implement`
 - `review`

@@ -1,121 +1,86 @@
+import { z } from "zod";
+
 import { runFreshAgentOperation } from "../../../agent-operation.js";
 import { loadConfig } from "../../../config.js";
-import { git } from "../../../git.js";
 import { sigil, type SigilContext } from "../../../context.js";
+import { git } from "../../../git.js";
+import { runGateSet } from "../../../verification.js";
 import { reviewPrompts } from "./prompts.js";
 
 export type ReviewInput = { repo: string; base: string; autofix?: boolean; context?: string };
-export type ReviewResult = { valid: boolean; findings: string; findingsFile: string; unresolvedHigh: number; fixRan: boolean; issues: string[] };
 
-const HIGH_LINE = /^\s*HIGH\b/gm;
-const ACTIONABLE_LINE = /^\s*(HIGH|MEDIUM)\b/m;
-
-export function parseUnresolvedHigh(text: string): number | undefined {
-  const match = text.match(/^\s*UNRESOLVED-HIGH\s*:\s*(\d+)\s*$/m);
-  return match ? Number.parseInt(match[1], 10) : undefined;
-}
-
-function parseWeakenedVerdict(text: string): boolean | undefined {
-  const finalLine = text.trim().split(/\r?\n/).at(-1) ?? "";
-  const match = finalLine.match(/^\s*WEAKENED\s*:\s*(yes|no)\s*$/i);
-  if (!match) return undefined;
-  return match[1].toLowerCase() === "yes";
-}
-
-function countHigh(text: string): number {
-  return [...text.matchAll(HIGH_LINE)].length;
-}
-
-function hasActionableFinding(text: string): boolean {
-  return ACTIONABLE_LINE.test(text);
-}
-
-export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, input) => {
-  const findingsFile = ctx.artifacts.path("review-findings.md");
-  const scope = await readReviewScope(input.repo, input.base);
-
-  if (!scope.ok) {
-    return { valid: false, findings: "", findingsFile, unresolvedHigh: 0, fixRan: false, issues: [scope.issue] };
-  }
-  if (!scope.paths.length) return { valid: true, findings: "", findingsFile, unresolvedHigh: 0, fixRan: false, issues: [] };
-
-  const config = loadConfig(input.repo);
-  const reviewed = await runFreshAgentOperation(
-    ctx,
-    config.review.reviewer,
-    {
-      stage: "software-change:review",
-      limit: config.implement.repairLimit,
-      timeoutMs: config.implement.operationTimeoutMs,
-    },
-    async (reviewer) => {
-      const findings = await reviewer.prompt(
-        reviewPrompts.findings({
-          CONTEXT: input.context ?? "",
-          BASE: input.base,
-          CHANGED_PATHS: scope.paths.join("\n"),
-          DIFF_STAT: scope.stat,
-          OUT_FILE: findingsFile,
-        }),
-        { writes: "review-findings.md", minBytes: 1 },
-      );
-      if (!findings) throw new Error("review produced no findings artifact");
-
-      let unresolvedHigh = countHigh(findings);
-      let fixRan = false;
-      if (input.autofix && hasActionableFinding(findings)) {
-        const fixReply = await reviewer.prompt(reviewPrompts.fix({ FINDINGS: findings }));
-        fixRan = true;
-        const parsed = parseUnresolvedHigh(fixReply);
-        if (parsed === undefined) throw new Error("review fix did not end with UNRESOLVED-HIGH: <count>");
-        unresolvedHigh = parsed;
-      }
-      return { findings, unresolvedHigh, fixRan };
-    },
-  );
-  if (!reviewed.ok) {
-    return {
-      valid: false,
-      findings: "",
-      findingsFile,
-      unresolvedHigh: 0,
-      fixRan: false,
-      issues: [reviewed.failure.evidence],
-    };
-  }
-
-  const updatedScope = await readReviewScope(input.repo, input.base);
-  if (!updatedScope.ok) {
-    return {
-      valid: false,
-      findings: reviewed.value.findings,
-      findingsFile,
-      unresolvedHigh: reviewed.value.unresolvedHigh,
-      fixRan: reviewed.value.fixRan,
-      issues: [updatedScope.issue],
-    };
-  }
-  const integrity = await reviewTestIntegrity(ctx, input.repo, input.base, updatedScope.paths, config.review.reviewer, config.implement.repairLimit, config.implement.operationTimeoutMs);
-  const unresolvedHigh = integrity.weakened
-    ? Math.max(reviewed.value.unresolvedHigh, 1)
-    : reviewed.value.unresolvedHigh;
-  return {
-    valid: integrity.valid,
-    findings: reviewed.value.findings,
-    findingsFile,
-    unresolvedHigh,
-    fixRan: reviewed.value.fixRan,
-    issues: integrity.issues,
-  };
+export const ReviewFindingSchema = z.object({
+  id: z.string().min(1),
+  severity: z.enum(["high", "medium", "low"]),
+  path: z.string().min(1),
+  line: z.number().int().positive().optional(),
+  failureScenario: z.string().min(1),
+  defect: z.string().min(1),
+  requiredChange: z.string().min(1),
+  repairRecommended: z.boolean(),
+  source: z.enum(["correctness", "test-integrity"]).default("correctness"),
 });
 
+const ReviewOutputSchema = z.object({
+  findings: z.array(ReviewFindingSchema),
+});
+
+const TestIntegrityOutputSchema = z.object({
+  weakened: z.boolean(),
+  findings: z.array(ReviewFindingSchema.omit({ source: true }).extend({
+    source: z.literal("test-integrity").default("test-integrity"),
+  })),
+});
+
+export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+export type ReviewResult = {
+  valid: boolean;
+  findings: string;
+  structuredFindings?: ReviewFinding[];
+  findingsFile: string;
+  unresolvedHigh: number;
+  fixRan: boolean;
+  issues: string[];
+};
+
 type ReviewScope = { ok: true; paths: string[]; stat: string } | { ok: false; issue: string };
+
+function findingKey(finding: ReviewFinding): string {
+  return finding.id.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+}
+
+function actionable(finding: ReviewFinding): boolean {
+  return finding.severity === "high"
+    || finding.source === "test-integrity"
+    || (finding.severity === "medium" && finding.repairRecommended);
+}
+
+function renderFindings(findings: ReviewFinding[]): string {
+  if (!findings.length) return "No findings.\n";
+  return findings.map((finding) => [
+    `## ${finding.severity.toUpperCase()} ${finding.id}`,
+    "",
+    `**${finding.path}${finding.line ? `:${String(finding.line)}` : ""}**`,
+    "",
+    `Failure scenario: ${finding.failureScenario}`,
+    "",
+    `Defect: ${finding.defect}`,
+    "",
+    `Required change: ${finding.requiredChange}`,
+    "",
+    `Repair recommended: ${finding.repairRecommended ? "yes" : "no"}`,
+    "",
+    `Source: ${finding.source}`,
+  ].join("\n")).join("\n\n");
+}
 
 async function readReviewScope(repo: string, base: string): Promise<ReviewScope> {
   const paths = await git(repo, ["diff", "--name-only", base, "--"]);
   if (paths.code !== 0) return { ok: false, issue: paths.log || `git diff --name-only ${base} failed` };
+
   const stat = await git(repo, ["diff", "--stat", base, "--"]);
   if (stat.code !== 0) return { ok: false, issue: stat.log || `git diff --stat ${base} failed` };
+
   return { ok: true, paths: paths.stdout.split("\n").filter(Boolean), stat: stat.stdout };
 }
 
@@ -124,27 +89,191 @@ function isTestPath(path: string): boolean {
     || /\.(spec|test)\.[cm]?[jt]sx?$/.test(path);
 }
 
-async function reviewTestIntegrity(
+async function collectCorrectnessFindings(
   ctx: SigilContext,
-  repo: string,
-  base: string,
-  changed: string[],
+  input: ReviewInput,
+  scope: Extract<ReviewScope, { ok: true }>,
   reviewer: string,
   limit: number,
   timeoutMs: number,
-): Promise<{ valid: boolean; weakened: boolean; issues: string[] }> {
-  const testPaths = changed.filter(isTestPath);
-  if (!testPaths.length) return { valid: true, weakened: false, issues: [] };
-  const testDiff = await git(repo, ["diff", base, "--", ...testPaths]);
-  if (testDiff.code !== 0) return { valid: false, weakened: false, issues: [testDiff.log || "test integrity diff failed"] };
-  const checked = await runFreshAgentOperation(
+): Promise<ReviewFinding[]> {
+  const reviewed = await runFreshAgentOperation(
+    ctx,
+    reviewer,
+    { stage: "software-change:review", limit, timeoutMs },
+    (agent) => agent.prompt(reviewPrompts.findings({
+      CONTEXT: input.context ?? "",
+      BASE: input.base,
+      CHANGED_PATHS: scope.paths.join("\n"),
+      DIFF_STAT: scope.stat,
+    }), ReviewOutputSchema),
+  );
+  if (!reviewed.ok) throw new Error(reviewed.failure.evidence);
+  return reviewed.value.findings.map((finding) => ({ ...finding, source: "correctness" }));
+}
+
+async function collectTestIntegrityFindings(
+  ctx: SigilContext,
+  input: ReviewInput,
+  scope: Extract<ReviewScope, { ok: true }>,
+  reviewer: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<ReviewFinding[]> {
+  const testPaths = scope.paths.filter(isTestPath);
+  if (!testPaths.length) return [];
+
+  const testDiff = await git(input.repo, ["diff", input.base, "--", ...testPaths]);
+  if (testDiff.code !== 0) throw new Error(testDiff.log || "test integrity diff failed");
+
+  const reviewed = await runFreshAgentOperation(
     ctx,
     reviewer,
     { stage: "software-change:test-integrity", limit, timeoutMs },
-    async (agent) => parseWeakenedVerdict(await agent.prompt(reviewPrompts.testIntegrity({ DIFF: testDiff.stdout }))),
+    (agent) => agent.prompt(reviewPrompts.testIntegrity({ DIFF: testDiff.stdout }), TestIntegrityOutputSchema),
   );
-  if (!checked.ok) return { valid: false, weakened: false, issues: [checked.failure.evidence] };
-  if (checked.value === undefined) return { valid: false, weakened: false, issues: ["test integrity review did not end with WEAKENED: yes|no"] };
-  if (!checked.value) return { valid: true, weakened: false, issues: [] };
-  return { valid: true, weakened: true, issues: [`weakened-tests: changed tests were judged to weaken tests: ${testPaths.join(", ")}`] };
+  if (!reviewed.ok) throw new Error(reviewed.failure.evidence);
+  return reviewed.value.weakened ? reviewed.value.findings : [];
 }
+
+async function collectFindings(
+  ctx: SigilContext,
+  input: ReviewInput,
+  reviewer: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<{ scope: ReviewScope; findings: ReviewFinding[] }> {
+  const scope = await readReviewScope(input.repo, input.base);
+  if (!scope.ok || !scope.paths.length) return { scope, findings: [] };
+
+  const correctness = await collectCorrectnessFindings(ctx, input, scope, reviewer, limit, timeoutMs);
+  const integrity = await collectTestIntegrityFindings(ctx, input, scope, reviewer, limit, timeoutMs);
+  return { scope, findings: [...correctness, ...integrity] };
+}
+
+async function repairFindings(
+  ctx: SigilContext,
+  findings: ReviewFinding[],
+  coder: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<void> {
+  const repaired = await runFreshAgentOperation(
+    ctx,
+    coder,
+    { stage: "software-change:review-repair", limit, timeoutMs },
+    (agent) => agent.prompt(reviewPrompts.fix({ FINDINGS: JSON.stringify(findings, null, 2) })).then(() => undefined),
+  );
+  if (!repaired.ok) throw new Error(repaired.failure.evidence);
+}
+
+async function verifyRepair(ctx: SigilContext): Promise<string | undefined> {
+  const verification = await runGateSet(ctx, ["build", "test", "e2e", "verify"]);
+  const configured = verification.gates.filter((gate) => !gate.result.skipped);
+  if (!configured.length || verification.ok) return undefined;
+  return verification.evidence;
+}
+
+function exhaustedIssues(findings: ReviewFinding[], attempts: Map<string, number>, limit: number): string[] {
+  return findings
+    .filter((finding) => actionable(finding) && (attempts.get(findingKey(finding)) ?? 0) >= limit)
+    .map((finding) => `review finding ${finding.id} exhausted repair: ${finding.requiredChange}`);
+}
+
+export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, input) => {
+  const config = loadConfig(input.repo);
+  const findingsFile = ctx.artifacts.path("review-findings.md");
+  const attempts = new Map<string, number>();
+  let fixRan = false;
+
+  try {
+    let reviewed = await collectFindings(
+      ctx,
+      input,
+      config.review.reviewer,
+      config.implement.repairLimit,
+      config.implement.operationTimeoutMs,
+    );
+    if (!reviewed.scope.ok) {
+      return { valid: false, findings: "", structuredFindings: [], findingsFile, unresolvedHigh: 0, fixRan, issues: [reviewed.scope.issue] };
+    }
+
+    while (input.autofix && reviewed.findings.some(actionable)) {
+      const exhausted = exhaustedIssues(reviewed.findings, attempts, config.implement.repairLimit);
+      if (exhausted.length) {
+        const rendered = renderFindings(reviewed.findings);
+        await ctx.artifacts.write("review-findings.md", rendered);
+        return {
+          valid: false,
+          findings: rendered,
+          structuredFindings: reviewed.findings,
+          findingsFile,
+          unresolvedHigh: reviewed.findings.filter((finding) => finding.severity === "high").length,
+          fixRan,
+          issues: exhausted,
+        };
+      }
+
+      const current = reviewed.findings.filter(actionable);
+      for (const finding of current) {
+        const key = findingKey(finding);
+        attempts.set(key, (attempts.get(key) ?? 0) + 1);
+      }
+      await repairFindings(
+        ctx,
+        current,
+        config.implement.coder,
+        config.implement.repairLimit,
+        config.implement.operationTimeoutMs,
+      );
+      fixRan = true;
+
+      const gateFailure = await verifyRepair(ctx);
+      if (gateFailure) {
+        const gateFinding: ReviewFinding = {
+          id: "post-review-gates",
+          severity: "high",
+          path: ".",
+          failureScenario: gateFailure,
+          defect: "Review repair failed configured verification.",
+          requiredChange: "Repair the reported gate failures without weakening verification.",
+          repairRecommended: true,
+          source: "correctness",
+        };
+        reviewed = { ...reviewed, findings: [gateFinding] };
+        continue;
+      }
+
+      reviewed = await collectFindings(
+        ctx,
+        input,
+        config.review.reviewer,
+        config.implement.repairLimit,
+        config.implement.operationTimeoutMs,
+      );
+    }
+
+    const rendered = renderFindings(reviewed.findings);
+    await ctx.artifacts.write("review-findings.md", rendered);
+    const unresolved = reviewed.findings.filter(actionable);
+    return {
+      valid: unresolved.length === 0,
+      findings: rendered,
+      structuredFindings: reviewed.findings,
+      findingsFile,
+      unresolvedHigh: reviewed.findings.filter((finding) => finding.severity === "high").length,
+      fixRan,
+      issues: unresolved.map((finding) => `unresolved review finding ${finding.id}: ${finding.requiredChange}`),
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      findings: "",
+      structuredFindings: [],
+      findingsFile,
+      unresolvedHigh: 0,
+      fixRan,
+      issues: [error instanceof Error ? error.message : String(error)],
+    };
+  }
+});

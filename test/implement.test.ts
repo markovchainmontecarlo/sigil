@@ -41,7 +41,7 @@ function task(repo: string, id: string, dependencies: string[] = []): Task {
   };
 }
 
-function fixture(tasks: Task[], opts: { batchSize?: number; baseBranch?: string; evals?: Record<string, string>; context?: Array<{ path: string; update?: boolean }>; contextFiles?: Record<string, string> } = {}): { repo: string; taskFile: string } {
+function fixture(tasks: Task[], opts: { batchSize?: number; baseBranch?: string; evals?: Record<string, string>; bootstrap?: string; context?: Array<{ path: string; update?: boolean }>; contextFiles?: Record<string, string> } = {}): { repo: string; taskFile: string } {
   const repo = mkdtempSync(join(tmpdir(), "sigil-implement-test-"));
   run(repo, ["init"]);
   run(repo, ["config", "user.email", "test@example.com"]);
@@ -52,6 +52,7 @@ function fixture(tasks: Task[], opts: { batchSize?: number; baseBranch?: string;
   writeFileSync(join(repo, "sigil.config.json"), JSON.stringify({
     agents: { coder: { provider: "codex", model: "gpt-5.5" }, reviewer: { provider: "codex", model: "gpt-5.5" } },
     evals: opts.evals ?? { build: "build", test: "test", verify: "verify" },
+    workspace: opts.bootstrap ? { bootstrap: opts.bootstrap } : {},
     context: opts.context ?? [],
     plan: { planners: ["coder"], synthesizer: "coder" },
     implement: { coder: "coder", batchSize: opts.batchSize ?? 2, repairLimit: 2, branchPrefix: "impl/", baseBranch: opts.baseBranch ?? "master" },
@@ -96,6 +97,45 @@ function testArtifactDir(repo: string): string {
 }
 
 describe("implement", () => {
+  test("bootstraps the workspace before establishing the baseline", async () => {
+    const initial = fixture([]).repo;
+    const tasks = [task(initial, "a")];
+    const { repo, taskFile } = fixture(tasks, {
+      bootstrap: "touch .git/bootstrap-ready",
+    });
+    const marker = join(repo, ".git", "bootstrap-ready");
+
+    await implement({ repo, taskFile, branch: "impl/bootstrap" }, stubContext(repo, {
+      evalGate: async () => existsSync(marker)
+        ? { ok: true, log: "ok" }
+        : { ok: false, log: "workspace was not bootstrapped" },
+      createAgent: () => new StubAgent((_call, prompt) => {
+        const id = prompt.match(/## Your task: (\w+)/)?.[1];
+        if (id) writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+      }),
+      review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
+    }));
+
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("stops before baseline gates when workspace bootstrap fails", async () => {
+    const initial = fixture([]).repo;
+    const tasks = [task(initial, "a")];
+    const { repo, taskFile } = fixture(tasks, { bootstrap: "printf bootstrap-failed >&2; exit 7" });
+    let gateCalls = 0;
+
+    await expect(implement({ repo, taskFile, branch: "impl/bootstrap-fails" }, stubContext(repo, {
+      evalGate: async () => {
+        gateCalls++;
+        return { ok: true, log: "ok" };
+      },
+      createAgent: () => new StubAgent(),
+    }))).rejects.toThrow("workspace bootstrap failed: bootstrap-failed");
+
+    expect(gateCalls).toBe(0);
+  });
+
   test("runs a two-batch graph in task order and commits each task", async () => {
     const initial = fixture([]).repo;
     const tasks = [task(initial, "a"), task(initial, "b"), task(initial, "c")];

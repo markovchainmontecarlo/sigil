@@ -1,241 +1,189 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
+import type { z } from "zod";
 
 import type { SigilAgent } from "../src/agents.js";
 import { createContext } from "../src/context.js";
-import { parseUnresolvedHigh, review } from "../src/workflows/software-change/review/index.js";
+import { review, type ReviewFinding } from "../src/workflows/software-change/review/index.js";
+
+type AgentAction = (prompt: string) => unknown;
 
 class StubAgent implements SigilAgent {
   calls: string[] = [];
-  constructor(private readonly action: (call: number, prompt: string) => string | void = () => {}) {}
 
-  async prompt(prompt: string): Promise<string> {
+  constructor(private readonly action: AgentAction) {}
+
+  async prompt<T>(prompt: string, schema?: z.ZodType<T>): Promise<string | T> {
     this.calls.push(prompt);
-    return this.action(this.calls.length, prompt) ?? "";
+    const value = this.action(prompt);
+    if (schema) return schema.parse(value);
+    return typeof value === "string" ? value : JSON.stringify(value);
   }
 
   async close(): Promise<void> {}
-
-  async [Symbol.asyncDispose](): Promise<void> {
-    await this.close();
-  }
+  async [Symbol.asyncDispose](): Promise<void> {}
 }
 
-function run(repo: string, args: string[]): string {
+function git(repo: string, args: string[]): string {
   return execFileSync("git", args, { cwd: repo, encoding: "utf8" });
 }
 
-function repo(): { dir: string; base: string } {
-  const dir = mkdtempSync(join(tmpdir(), "sigil-review-test-"));
-  run(dir, ["init"]);
-  run(dir, ["config", "user.email", "test@example.com"]);
-  run(dir, ["config", "user.name", "Test User"]);
-  writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
-    agents: { reviewer: { provider: "codex", model: "gpt-5.5" } },
+function fixture(repairLimit = 2): { repo: string; base: string } {
+  const repo = mkdtempSync(join(tmpdir(), "sigil-review-test-"));
+  git(repo, ["init", "-b", "main"]);
+  git(repo, ["config", "user.email", "test@example.com"]);
+  git(repo, ["config", "user.name", "Test User"]);
+  writeFileSync(join(repo, "sigil.config.json"), JSON.stringify({
+    agents: {
+      coder: { provider: "codex", model: "gpt-5.5" },
+      reviewer: { provider: "codex", model: "gpt-5.5" },
+    },
     evals: {},
+    workspace: {},
+    context: [],
     plan: { planners: ["reviewer"], synthesizer: "reviewer" },
-    implement: { coder: "reviewer", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+    implement: { coder: "coder", batchSize: 5, repairLimit, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewer: "reviewer" },
   }, null, 2));
-  writeFileSync(join(dir, "app.txt"), "before\n");
-  run(dir, ["add", "."]);
-  run(dir, ["commit", "-m", "initial"]);
-  return { dir, base: run(dir, ["rev-parse", "HEAD"]).trim() };
+  writeFileSync(join(repo, "app.txt"), "before\n");
+  git(repo, ["add", "."]);
+  git(repo, ["commit", "-m", "initial"]);
+  return { repo, base: git(repo, ["rev-parse", "HEAD"]).trim() };
 }
 
-function outFileFrom(prompt: string): string {
-  const match = prompt.match(/Write your findings to (.+)\./);
-  if (!match) throw new Error("review prompt did not name an output file");
-  return match[1];
+function finding(override: Partial<ReviewFinding> = {}): ReviewFinding {
+  return {
+    id: "concurrent-create",
+    severity: "high",
+    path: "app.txt",
+    line: 1,
+    failureScenario: "Two writers race and one fails.",
+    defect: "The write is not idempotent.",
+    requiredChange: "Make the write atomic.",
+    repairRecommended: true,
+    source: "correctness",
+    ...override,
+  };
 }
 
-function writeFinding(prompt: string, text = "No findings."): void {
-  writeFileSync(outFileFrom(prompt), text);
+function changeApp(repo: string): void {
+  writeFileSync(join(repo, "app.txt"), "after\n");
+  git(repo, ["add", "."]);
+  git(repo, ["commit", "-m", "change"]);
 }
 
-function changeTest(dir: string): void {
-  mkdirSync(join(dir, "test"), { recursive: true });
-  writeFileSync(join(dir, "test", "app.test.ts"), "expect(value).toBe(2);\n");
-  run(dir, ["add", "."]);
-  run(dir, ["commit", "-m", "change test"]);
+function context(repo: string, actions: AgentAction[]) {
+  return createContext(repo, {
+    createAgent: () => {
+      const action = actions.shift();
+      if (!action) throw new Error("unexpected agent");
+      return new StubAgent(action);
+    },
+  });
 }
 
-describe("review", () => {
-  test("returns without prompting on an empty diff", async () => {
-    const { dir } = repo();
-    const agent = new StubAgent();
+describe("structured software-change review", () => {
+  test("returns without agents for an empty diff", async () => {
+    const { repo } = fixture();
+    const result = await review({ repo, base: "HEAD", autofix: true }, context(repo, []));
 
-    const result = await review({ repo: dir, base: "HEAD", autofix: true }, createContext(dir, { createAgent: () => agent }));
-
-    expect(result.unresolvedHigh).toBe(0);
+    expect(result.valid).toBe(true);
+    expect(result.structuredFindings).toEqual([]);
     expect(result.fixRan).toBe(false);
-    expect(result.findings).toBe("");
-    expect(agent.calls).toHaveLength(0);
   });
 
-  test("runs findings and autofix on the same agent instance", async () => {
-    const { dir, base } = repo();
-    writeFileSync(join(dir, "app.txt"), "after\n");
-    run(dir, ["add", "."]);
-    run(dir, ["commit", "-m", "change"]);
-    const findings = [
-      "HIGH app.txt:1 first defect",
-      "HIGH app.txt:1 second defect",
-      "MEDIUM app.txt:1 narrow defect",
-    ].join("\n");
-    const agents: StubAgent[] = [];
-    const agent = new StubAgent((call, prompt) => {
-      if (call === 1) writeFileSync(outFileFrom(prompt), findings);
-      if (call === 2) return "fixed one\nUNRESOLVED-HIGH: 1";
-    });
-
-    const result = await review({ repo: dir, base, autofix: true }, createContext(dir, {
-      createAgent: () => {
-        agents.push(agent);
-        return agent;
+  test("repairs a high finding and requires a fresh review", async () => {
+    const { repo, base } = fixture();
+    changeApp(repo);
+    const actions: AgentAction[] = [
+      () => ({ findings: [finding()] }),
+      () => {
+        writeFileSync(join(repo, "app.txt"), "atomic\n");
+        return "fixed";
       },
-    }));
+      () => ({ findings: [] }),
+    ];
 
-    expect(result.findings).toBe(findings);
-    expect(result.unresolvedHigh).toBe(1);
+    const result = await review({ repo, base, autofix: true }, context(repo, actions));
+
+    expect(result.valid).toBe(true);
     expect(result.fixRan).toBe(true);
-    expect(agents).toEqual([agent]);
-    expect(agent.calls).toHaveLength(2);
-    expect(agent.calls[1]).toContain(findings);
+    expect(result.structuredFindings).toEqual([]);
+    expect(actions).toHaveLength(0);
   });
 
-  test("defaults findings inside ignored local run storage", async () => {
-    const { dir, base } = repo();
-    rmSync(join(dir, ".sigil", "runs"), { recursive: true, force: true });
-    writeFileSync(join(dir, "app.txt"), "after\n");
-    run(dir, ["add", "."]);
-    run(dir, ["commit", "-m", "change"]);
-    const agent = new StubAgent((call, prompt) => {
-      if (call === 1) writeFileSync(outFileFrom(prompt), "MEDIUM app.txt:1 narrow defect");
-    });
+  test("lets the reviewer recommend a bounded medium repair", async () => {
+    const { repo, base } = fixture();
+    changeApp(repo);
+    const actions: AgentAction[] = [
+      () => ({ findings: [finding({ severity: "medium" })] }),
+      () => "fixed",
+      () => ({ findings: [] }),
+    ];
 
-    const result = await review({ repo: dir, base, autofix: false }, createContext(dir, { createAgent: () => agent }));
+    const result = await review({ repo, base, autofix: true }, context(repo, actions));
 
-    expect(result.findings).toBe("MEDIUM app.txt:1 narrow defect");
-    expect(result.findingsFile.startsWith(join(dir, ".sigil", "runs"))).toBe(true);
+    expect(result.valid).toBe(true);
+    expect(result.fixRan).toBe(true);
   });
 
-  test("skips test-integrity reviewer when only non-test files changed", async () => {
-    const { dir, base } = repo();
-    writeFileSync(join(dir, "app.txt"), "after\n");
-    run(dir, ["add", "."]);
-    run(dir, ["commit", "-m", "change app"]);
-    const agents: StubAgent[] = [];
-    const findingsAgent = new StubAgent((call, prompt) => {
-      if (call === 1) writeFinding(prompt);
-    });
+  test("does not repair a medium the reviewer marks as not recommended", async () => {
+    const { repo, base } = fixture();
+    changeApp(repo);
+    const result = await review({ repo, base, autofix: true }, context(repo, [
+      () => ({ findings: [finding({ severity: "medium", repairRecommended: false })] }),
+    ]));
 
-    const result = await review({ repo: dir, base, autofix: true }, createContext(dir, {
-      createAgent: () => {
-        agents.push(findingsAgent);
-        return findingsAgent;
+    expect(result.valid).toBe(true);
+    expect(result.fixRan).toBe(false);
+    expect(result.structuredFindings).toHaveLength(1);
+  });
+
+  test("repairs weakened tests and runs fresh integrity review", async () => {
+    const { repo, base } = fixture();
+    mkdirSync(join(repo, "test"));
+    writeFileSync(join(repo, "test", "app.test.ts"), "expect(value).toBe(2);\n");
+    git(repo, ["add", "."]);
+    git(repo, ["commit", "-m", "change test"]);
+    const weakened = finding({
+      id: "removed-assertion",
+      path: "test/app.test.ts",
+      source: "test-integrity",
+    });
+    const actions: AgentAction[] = [
+      () => ({ findings: [] }),
+      () => ({ weakened: true, findings: [weakened] }),
+      () => {
+        writeFileSync(join(repo, "test", "app.test.ts"), "expect(value).toBe(1);\n");
+        return "restored";
       },
-    }));
+      () => ({ findings: [] }),
+      () => ({ weakened: false, findings: [] }),
+    ];
 
-    expect(result.unresolvedHigh).toBe(0);
+    const result = await review({ repo, base, autofix: true }, context(repo, actions));
+
+    expect(result.valid).toBe(true);
+    expect(result.fixRan).toBe(true);
     expect(result.issues).toEqual([]);
-    expect(agents).toEqual([findingsAgent]);
-    expect(findingsAgent.calls).toHaveLength(1);
+    expect(actions).toHaveLength(0);
   });
 
-  test("blocks when the fresh test-integrity reviewer judges tests weakened", async () => {
-    const { dir, base } = repo();
-    changeTest(dir);
-    const findingsAgent = new StubAgent((call, prompt) => {
-      if (call === 1) writeFinding(prompt);
-    });
-    const integrityAgent = new StubAgent(() => "The assertion was edited to match behavior.\nWEAKENED: yes");
-    const agents = [findingsAgent, integrityAgent];
-    const created: StubAgent[] = [];
+  test("stops only after one stable finding exhausts its repair budget", async () => {
+    const { repo, base } = fixture(1);
+    changeApp(repo);
+    const actions: AgentAction[] = [
+      () => ({ findings: [finding()] }),
+      () => "not fixed",
+      () => ({ findings: [finding()] }),
+    ];
 
-    const result = await review({ repo: dir, base, autofix: true }, createContext(dir, {
-      createAgent: () => {
-        const agent = agents.shift();
-        if (!agent) throw new Error("unexpected agent");
-        created.push(agent);
-        return agent;
-      },
-    }));
+    const result = await review({ repo, base, autofix: true }, context(repo, actions));
 
-    expect(result.unresolvedHigh).toBeGreaterThan(0);
-    expect(result.issues).toContain("weakened-tests: changed tests were judged to weaken tests: test/app.test.ts");
-    expect(created).toEqual([findingsAgent, integrityAgent]);
-    expect(findingsAgent.calls).toHaveLength(1);
-    expect(integrityAgent.calls).toHaveLength(1);
-    expect(integrityAgent.calls[0]).toContain("expect(value).toBe(2);");
-  });
-
-  test("checks tests weakened by uncommitted autofix edits", async () => {
-    const { dir } = repo();
-    mkdirSync(join(dir, "test"), { recursive: true });
-    writeFileSync(join(dir, "test", "app.test.ts"), "expect(value).toBe(1);\n");
-    run(dir, ["add", "."]);
-    run(dir, ["commit", "-m", "add test"]);
-    const base = run(dir, ["rev-parse", "HEAD"]).trim();
-    writeFileSync(join(dir, "app.txt"), "after\n");
-    run(dir, ["add", "."]);
-    run(dir, ["commit", "-m", "change app"]);
-    const findingsAgent = new StubAgent((call, prompt) => {
-      if (call === 1) writeFinding(prompt, "HIGH app.txt:1 concrete defect");
-      if (call === 2) {
-        writeFileSync(join(dir, "test", "app.test.ts"), "expect(value).toBe(2);\n");
-        return "fixed\nUNRESOLVED-HIGH: 0";
-      }
-    });
-    const integrityAgent = new StubAgent(() => "The autofix weakened tests.\nWEAKENED: yes");
-    const agents = [findingsAgent, integrityAgent];
-
-    const result = await review({ repo: dir, base, autofix: true }, createContext(dir, {
-      createAgent: () => {
-        const agent = agents.shift();
-        if (!agent) throw new Error("unexpected agent");
-        return agent;
-      },
-    }));
-
-    expect(result.unresolvedHigh).toBe(1);
-    expect(result.issues).toContain("weakened-tests: changed tests were judged to weaken tests: test/app.test.ts");
-    expect(findingsAgent.calls).toHaveLength(2);
-    expect(integrityAgent.calls).toHaveLength(1);
-    expect(integrityAgent.calls[0]).toContain("expect(value).toBe(2);");
-  });
-
-  test("does not block when the test-integrity reviewer judges tests not weakened", async () => {
-    const { dir, base } = repo();
-    changeTest(dir);
-    const findingsAgent = new StubAgent((call, prompt) => {
-      if (call === 1) writeFinding(prompt);
-    });
-    const integrityAgent = new StubAgent(() => "The phrase WEAKENED: yes appears in prose but the final verdict controls.\nWEAKENED: no");
-    const agents = [findingsAgent, integrityAgent];
-    const created: StubAgent[] = [];
-
-    const result = await review({ repo: dir, base, autofix: true }, createContext(dir, {
-      createAgent: () => {
-        const agent = agents.shift();
-        if (!agent) throw new Error("unexpected agent");
-        created.push(agent);
-        return agent;
-      },
-    }));
-
-    expect(result.unresolvedHigh).toBe(0);
-    expect(result.issues.some((issue) => issue.includes("weakened-tests"))).toBe(false);
-    expect(created).toEqual([findingsAgent, integrityAgent]);
-    expect(findingsAgent.calls).toHaveLength(1);
-    expect(integrityAgent.calls).toHaveLength(1);
-  });
-
-  test("parses the unresolved high sentinel", () => {
-    expect(parseUnresolvedHigh("done\nUNRESOLVED-HIGH: 12\n")).toBe(12);
-    expect(parseUnresolvedHigh("UNRESOLVED-HIGH: none")).toBeUndefined();
+    expect(result.valid).toBe(false);
+    expect(result.issues[0]).toContain("exhausted repair");
   });
 });
