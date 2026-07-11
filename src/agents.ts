@@ -2,7 +2,6 @@ import { approveAll, CopilotClient, type CopilotSession, type SessionConfig } fr
 import { AcpAgent } from "@mastra/acp";
 import { ClaudeSDKAgent } from "@mastra/claude";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -63,29 +62,18 @@ export async function withAgent<T>(binding: string | AgentBinding, fn: (agent: S
   }
 }
 
-const CODEX_ACP_PLATFORM_PACKAGES: Record<string, Record<string, string>> = {
-  darwin: { arm64: "codex-acp-darwin-arm64", x64: "codex-acp-darwin-x64" },
-  linux: { arm64: "codex-acp-linux-arm64", x64: "codex-acp-linux-x64" },
-  win32: { arm64: "codex-acp-win32-arm64", x64: "codex-acp-win32-x64" },
-};
-
-function resolveNativeCodexAcpBin(): string | undefined {
+function resolveInstalledCodexAcp(): string | undefined {
   const require = createRequire(import.meta.url);
-  const nativePkg = CODEX_ACP_PLATFORM_PACKAGES[process.platform]?.[process.arch];
-  if (nativePkg) {
-    const binName = process.platform === "win32" ? "codex-acp.exe" : "codex-acp";
-    try {
-      const nativeBin = join(dirname(require.resolve(`@zed-industries/${nativePkg}/package.json`)), "bin", binName);
-      if (existsSync(nativeBin)) return nativeBin;
-    } catch {
-      return undefined;
-    }
+  try {
+    const packageFile = require.resolve("@agentclientprotocol/codex-acp/package.json");
+    return join(dirname(packageFile), "dist", "index.js");
+  } catch {
+    return undefined;
   }
-  return undefined;
 }
 
-export function nativeCodexAcpAvailable(): boolean {
-  return Boolean(resolveNativeCodexAcpBin());
+export function codexAcpAvailable(): boolean {
+  return Boolean(process.env.SIGIL_CODEX_ACP_BIN ?? resolveInstalledCodexAcp());
 }
 
 export function copilotCliAvailable(): boolean {
@@ -96,17 +84,14 @@ export function copilotSdkAvailable(): boolean {
   return true;
 }
 
-// Resolve the platform-native codex-acp binary directly. The npm `bin/codex-acp.js` is a
-// node launcher that spawnSync's the native binary as a grandchild; if we spawn the launcher,
-// AcpAgent.disconnect() kills only the node wrapper and the native binary orphans (PPID 1).
-// Spawning the native binary directly makes disconnect()'s kill() terminate the real process.
 function resolveCodexAcpBin(): { command: string; baseArgs: string[] } {
-  const nativeBin = resolveNativeCodexAcpBin();
-  if (nativeBin) return { command: nativeBin, baseArgs: [] };
+  const override = process.env.SIGIL_CODEX_ACP_BIN;
+  if (override) return { command: override, baseArgs: [] };
 
-  const require = createRequire(import.meta.url);
-  const launcher = require.resolve("@zed-industries/codex-acp/package.json");
-  return { command: process.execPath, baseArgs: [join(dirname(launcher), "bin", "codex-acp.js")] };
+  const adapter = resolveInstalledCodexAcp();
+  if (adapter) return { command: process.execPath, baseArgs: [adapter] };
+
+  throw new Error("Codex ACP adapter is not installed");
 }
 
 function createClaude(binding: AgentBinding, cwd: string): SigilAgent {

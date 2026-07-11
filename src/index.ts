@@ -4,7 +4,7 @@ export {
   copilotSdkAvailable,
   createCopilotAgentFromClient,
   createCopilotAgentFromGenerate,
-  nativeCodexAcpAvailable,
+  codexAcpAvailable,
   promptCodexWithSchema,
   withAgent,
   type AgentOptions,

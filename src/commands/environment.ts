@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 
-import { copilotCliAvailable, copilotSdkAvailable, nativeCodexAcpAvailable } from "../agents.js";
+import { codexAcpAvailable, copilotCliAvailable, copilotSdkAvailable } from "../agents.js";
 import { loadConfig } from "../config.js";
 import { parseCommandArgs, rejectPositionals, value } from "./parse.js";
 
@@ -17,7 +17,7 @@ export async function discoverEnvCommand(args: string[]): Promise<number> {
       const effort = binding.effort === undefined ? "" : ` effort=${binding.effort}`;
       console.log(`agent ${name}: provider=${binding.provider} model=${binding.model}${effort}`);
     }
-    console.log(`codex native acp available: ${nativeCodexAcpAvailable()}`);
+    console.log(`codex acp available: ${codexAcpAvailable()}`);
     console.log(`claude auth source: ${process.env.ANTHROPIC_API_KEY ? "api billing" : "subscription"}`);
     console.log(`copilot cli available: ${copilotCliAvailable()}`);
     console.log(`copilot sdk available: ${copilotSdkAvailable()}`);
