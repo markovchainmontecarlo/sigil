@@ -1,0 +1,56 @@
+{
+  "agents": {
+    "explorer-gpt-5.4": {
+      "provider": "codex",
+      "model": "gpt-5.5",
+      "effort": "medium"
+    },
+    "explorer-gpt-5.5": {
+      "provider": "codex",
+      "model": "gpt-5.5",
+      "effort": "medium"
+    },
+    "implementer": {
+      "provider": "codex",
+      "model": "gpt-5.5",
+      "effort": "medium"
+    },
+    "reviewer": {
+      "provider": "codex",
+      "model": "gpt-5.5",
+      "effort": "medium"
+    }
+  },
+  "evals": {
+    "build": "bun run typecheck",
+    "test": "bun test"
+  },
+  "context": [
+    {
+      "path": "ARCHITECTURE.md",
+      "update": true
+    },
+    {
+      "path": "skills/sigil/SKILL.md",
+      "update": false
+    }
+  ],
+  "plan": {
+    "planners": [
+      "explorer-gpt-5.4",
+      "explorer-gpt-5.5"
+    ],
+    "synthesizer": "explorer-gpt-5.4"
+  },
+  "implement": {
+    "coder": "implementer",
+    "batchSize": 5,
+    "repairLimit": 3,
+    "operationTimeoutMs": 1800000,
+    "branchPrefix": "sigil/",
+    "baseBranch": "main"
+  },
+  "review": {
+    "reviewer": "reviewer"
+  }
+}

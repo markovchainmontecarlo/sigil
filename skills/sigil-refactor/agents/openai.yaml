@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sigil Refactor"
+  short_description: "Run one verified behavior-preserving refactor"
+  default_prompt: "Create and run one bounded Sigil refactor with explicit intent, advisory focus, and protected paths."

@@ -1,0 +1,76 @@
+flowchart TD
+  Input["probePlan input"]
+  LoadConfig["load config and repository context"]
+  InitialTree["record target changed paths"]
+  DirtyNote["issue if target tree starts dirty"]
+  Sandbox["clone shared sandbox outside target worktree"]
+  Outputs["choose task, evidence, and findings artifact paths"]
+
+  Input --> LoadConfig
+  LoadConfig --> InitialTree
+  InitialTree --> DirtyNote
+  DirtyNote --> Sandbox
+  Sandbox --> Outputs
+  Outputs --> PlannerRoles
+
+  subgraph ProbeDesign["probe design fan-out"]
+    PlannerRoles["configured planner roles run in parallel"]
+    ProbeSpecs["structured probe specs"]
+    Dedupe["dedupe by command"]
+    Limit["apply maxProbes limit"]
+
+    PlannerRoles --> ProbeSpecs
+    ProbeSpecs --> Dedupe
+    Dedupe --> Limit
+  end
+
+  Limit --> NextProbe
+
+  subgraph ProbeLoop["sandbox command loop"]
+    NextProbe{"next probe?"}
+    SafetyGate{"command allowed?"}
+    Skip["record skipped probe issue"]
+    RunCommand["run command in sandbox with timeout"]
+    CommandResult["record stdout, stderr, exit code, and ok"]
+
+    NextProbe -->|yes| SafetyGate
+    SafetyGate -->|no| Skip
+    SafetyGate -->|yes| RunCommand
+    RunCommand --> CommandResult
+    Skip --> NextProbe
+    CommandResult --> NextProbe
+  end
+
+  NextProbe -->|none| Evidence["write probe evidence artifact outside target tree"]
+  Evidence --> FindingsAgent
+
+  subgraph Findings["synthesis and typed handoff"]
+    FindingsAgent["configured synthesizer role writes findings"]
+    TaskGraphAgent["configured synthesizer role writes task graph"]
+    Enrich["enrich task graph"]
+    RepairGraph["repair task graph JSON"]
+    ValidateGraph{"typed task graph valid?"}
+
+    FindingsAgent --> TaskGraphAgent
+    TaskGraphAgent --> Enrich
+    Enrich --> RepairGraph
+    RepairGraph --> ValidateGraph
+  end
+
+  PreserveTarget{"target changed paths unchanged?"}
+  PreserveTarget --> Result["ProbePlanResult"]
+  ValidateGraph --> PreserveTarget
+
+  PlannerRoles -. "errors" .-> PreserveTarget
+  NextProbe -. "errors" .-> PreserveTarget
+  FindingsAgent -. "errors" .-> PreserveTarget
+  Sandbox -. "sandbox may mutate; target tree must not" .-> PreserveTarget
+
+  classDef agent fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef gate fill:#fef3c7,stroke:#d97706,color:#451a03;
+  classDef artifact fill:#ecfdf5,stroke:#059669,color:#064e3b;
+  classDef boundary fill:#f3e8ff,stroke:#7c3aed,color:#3b0764;
+  class PlannerRoles,FindingsAgent,TaskGraphAgent agent;
+  class SafetyGate,ValidateGraph,PreserveTarget,NextProbe gate;
+  class Evidence artifact;
+  class Sandbox boundary;

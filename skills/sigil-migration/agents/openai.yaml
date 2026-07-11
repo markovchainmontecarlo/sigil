@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sigil Migration"
+  short_description: "Run verified repository migrations through a refactor queue"
+  default_prompt: "Create and run a verified Sigil repository migration from a target architecture and dependency-ordered refactor backlog."

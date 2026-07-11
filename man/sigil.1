@@ -1,0 +1,338 @@
+.TH SIGIL 1
+.SH NAME
+sigil \- composable workflow CLI with built-in software-change workflows
+.SH SYNOPSIS
+.B sigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir>
+.br
+.B sigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]...
+.br
+.B sigil probe \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-max\-probes <n>]
+.br
+.B sigil plan \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>]
+.br
+.B sigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>]
+.br
+.B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>]
+.br
+.B sigil review \-\-repo <dir> \-\-base <ref> [\-\-no\-autofix] [\-\-context <text>]
+.br
+.B sigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]
+.br
+.B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>]
+.br
+.B sigil validate [\-\-repo <dir>] <task\-file>
+.br
+.B sigil validate\-workflow [\-\-repo <dir>] <workflow\-file>
+.br
+.B sigil validate\-sigil <workflow.ts>
+.br
+.B sigil run\-workflow \-\-repo <dir> \-\-file <workflow\-file>
+.br
+.B sigil run\-sigil \-\-repo <dir> \-\-file <workflow.ts> [\-\-input <input.json>] [\-\-out <result.json>] [\-\-run\-dir <dir>] [\-\-persistence durable|ephemeral]
+.br
+.B sigil setup [\-\-dir <repo>] [\-\-force]
+.br
+.B sigil discover\-env [\-\-repo <dir>]
+.br
+.SH DESCRIPTION
+Sigil is a composable workflow system with built-in software-change workflows. Run \fBsigil <verb> --help\fR for command-specific help.
+.SH COMMANDS
+.SS migrate
+Apply a dependency\-ordered repository migration with verified commit checkpoints.
+.P
+Usage: \fBsigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir>\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Clean named branch to migrate.
+.TP
+\fB\-\-target <file>\fR
+Required. Target architecture and invariants.
+.TP
+\fB\-\-backlog <file>\fR
+Required. Dependency\-ordered migration backlog JSON.
+.TP
+\fB\-\-run\-dir <dir>\fR
+Required. Durable external checkpoint, event, and review directory; temporary storage is rejected.
+.P
+Exit codes: 0 when every item, final review, build, and test passes; 1 otherwise.
+.SS refactor
+Apply a behavior\-preserving structural change with analysis, gates, and independent review.
+.P
+Usage: \fBsigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]...\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Clean target repository to refactor in place.
+.TP
+\fB\-\-intent <text>\fR
+Required. Structural change to make while preserving behavior.
+.TP
+\fB\-\-brief <file>\fR
+Optional file with refactor constraints and invariants.
+.TP
+\fB\-\-focus <path>\fR
+Optional repeatable starting path; additional relevant paths remain available.
+.TP
+\fB\-\-protected\-path <path>\fR
+Optional repeatable path the refactor must not modify.
+.P
+Exit codes: 0 when final build and test gates pass without recorded issues; 1 otherwise.
+.SS probe
+Run sandboxed probes, synthesize findings, and produce a task graph.
+.P
+Usage: \fBsigil probe \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-max\-probes <n>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository to investigate without modifying.
+.TP
+\fB\-\-intent <text>\fR
+Required. Product or workflow improvement intent to probe.
+.TP
+\fB\-\-brief <file>\fR
+Optional file with extra non\-authoritative probe context.
+.TP
+\fB\-\-out <file>\fR
+Optional task graph output path.
+.TP
+\fB\-\-max\-probes <n>\fR
+Optional maximum number of generated probe commands to run.
+.P
+Exit codes: 0 when the produced task graph is valid and the target working tree is preserved; 1 otherwise.
+.SS plan
+Turn an intent and optional brief into a task graph.
+.P
+Usage: \fBsigil plan \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-intent <text>\fR
+Required. Change intent to plan.
+.TP
+\fB\-\-brief <file>\fR
+Optional file with extra planning context.
+.TP
+\fB\-\-out <file>\fR
+Optional task graph output path.
+.P
+Exit codes: 0 when the produced task graph is valid; 1 otherwise.
+.SS software\-change
+Plan, implement, verify, review, and report one local change without publishing.
+.P
+Usage: \fBsigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-intent <text>\fR
+Required. Change intent to plan and implement.
+.TP
+\fB\-\-brief <file>\fR
+Optional file with extra planning context.
+.TP
+\fB\-\-out <file>\fR
+Optional task graph output path.
+.TP
+\fB\-\-task\-file <file>\fR
+Optional existing typed task graph file to implement without planning.
+.TP
+\fB\-\-branch <name>\fR
+Optional implementation branch name.
+.TP
+\fB\-\-instructions <file>\fR
+Optional run\-specific implementation instructions.
+.P
+Exit codes: 0 when the workflow result is valid and reports no issues; 1 otherwise.
+.SS implement
+Apply a task graph, run gates and review, then push and open a PR.
+.P
+Usage: \fBsigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-task\-file <file>\fR
+Required. Task graph JSON file.
+.TP
+\fB\-\-branch <name>\fR
+Optional branch name.
+.TP
+\fB\-\-instructions <file>\fR
+Optional run\-specific implementation instructions.
+.P
+Exit codes: 0 when PR creation succeeds, review is not blocking, and no failed tasks or issues are reported; 1 otherwise.
+.SS review
+Review the current diff against a base ref.
+.P
+Usage: \fBsigil review \-\-repo <dir> \-\-base <ref> [\-\-no\-autofix] [\-\-context <text>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-base <ref>\fR
+Required. Base ref for the diff.
+.TP
+\fB\-\-no\-autofix\fR
+Disable the autofix pass.
+.TP
+\fB\-\-context <text>\fR
+Optional review context.
+.P
+Exit codes: 0 when there are no unresolved high findings and no reported issues; 1 otherwise.
+.SS breakdown
+Turn a mission into an ordered backlog file.
+.P
+Usage: \fBsigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-mission <text>\fR
+Required. Mission text.
+.TP
+\fB\-\-out <file>\fR
+Optional backlog output path.
+.P
+Exit codes: 0 when the produced backlog is valid; 1 otherwise.
+.SS dispatch
+Call software\-change for backlog items, then merge and verify by policy.
+.P
+Usage: \fBsigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-backlog <file>\fR
+Required. Backlog JSON file.
+.TP
+\fB\-\-policy mergeWhenGreen|integrationBranch\fR
+Required delivery policy.
+.TP
+\fB\-\-integration\-branch <branch>\fR
+Required with integrationBranch. Accumulating branch for item changes.
+.P
+Exit codes: 0 when dispatch finishes without stopping; 1 when it stops at a backlog item.
+.SS validate
+Validate a task graph file.
+.P
+Usage: \fBsigil validate [\-\-repo <dir>] <task\-file>\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Repository directory used to resolve and check task file paths.
+.TP
+\fB<task\-file>\fR
+Required. Task graph JSON file.
+.P
+Exit codes: 0 when the validation error array is empty; 1 otherwise.
+.SS validate\-workflow
+Validate a static YAML workflow file.
+.P
+Usage: \fBsigil validate\-workflow [\-\-repo <dir>] <workflow\-file>\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Repository directory used to resolve config\-backed agents. Defaults to the current directory.
+.TP
+\fB<workflow\-file>\fR
+Required. YAML workflow file.
+.P
+Exit codes: 0 when the workflow error array is empty; 1 otherwise.
+.SS validate\-sigil
+Validate a TypeScript sigil file without running it.
+.P
+Usage: \fBsigil validate\-sigil <workflow.ts>\fR
+.P
+Arguments and flags:
+.TP
+\fB<workflow.ts>\fR
+Required. TypeScript sigil file exporting default or named workflow.
+.P
+Exit codes: 0 when the sigil imports and has a callable export; 1 otherwise.
+.SS run\-workflow
+Run a static YAML workflow file against a target repository.
+.P
+Usage: \fBsigil run\-workflow \-\-repo <dir> \-\-file <workflow\-file>\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-file <workflow\-file>\fR
+Required. YAML workflow file.
+.P
+Exit codes: 0 when the workflow completes without recorded issues; 1 otherwise.
+.SS run\-sigil
+Launch a detached TypeScript sigil run against a target repository.
+.P
+Usage: \fBsigil run\-sigil \-\-repo <dir> \-\-file <workflow.ts> [\-\-input <input.json>] [\-\-out <result.json>] [\-\-run\-dir <dir>] [\-\-persistence durable|ephemeral]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Required. Target repository.
+.TP
+\fB\-\-file <workflow.ts>\fR
+Required. TypeScript sigil file exporting default or named workflow.
+.TP
+\fB\-\-input <input.json>\fR
+Optional JSON object merged into the workflow input; \-\-repo wins over any repo field in the file.
+.TP
+\fB\-\-out <result.json>\fR
+Optional final result path written by the detached worker.
+.TP
+\fB\-\-run\-dir <dir>\fR
+Optional run directory for the manifest, PID, status, events, log, artifacts, result, and error; durable runs default to <repo>/.sigil/runs/.
+.TP
+\fB\-\-persistence durable|ephemeral\fR
+Storage policy. Durable is the default and rejects temporary repositories, inputs, outputs, and run directories.
+.P
+Exit codes: 0 when the detached worker launches; 1 when launch validation fails.
+.SS setup
+Write the default sigil.config.json and ignore local run state.
+.P
+Usage: \fBsigil setup [\-\-dir <repo>] [\-\-force]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-dir <repo>\fR
+Repository directory. Defaults to the current directory.
+.TP
+\fB\-\-force\fR
+Overwrite an existing config file.
+.P
+Exit codes: 0 when the config is written; 1 when it already exists without \-\-force.
+.SS discover\-env
+Print a read\-only report of configured agents, Codex native ACP reachability, and Claude auth source.
+.P
+Usage: \fBsigil discover\-env [\-\-repo <dir>]\fR
+.P
+Arguments and flags:
+.TP
+\fB\-\-repo <dir>\fR
+Repository directory. Defaults to the current directory.
+.P
+Exit codes: 0 when the environment report is printed; 1 when config cannot be loaded.
+.SH SEE ALSO
+sigil <verb> --help
+

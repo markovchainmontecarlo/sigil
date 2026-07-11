@@ -1,0 +1,111 @@
+flowchart TD
+  Input["migrate input"]
+  Prepare["prepare external run directory"]
+  ReadTarget["read target and backlog files"]
+  BranchGate{"named branch?"}
+  State["load or create migration state"]
+  ResumeGate{"clean tree at checkpoint head?"}
+  Events["append migration events artifact"]
+  BranchFailure["terminal workflow error: unnamed branch"]
+  ResumeFailure["terminal workflow error: invalid resume checkpoint"]
+  FinalVerifiedState["write finalVerified state atomically"]
+  Finish["MigrationResult"]
+
+  Input --> Prepare
+  Prepare --> ReadTarget
+  ReadTarget --> BranchGate
+  BranchGate -->|yes| State
+  BranchGate -->|no| BranchFailure
+  State --> Events
+  Events --> ResumeGate
+  ResumeGate -->|valid| Pending
+  ResumeGate -->|invalid| ResumeFailure
+
+  subgraph ItemLoop["dependency-ordered item loop"]
+    Pending{"pending backlog item?"}
+    AttemptDir["create item-owned attempt directory and fork context"]
+    ItemInput["write item refactor input artifact"]
+    RefactorRun["run self-healing refactor workflow"]
+    Snapshot["snapshot refactor plan, reviews, events, and result"]
+    RefactorValid{"refactor result valid?"}
+    PreserveFailure["persist failed diff and attempt evidence"]
+    RestoreCheckpoint["restore preceding verified checkpoint"]
+    CommitItem["commit item change"]
+    PendingCheckpoint["write pending checkpoint journal"]
+    CompletedCheckpoint["write completed checkpoint artifact"]
+    Advance["write state checkpoint atomically"]
+
+    Pending -->|yes| AttemptDir
+    AttemptDir --> ItemInput
+    ItemInput --> RefactorRun
+    RefactorRun --> Snapshot
+    Snapshot --> RefactorValid
+    RefactorValid -->|no| PreserveFailure
+    PreserveFailure --> RestoreCheckpoint
+    RestoreCheckpoint --> FinishFailed["finish with failed item result"]
+    RefactorValid -->|yes| PendingCheckpoint
+    PendingCheckpoint --> CommitItem
+    CommitItem --> CompletedCheckpoint
+    CompletedCheckpoint --> Advance
+    Advance --> Pending
+  end
+
+  Pending -->|none| BuildTest
+
+  subgraph FinalConvergence["repository-wide final verification loop"]
+    BuildTest{"configured build/test gates pass?"}
+    ReviewFanout["configured reviewer role runs architecture and behavior reviews in parallel"]
+    ReviewRetry["retry failed reviewer independently in a fresh context"]
+    AttemptReviewArtifacts["write attempt review artifacts"]
+    ReviewGate{"reviews nonblocking?"}
+    FinalValid{"gates and reviews pass?"}
+    RepairBudget{"repair attempts remain?"}
+    FinalRepair["configured coder role repairs final verification"]
+    ProtectedGate{"protected paths unchanged?"}
+    ProtectedRepair["one configured coder prompt repairs protected-path changes"]
+    ProtectedRecheck{"protected paths unchanged after repair?"}
+    FinishInvalid["finish with invalid migration result"]
+    CommitRepair["commit final repair"]
+    CommitResult{"final repair commit created?"}
+    CommitFailure["finish with invalid migration result"]
+    FinalState["write final repair checkpoint atomically"]
+    ReviewArtifacts["write final review artifacts in run directory"]
+
+    BuildTest --> ReviewFanout
+    ReviewFanout -->|operation failure| ReviewRetry
+    ReviewRetry --> ReviewFanout
+    ReviewFanout --> AttemptReviewArtifacts
+    AttemptReviewArtifacts --> ReviewGate
+    ReviewGate --> FinalValid
+    BuildTest --> FinalValid
+    FinalValid -->|yes| ReviewArtifacts
+    FinalValid -->|no| RepairBudget
+    RepairBudget -->|no| ReviewArtifacts
+    RepairBudget -->|yes| FinalRepair
+    FinalRepair --> ProtectedGate
+    ProtectedGate -->|violation| ProtectedRepair
+    ProtectedRepair --> ProtectedRecheck
+    ProtectedRecheck -->|violation| FinishInvalid
+    ProtectedRecheck -->|clear| CommitRepair
+    ProtectedGate -->|clear| CommitRepair
+    CommitRepair --> CommitResult
+    CommitResult -->|committed| FinalState
+    CommitResult -->|no change| BuildTest
+    CommitResult -->|failed| CommitFailure
+    FinalState --> BuildTest
+  end
+
+  FinishFailed --> Finish
+  FinishInvalid --> FinalVerifiedState
+  CommitFailure --> FinalVerifiedState
+  ReviewArtifacts --> FinalVerifiedState
+  FinalVerifiedState --> Finish
+
+  classDef agent fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef gate fill:#fef3c7,stroke:#d97706,color:#451a03;
+  classDef artifact fill:#ecfdf5,stroke:#059669,color:#064e3b;
+  classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
+  class RefactorRun,ReviewFanout,ReviewRetry,FinalRepair,ProtectedRepair agent;
+  class BranchGate,ResumeGate,Pending,RefactorValid,BuildTest,ReviewGate,FinalValid,RepairBudget,ProtectedGate,ProtectedRecheck,CommitResult gate;
+  class Prepare,State,Events,AttemptDir,ItemInput,Snapshot,PreserveFailure,RestoreCheckpoint,PendingCheckpoint,CompletedCheckpoint,Advance,AttemptReviewArtifacts,FinalState,ReviewArtifacts,FinalVerifiedState artifact;
+  class BranchFailure,ResumeFailure,FinishFailed,FinishInvalid,CommitFailure failure;

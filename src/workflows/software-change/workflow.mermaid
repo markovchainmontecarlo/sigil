@@ -1,0 +1,144 @@
+flowchart TD
+  Input["softwareChange input"]
+  TaskFile{"taskFile supplied?"}
+  ExistingGraph["read supplied task graph"]
+  SuppliedGraphValid{"supplied task graph valid?"}
+  SuppliedGraphFailure["terminal workflow error: invalid supplied task graph"]
+  Result["SoftwareChangeResult"]
+  Delivery["delivery boundary: returns branch and PR body only"]
+
+  Input --> TaskFile
+  TaskFile -->|yes| ExistingGraph
+  TaskFile -->|no| PlanConfig
+  ExistingGraph --> SuppliedGraphValid
+  SuppliedGraphValid -->|valid| LoadGraph
+  SuppliedGraphValid -->|invalid| SuppliedGraphFailure
+
+  subgraph Planning["planning stage"]
+    PlanConfig["load config and repository context"]
+    Planners["configured planner roles run in parallel"]
+    PlannerArtifacts["planner markdown artifacts"]
+    AnyPlan{"usable planner output?"}
+    Synthesizer["configured synthesizer role"]
+    MultiplePlans{"more than one planner output?"}
+    SinglePlan["use single planner output directly"]
+    Compare["compare plans into convergence and divergence"]
+    VerifyClaims["verify convergence and divergence claims"]
+    Resolve["resolve verified divergences"]
+    BuildGraph["build typed task graph artifact"]
+    Enrich["enrich task graph"]
+    RepairGraph["repair and validate task graph JSON"]
+    PlanResult["PlanResult"]
+
+    PlanConfig --> Planners
+    Planners --> PlannerArtifacts
+    PlannerArtifacts --> AnyPlan
+    AnyPlan -->|no| PlanResult
+    AnyPlan -->|yes| Synthesizer
+    Synthesizer --> MultiplePlans
+    MultiplePlans -->|no| SinglePlan
+    MultiplePlans -->|yes| Compare
+    SinglePlan --> BuildGraph
+    Compare --> VerifyClaims
+    VerifyClaims --> Resolve
+    Resolve --> BuildGraph
+    BuildGraph --> Enrich
+    Enrich --> RepairGraph
+    RepairGraph --> PlanResult
+  end
+
+  PlanResult --> PlanValid{"planning result valid?"}
+  PlanValid -->|no| Result
+  PlanValid -->|yes| LoadGraph
+
+  subgraph Implementation["implementation stage"]
+    LoadGraph["load and batch typed task graph"]
+    CleanGate{"target tree clean?"}
+    CleanFailure["terminal workflow error: dirty target tree"]
+    Branch["checkout fresh implementation branch"]
+    BaselineGate{"establish configured baseline gates"}
+    TaskLoop{"next task in dependency-ordered batches"}
+    DependencyGate{"dependencies passed?"}
+    Coder["configured coder role implements task"]
+    TaskGate{"configured build/test gates pass?"}
+    TaskRepair["same coder repairs task"]
+    CommitTask["commit task change"]
+    CommitResult{"task commit result?"}
+    TaskCommitIssue["record task commit failure issue"]
+    NoChangeRepair["same coder repairs no-change task"]
+    NoChangeGate{"configured build/test gates pass after no-change repair?"}
+    RetryCommit["retry task commit"]
+    RetryCommitResult{"retry commit result?"}
+    RetryCommitIssue["record retry commit failure issue"]
+    NoopVerdict["noop-check agent verdict"]
+    ConsecutiveNoop{"two consecutive unsatisfied noop checks?"}
+    StopWork["stop future task work"]
+    ReplyArtifact["persist task reply artifact outside target tree"]
+    FinalGates{"baseline regression, e2e, verify gates"}
+    FinalRepair["configured coder role repairs final gate failure"]
+    ReviewStage["implementation-owned review stage"]
+    ReviewCommit["commit review fixes"]
+    StrongestGate{"strongest configured gate after review"}
+    FinalRepairCommit["commit final gate repair"]
+    FinalRepairCommitResult{"final repair commit result?"}
+    FinalRepairCommitIssue["record final repair commit failure issue"]
+    ImplementResult["ImplementResult"]
+
+    LoadGraph --> CleanGate
+    CleanGate -->|clean| Branch
+    CleanGate -->|dirty| CleanFailure
+    Branch --> BaselineGate
+    BaselineGate -->|red| ImplementResult
+    BaselineGate -->|green| TaskLoop
+    TaskLoop -->|task| DependencyGate
+    DependencyGate -->|failed dependency| TaskLoop
+    DependencyGate -->|ready| Coder
+    Coder --> TaskGate
+    TaskGate -->|red, attempts remain| TaskRepair
+    TaskRepair --> TaskGate
+    TaskGate -->|red, exhausted| ReplyArtifact
+    TaskGate -->|green| CommitTask
+    CommitTask --> CommitResult
+    CommitResult -->|committed| ReplyArtifact
+    CommitResult -->|failed| TaskCommitIssue
+    TaskCommitIssue --> ReplyArtifact
+    CommitResult -->|nothing| NoChangeRepair
+    NoChangeRepair --> NoChangeGate
+    NoChangeGate -->|green| RetryCommit
+    NoChangeGate -->|red| NoopVerdict
+    RetryCommit --> RetryCommitResult
+    RetryCommitResult -->|committed| ReplyArtifact
+    RetryCommitResult -->|failed| RetryCommitIssue
+    RetryCommitIssue --> ReplyArtifact
+    RetryCommitResult -->|nothing| NoopVerdict
+    NoopVerdict --> ConsecutiveNoop
+    ConsecutiveNoop -->|no| ReplyArtifact
+    ConsecutiveNoop -->|yes| StopWork
+    StopWork --> ReplyArtifact
+    ReplyArtifact --> TaskLoop
+    TaskLoop -->|done or stopped| FinalGates
+    FinalGates -->|red, attempts remain| FinalRepair
+    FinalRepair --> FinalRepairCommit
+    FinalRepairCommit --> FinalRepairCommitResult
+    FinalRepairCommitResult -->|committed or no change| FinalGates
+    FinalRepairCommitResult -->|failed| FinalRepairCommitIssue
+    FinalRepairCommitIssue --> FinalGates
+    FinalGates --> ReviewStage
+    ReviewStage --> ReviewCommit
+    ReviewCommit --> StrongestGate
+    StrongestGate --> ImplementResult
+  end
+
+  ImplementResult --> Result
+  Result -. "no publish, push, pull request, or merge; no dispatch policy" .-> Delivery
+
+  classDef agent fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef gate fill:#fef3c7,stroke:#d97706,color:#451a03;
+  classDef artifact fill:#ecfdf5,stroke:#059669,color:#064e3b;
+  classDef boundary fill:#f3e8ff,stroke:#7c3aed,color:#3b0764;
+  classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
+  class Planners,Synthesizer,Coder,TaskRepair,NoChangeRepair,NoopVerdict,FinalRepair,ReviewStage agent;
+  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,PlanValid,CleanGate,BaselineGate,DependencyGate,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,FinalGates,FinalRepairCommitResult,StrongestGate gate;
+  class PlannerArtifacts,BuildGraph,ReplyArtifact,TaskCommitIssue,RetryCommitIssue,FinalRepairCommit,FinalRepairCommitIssue artifact;
+  class Delivery boundary;
+  class SuppliedGraphFailure,CleanFailure failure;

@@ -1,0 +1,39 @@
+name: triage-issue
+description: Classify an incoming issue, then fix it or spec it
+stages:
+  - id: understand
+    jobs:
+      - id: analysis
+        agent: reviewer
+        steps:
+          - id: reproduce
+            prompt: |
+              Read the issue below and summarize the likely problem in one paragraph.
+              {{ issue }}
+          - id: classify
+            prompt: |
+              Based on what you found, reply with exactly one token: BUG or FEATURE
+            output:
+              enum: [BUG, FEATURE]
+          - id: write-repro
+            prompt: Write a minimal reproduction script for what you found.
+            writes: repro.sh
+            minBytes: 1
+  - id: act
+    jobs:
+      - id: fix
+        agent: implementer
+        condition: $analysis.classify.output == 'BUG'
+        steps:
+          - id: implement
+            prompt: Fix the bug. The reproduction is at $artifacts/repro.sh and must pass.
+          - id: gate
+            eval: build
+      - id: spec
+        agent: implementer
+        condition: $analysis.classify.output == 'FEATURE'
+        steps:
+          - id: write-spec
+            prompt: Write an implementation spec for this feature request.
+            writes: spec.md
+            minBytes: 1

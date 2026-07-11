@@ -1,0 +1,73 @@
+flowchart TD
+  Input["dispatch input"]
+  ReadBacklog["read and validate backlog"]
+  Order["order items by dependency"]
+  Policy{"delivery policy"}
+  PrepareIntegration["create or resume integration branch"]
+  DeliveryBase["select main or integration delivery base"]
+
+  Input --> ReadBacklog
+  ReadBacklog --> Order
+  Order --> Policy
+  Policy -->|mergeWhenGreen| DeliveryBase
+  Policy -->|integrationBranch| PrepareIntegration
+  PrepareIntegration --> DeliveryBase
+  DeliveryBase --> NextItem
+
+  subgraph ItemLoop["serial dependency-ordered item loop"]
+    NextItem{"next item?"}
+    DependencyGate{"dependencies delivered?"}
+    DependencySkip["record dependency skip"]
+    SoftwareChange["call softwareChange on item branch from delivery base using refreshed origin delivery ref"]
+    WorkflowReady{"branch and PR body ready?"}
+    ReviewGate{"change valid and issue-free, review nonblocking, and no failed tasks?"}
+    Publish["publish item PR to delivery base"]
+    PublishGate{"push and PR created?"}
+    Merge["merge item PR into delivery base"]
+    MergeGate{"merge succeeded?"}
+    SyncBase["fetch origin delivery base and detach worktree there"]
+    VerifyBase["run build and test on updated delivery base after synced checkout"]
+    BaseGate{"delivery base verified?"}
+    MarkDelivered["mark item delivered"]
+    ItemFailure["record item failure and stop"]
+
+    NextItem -->|item| DependencyGate
+    DependencyGate -->|no| DependencySkip
+    DependencySkip --> NextItem
+    DependencyGate -->|yes| SoftwareChange
+    SoftwareChange --> WorkflowReady
+    WorkflowReady -->|no| ItemFailure
+    WorkflowReady -->|yes| ReviewGate
+    ReviewGate -->|no| ItemFailure
+    ReviewGate -->|yes| Publish
+    Publish --> PublishGate
+    PublishGate -->|no| ItemFailure
+    PublishGate -->|yes| Merge
+    Merge --> MergeGate
+    MergeGate -->|no| ItemFailure
+    MergeGate -->|yes| SyncBase
+    SyncBase --> VerifyBase
+    VerifyBase --> BaseGate
+    BaseGate -->|no| ItemFailure
+    BaseGate -->|yes| MarkDelivered
+    MarkDelivered --> NextItem
+  end
+
+  NextItem -->|none| FinalPolicy
+  FinalPolicy{"integration delivery?"}
+  FinalPublish["publish one final integration PR to main"]
+  Result["DispatchResult"]
+
+  FinalPolicy -->|no| Result
+  FinalPolicy -->|yes| FinalPublish
+  FinalPublish --> Result
+  ItemFailure --> Result
+
+  classDef workflow fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef gate fill:#fef3c7,stroke:#d97706,color:#451a03;
+  classDef policy fill:#f3e8ff,stroke:#7c3aed,color:#3b0764;
+  classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
+  class SoftwareChange workflow;
+  class Policy,NextItem,DependencyGate,WorkflowReady,PublishGate,ReviewGate,MergeGate,BaseGate,FinalPolicy gate;
+  class PrepareIntegration,DeliveryBase,Publish,Merge,FinalPublish policy;
+  class ItemFailure failure;

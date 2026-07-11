@@ -1,0 +1,12 @@
+node_modules/
+handoffs/
+.env
+*.log
+dist/
+.sigil/
+.mastra/
+.mastra-storage/
+.sigil-mastra/
+tmp/
+*.db*
+preview/

@@ -1,0 +1,121 @@
+flowchart TD
+  Input["refactor input"]
+  Events["append refactor events artifact"]
+  CleanGate{"target tree clean?"}
+  CleanFailure["terminal workflow error: dirty target tree"]
+  Branch["record current branch"]
+  Context["load configured repository context"]
+  Baseline{"configured baseline gates pass?"}
+  BaselineRepair["configured coder role repairs baseline environment only"]
+  BaselineTree{"tree still clean after baseline recovery?"}
+  BaselineDirty["dirty tree after baseline recovery"]
+  Terminal["structured terminal result"]
+
+  Input --> Events
+  Events --> CleanGate
+  CleanGate -->|clean| Branch
+  CleanGate -->|dirty| CleanFailure
+  Branch --> Context
+  Context --> Baseline
+  Baseline -->|red, attempts remain| BaselineRepair
+  BaselineRepair --> Baseline
+  BaselineDirty --> Terminal
+  Baseline -->|red, exhausted| Terminal
+  Baseline -->|green| BaselineTree
+  BaselineTree -->|dirty| BaselineDirty
+  BaselineTree -->|clean| StructureAnalysis
+  BaselineTree -->|clean| RiskAnalysis
+
+  subgraph Analysis["analysis and plan synthesis"]
+    StructureAnalysis["configured planner role analyzes structure"]
+    RiskAnalysis["configured planner role analyzes risk"]
+    StructureRetry["retry structure analysis in fresh context"]
+    RiskRetry["retry risk analysis in fresh context"]
+    PlanSynth["configured synthesizer role creates slice plan"]
+    PlanRetry{"structured plan valid?"}
+    PlanFile["write refactor plan artifact"]
+
+    StructureAnalysis --> PlanSynth
+    RiskAnalysis --> PlanSynth
+    StructureAnalysis -->|operation failure| StructureRetry
+    StructureRetry --> StructureAnalysis
+    RiskAnalysis -->|operation failure| RiskRetry
+    RiskRetry --> RiskAnalysis
+    PlanSynth --> PlanRetry
+    PlanRetry -->|retryable provider failure| PlanSynth
+    PlanRetry -->|exhausted| Terminal
+    PlanRetry -->|valid| PlanFile
+  end
+
+  PlanFile --> NextSlice
+
+  subgraph SliceLoop["slice implementation loop"]
+    NextSlice{"next slice?"}
+    SlicePrompt["configured coder role applies slice"]
+    ProtectedGate{"protected paths unchanged?"}
+    ProtectedRepair["same coder repairs protected-path violation"]
+    SliceGate{"configured build/test gates pass?"}
+    SliceRepair["same coder repairs gate failure"]
+    SliceRepairScope{"protected paths recovered after slice gate repair?"}
+    SliceRepairAuthorityFailure["record nonrecoverable authority failure for invalid RefactorResult"]
+
+    NextSlice -->|slice| SlicePrompt
+    SlicePrompt --> ProtectedGate
+    ProtectedGate -->|violation, attempts remain| ProtectedRepair
+    ProtectedRepair --> ProtectedGate
+    ProtectedGate -->|violation, exhausted| Terminal
+    ProtectedGate -->|clear| SliceGate
+    SliceGate -->|red, attempts remain| SliceRepair
+    SliceRepair --> SliceRepairScope
+    SliceRepairScope -->|clear| SliceGate
+    SliceRepairScope -->|exhausted| SliceRepairAuthorityFailure
+    SliceRepairAuthorityFailure --> SliceGate
+    SliceGate -->|red, exhausted| Terminal
+    SliceGate -->|green| NextSlice
+  end
+
+  NextSlice -->|none| FinalVerify
+
+  subgraph Convergence["final verification and review convergence"]
+    FinalVerify{"compare with baseline gates pass?"}
+    FinalRepair["configured coder role repairs final verification"]
+    ReviewFanout["configured reviewer role runs structure and behavior reviews in parallel"]
+    ReviewRetry["retry failed reviewer independently in fresh context"]
+    Blocking{"blocking findings remain?"}
+    FindingBudget{"per-finding repair attempts remain?"}
+    ReviewRepair["configured coder role repairs review findings"]
+    ConvergenceProtected{"protected paths unchanged?"}
+    ConvergenceProtectedRepair["same coder repairs protected-path violation"]
+    ReviewArtifacts["write per-round and final review artifacts"]
+    ChangedFiles["collect tracked and untracked changed files"]
+
+    FinalVerify -->|red, attempts remain| FinalRepair
+    FinalRepair --> ConvergenceProtected
+    ConvergenceProtected -->|violation, attempts remain| ConvergenceProtectedRepair
+    ConvergenceProtectedRepair --> ConvergenceProtected
+    ConvergenceProtected -->|violation, exhausted| Terminal
+    ConvergenceProtected -->|clear| FinalVerify
+    FinalVerify -->|red, exhausted| Terminal
+    FinalVerify -->|green| ReviewFanout
+    ReviewFanout -->|operation failure| ReviewRetry
+    ReviewRetry --> ReviewFanout
+    ReviewFanout --> Blocking
+    Blocking -->|yes| FindingBudget
+    FindingBudget -->|yes| ReviewRepair
+    ReviewRepair --> ConvergenceProtected
+    FindingBudget -->|no| ReviewArtifacts
+    Blocking -->|no| ReviewArtifacts
+    ReviewArtifacts --> ChangedFiles
+  end
+
+  ChangedFiles --> Result["RefactorResult"]
+  Terminal --> Result
+
+  classDef agent fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef gate fill:#fef3c7,stroke:#d97706,color:#451a03;
+  classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
+  classDef artifact fill:#ecfdf5,stroke:#059669,color:#064e3b;
+  class StructureAnalysis,RiskAnalysis,StructureRetry,RiskRetry,PlanSynth,SlicePrompt,ProtectedRepair,SliceRepair,FinalRepair,ReviewFanout,ReviewRetry,ReviewRepair,BaselineRepair,ConvergenceProtectedRepair agent;
+  class CleanGate,Baseline,BaselineTree,PlanRetry,NextSlice,ProtectedGate,SliceGate,SliceRepairScope,FinalVerify,Blocking,FindingBudget,ConvergenceProtected gate;
+  class Events,PlanFile,ReviewArtifacts artifact;
+  class CleanFailure,BaselineDirty,SliceRepairAuthorityFailure,Terminal failure;

@@ -1,0 +1,70 @@
+flowchart TD
+  Input["breakdown input"]
+  WorkDir["Load config and create external breakdown artifact directory"]
+  Result["BreakdownResult"]
+
+  Input --> WorkDir
+  WorkDir --> Planners
+
+  subgraph PlannerFanout["configured planner parallelism"]
+    Planners["Run configured planners in parallel"]
+    CutArtifacts["write planner cut artifacts"]
+    UsableCuts["Collect usable planner cuts"]
+
+    Planners --> CutArtifacts
+    CutArtifacts --> UsableCuts
+  end
+
+  UsableCuts --> CutsGate{"one or more usable cuts?"}
+  CutsGate -->|no| InvalidBacklog["Return invalid backlog result"]
+  CutsGate -->|yes| Synthesizer
+
+  subgraph Synthesis["configured backlog synthesis"]
+    Synthesizer["configured synthesizer role"]
+    Merge["Merge cuts into backlog contract"]
+    Briefs["Enrich backlog item briefs"]
+
+    Synthesizer --> Merge
+    Merge --> Briefs
+  end
+
+  Briefs --> ReadBacklog
+
+  subgraph RepairLoop["backlog validation and repair loop"]
+    ReadBacklog["read backlog JSON"]
+    ValidateJson{"Validate backlog JSON"}
+    RepairBudget{"repair attempts remain?"}
+    Repair["Repair backlog JSON with breakdown prompt"]
+    InvalidIssues["Record invalid backlog issues"]
+
+    ReadBacklog --> ValidateJson
+    ValidateJson -->|invalid| RepairBudget
+    RepairBudget -->|yes| Repair
+    Repair --> ReadBacklog
+    RepairBudget -->|no| InvalidIssues
+  end
+
+  ValidateJson -->|valid| Order
+
+  subgraph DependencyOrder["dependency ordering"]
+    Order["Order backlog items by dependencies"]
+    OrderGate{"cycle or ordering failure?"}
+    OrderingIssue["Record ordering issue"]
+    WriteOrdered["Write dependency-ordered backlog"]
+
+    Order --> OrderGate
+    OrderGate -->|yes| OrderingIssue
+    OrderGate -->|no| WriteOrdered
+  end
+
+  InvalidBacklog --> Result
+  InvalidIssues --> Result
+  OrderingIssue --> Result
+  WriteOrdered --> Result
+
+  classDef agent fill:#dbeafe,stroke:#2563eb,color:#172554;
+  classDef gate fill:#fef3c7,stroke:#d97706,color:#451a03;
+  classDef artifact fill:#ecfdf5,stroke:#059669,color:#064e3b;
+  class Planners,Synthesizer,Repair agent;
+  class CutsGate,ValidateJson,RepairBudget,OrderGate gate;
+  class WorkDir,CutArtifacts,Merge,Briefs,WriteOrdered artifact;
