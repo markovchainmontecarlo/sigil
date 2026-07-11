@@ -14,7 +14,7 @@ function tempRepo(): string {
     context: [],
     plan: { planners: ["coder"], synthesizer: "reviewer" },
     implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "reviewer" },
+    review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   return dir;
 }
@@ -237,7 +237,7 @@ describe("createContext", () => {
       ],
       plan: { planners: ["coder"], synthesizer: "reviewer" },
       implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-      review: { reviewer: "reviewer" },
+      review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
     }, null, 2));
     writeFileSync(join(repo, "a.md"), "Configured context\n");
     const ctx = createContext(repo);

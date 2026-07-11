@@ -109,7 +109,7 @@ const config = {
   },
   plan: { planners: ["explorer"], synthesizer: "explorer" },
   implement: { coder: "implementer", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-  review: { reviewer: "reviewer" },
+  review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };
 
 function repoWithConfig(): string {

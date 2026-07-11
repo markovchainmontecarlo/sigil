@@ -136,18 +136,54 @@ async function collectTestIntegrityFindings(
   return reviewed.value.weakened ? reviewed.value.findings : [];
 }
 
+async function synthesizeCorrectnessFindings(
+  ctx: SigilContext,
+  reports: Array<{ reviewer: string; findings: ReviewFinding[] }>,
+  synthesizer: string,
+  limit: number,
+  timeoutMs: number,
+): Promise<ReviewFinding[]> {
+  if (reports.length === 1) return reports[0]?.findings ?? [];
+
+  const synthesized = await runFreshAgentOperation(
+    ctx,
+    synthesizer,
+    { stage: "software-change:review-synthesis", limit, timeoutMs },
+    (agent) => agent.prompt(reviewPrompts.synthesizeFindings({
+      REPORTS: JSON.stringify(reports, null, 2),
+    }), ReviewOutputSchema),
+  );
+  if (!synthesized.ok) throw new Error(synthesized.failure.evidence);
+  return synthesized.value.findings.map((finding) => ({ ...finding, source: "correctness" }));
+}
+
 async function collectFindings(
   ctx: SigilContext,
   input: ReviewInput,
-  reviewer: string,
+  reviewers: string[],
+  synthesizer: string,
   limit: number,
   timeoutMs: number,
 ): Promise<{ scope: ReviewScope; findings: ReviewFinding[] }> {
   const scope = await readReviewScope(input.repo, input.base);
   if (!scope.ok || !scope.paths.length) return { scope, findings: [] };
 
-  const correctness = await collectCorrectnessFindings(ctx, input, scope, reviewer, limit, timeoutMs);
-  const integrity = await collectTestIntegrityFindings(ctx, input, scope, reviewer, limit, timeoutMs);
+  const reports = await Promise.all(reviewers.map(async (reviewer) => {
+    const findings = await collectCorrectnessFindings(ctx, input, scope, reviewer, limit, timeoutMs);
+    await ctx.artifacts.write(
+      `review-${reviewer.replace(/[^a-zA-Z0-9._-]+/g, "-")}.json`,
+      `${JSON.stringify({ reviewer, findings }, null, 2)}\n`,
+    );
+    return { reviewer, findings };
+  }));
+  const correctness = await synthesizeCorrectnessFindings(
+    ctx,
+    reports,
+    synthesizer,
+    limit,
+    timeoutMs,
+  );
+  const integrity = await collectTestIntegrityFindings(ctx, input, scope, synthesizer, limit, timeoutMs);
   return { scope, findings: [...correctness, ...integrity] };
 }
 
@@ -191,7 +227,8 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
     let reviewed = await collectFindings(
       ctx,
       input,
-      config.review.reviewer,
+      config.review.reviewers,
+      config.review.synthesizer,
       config.implement.repairLimit,
       config.implement.operationTimeoutMs,
     );
@@ -257,7 +294,8 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
       reviewed = await collectFindings(
         ctx,
         input,
-        config.review.reviewer,
+        config.review.reviewers,
+        config.review.synthesizer,
         config.implement.repairLimit,
         config.implement.operationTimeoutMs,
       );

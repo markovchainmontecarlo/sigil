@@ -20,30 +20,31 @@ export type SigilConfig = {
     baseBranch: string;
     testReport?: { path: string; format: "junit" };
   };
-  review: { reviewer: string; followUpReviews: number };
+  review: { reviewers: string[]; synthesizer: string; followUpReviews: number };
 };
 
 export const CONFIG_FILE = "sigil.config.json";
 
 export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
   agents: {
-    explorer: { provider: "codex", model: "gpt-5.5", effort: "medium" },
-    implementer: { provider: "codex", model: "gpt-5.5", effort: "medium" },
-    reviewer: { provider: "codex", model: "gpt-5.5", effort: "medium" },
+    "sol-low": { provider: "codex", model: "gpt-5.6-sol", effort: "low" },
+    "terra-low": { provider: "codex", model: "gpt-5.6-terra", effort: "low" },
+    "luna-low": { provider: "codex", model: "gpt-5.6-luna", effort: "low" },
+    "sol-medium": { provider: "codex", model: "gpt-5.6-sol", effort: "medium" },
   },
   evals: {},
   workspace: {},
   context: [],
-  plan: { planners: ["implementer"], synthesizer: "implementer" },
+  plan: { planners: ["sol-low", "terra-low", "luna-low"], synthesizer: "sol-medium" },
   implement: {
-    coder: "implementer",
+    coder: "sol-low",
     batchSize: 5,
     repairLimit: 3,
-    operationTimeoutMs: 1_800_000,
+    operationTimeoutMs: 5_400_000,
     branchPrefix: "sigil/",
     baseBranch: "main",
   },
-  review: { reviewer: "reviewer", followUpReviews: 0 },
+  review: { reviewers: ["sol-low", "terra-low", "luna-low"], synthesizer: "sol-medium", followUpReviews: 0 },
 };
 
 export const AgentBindingSchema = z.object({
@@ -66,13 +67,14 @@ const ConfigSchema: z.ZodType<SigilConfig> = z.object({
     coder: z.string().min(1),
     batchSize: z.number().finite(),
     repairLimit: z.number().finite(),
-    operationTimeoutMs: z.number().int().positive().default(1_800_000),
+    operationTimeoutMs: z.number().int().positive().default(5_400_000),
     branchPrefix: z.string().min(1),
     baseBranch: z.string().min(1),
     testReport: z.object({ path: z.string().min(1), format: z.literal("junit") }).optional(),
   }),
   review: z.object({
-    reviewer: z.string().min(1),
+    reviewers: z.array(z.string().min(1)).min(1),
+    synthesizer: z.string().min(1),
     followUpReviews: z.number().int().nonnegative().default(0),
   }),
 });
@@ -113,7 +115,8 @@ function validateAgentReferences(config: SigilConfig, path: string): void {
     ...config.plan.planners.map((name, i) => [`plan.planners[${i}]`, name] as const),
     ["plan.synthesizer", config.plan.synthesizer] as const,
     ["implement.coder", config.implement.coder] as const,
-    ["review.reviewer", config.review.reviewer] as const,
+    ...config.review.reviewers.map((name, i) => [`review.reviewers[${i}]`, name] as const),
+    ["review.synthesizer", config.review.synthesizer] as const,
   ];
   const errors = refs
     .filter(([, name]) => !config.agents[name])

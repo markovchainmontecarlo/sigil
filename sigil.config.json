@@ -1,23 +1,23 @@
 {
   "agents": {
-    "explorer-gpt-5.4": {
+    "sol-low": {
       "provider": "codex",
-      "model": "gpt-5.5",
-      "effort": "medium"
+      "model": "gpt-5.6-sol",
+      "effort": "low"
     },
-    "explorer-gpt-5.5": {
+    "terra-low": {
       "provider": "codex",
-      "model": "gpt-5.5",
-      "effort": "medium"
+      "model": "gpt-5.6-terra",
+      "effort": "low"
     },
-    "implementer": {
+    "luna-low": {
       "provider": "codex",
-      "model": "gpt-5.5",
-      "effort": "medium"
+      "model": "gpt-5.6-luna",
+      "effort": "low"
     },
-    "reviewer": {
+    "sol-medium": {
       "provider": "codex",
-      "model": "gpt-5.5",
+      "model": "gpt-5.6-sol",
       "effort": "medium"
     }
   },
@@ -37,21 +37,27 @@
   ],
   "plan": {
     "planners": [
-      "explorer-gpt-5.4",
-      "explorer-gpt-5.5"
+      "sol-low",
+      "terra-low",
+      "luna-low"
     ],
-    "synthesizer": "explorer-gpt-5.4"
+    "synthesizer": "sol-medium"
   },
   "implement": {
-    "coder": "implementer",
+    "coder": "sol-low",
     "batchSize": 5,
     "repairLimit": 3,
-    "operationTimeoutMs": 1800000,
+    "operationTimeoutMs": 5400000,
     "branchPrefix": "sigil/",
     "baseBranch": "main"
   },
   "review": {
-    "reviewer": "reviewer",
+    "reviewers": [
+      "sol-low",
+      "terra-low",
+      "luna-low"
+    ],
+    "synthesizer": "sol-medium",
     "followUpReviews": 0
   }
 }

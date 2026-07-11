@@ -235,7 +235,7 @@ async function reviewMigration(
   failures: WorkflowFailure[];
 }> {
   const diff = await committedDiff(repo, baseHead);
-  const reviewer = loadConfig(repo).review.reviewer;
+  const reviewer = loadConfig(repo).review.synthesizer;
   const variables = {
     TARGET: target,
     GOAL: backlog.goal,

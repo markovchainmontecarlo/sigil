@@ -56,7 +56,7 @@ function fixture(tasks: Task[], opts: { batchSize?: number; baseBranch?: string;
     context: opts.context ?? [],
     plan: { planners: ["coder"], synthesizer: "coder" },
     implement: { coder: "coder", batchSize: opts.batchSize ?? 2, repairLimit: 2, branchPrefix: "impl/", baseBranch: opts.baseBranch ?? "master" },
-    review: { reviewer: "reviewer" },
+    review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   const graph: TaskGraph = { contractVersion: CONTRACT_VERSION, project: "fixture", goal: "test goal", tasks: repoTasks };
   const taskFile = join(repo, "task-graph.json");

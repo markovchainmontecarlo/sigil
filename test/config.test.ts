@@ -21,7 +21,7 @@ const validConfig = {
   evals: { build: "bun run typecheck", test: "bun test" },
   plan: { planners: ["explorer", "implementer"], synthesizer: "explorer" },
   implement: { coder: "implementer", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-  review: { reviewer: "reviewer" },
+  review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };
 
 describe("loadConfig", () => {

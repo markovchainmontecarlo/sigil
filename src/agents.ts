@@ -126,6 +126,12 @@ function createCodex(binding: AgentBinding, cwd: string): SigilAgent {
     `model=${binding.model}`,
     "-c",
     `model_reasoning_effort=${agentEffort(binding)}`,
+    "-c",
+    "model_auto_compact_token_limit=270000",
+    "-c",
+    "features.multi_agent=false",
+    "-c",
+    "features.multi_agent_v2=false",
   ];
   const acp = new AcpAgent({
     id: "sigil-codex-agent",

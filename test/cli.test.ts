@@ -404,7 +404,7 @@ describe("cli", () => {
       context: [],
       plan: { planners: ["codexPlanner"], synthesizer: "claudeReviewer" },
       implement: { coder: "codexPlanner", batchSize: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
-      review: { reviewer: "claudeReviewer" },
+      review: { reviewers: ["claudeReviewer"], synthesizer: "claudeReviewer" },
     }, null, 2));
 
     const result = run(["discover-env", "--repo", dir], { ANTHROPIC_API_KEY: "fixture-key" });

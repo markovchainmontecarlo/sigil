@@ -150,7 +150,7 @@ export const refactor = sigil<RefactorInput, RefactorResult>("refactor", async (
   const convergence = await convergeRefactor(
     ctx,
     config.implement.coder,
-    config.review.reviewer,
+    config.review.synthesizer,
     config.implement.repairLimit,
     config.implement.operationTimeoutMs,
     input,
