@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { implement, plan, sigil } from "../src/index.js";
+import { sigil, softwareChange } from "../src/index.js";
 
 const IssueKind = z.object({
   kind: z.enum(["BUG", "FEATURE"]),
@@ -45,21 +45,14 @@ export const resolveIssue = sigil(
       };
     }
 
-    const planned = await ctx.run(plan, {
+    const change = await ctx.run(softwareChange, {
       repo: input.repo,
       intent: `${input.issue}\n\nRisk:\n${risk}\n\nTest plan:\n${testPlan}`,
-    });
-    if (!planned.valid) return { kind: classification.kind, planned, issues: ctx.issues };
-
-    const implemented = await ctx.run(implement, {
-      repo: input.repo,
-      taskFile: planned.taskFile,
     });
 
     return {
       kind: classification.kind,
-      planned,
-      implemented,
+      change,
       reproduction: ctx.artifacts.path("issue/repro.sh"),
       issues: ctx.issues,
     };

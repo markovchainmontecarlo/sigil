@@ -4,7 +4,7 @@
   <img src="./assets/sigil-logo.png" alt="Sigil logo" width="420" />
 </p>
 
-Sigil is a composable workflow system built from plain async TypeScript sigils over configured agents. It includes built-in software-change workflows and exposes both a CLI and a TypeScript authoring API.
+Sigil is a composable workflow runtime over tool-using agent runtimes. It includes independently callable software workflows, a TypeScript authoring API, a static YAML surface, and a CLI.
 
 ## Install
 
@@ -14,7 +14,7 @@ Install from the latest GitHub release archive:
 gh api repos/markovchainmontecarlo/sigil/contents/scripts/install.sh --jq .content | base64 -d | sh
 ```
 
-The installer verifies the downloaded archive checksum, unpacks Sigil into `~/.sigil/lib`, runs `bun install --production --frozen-lockfile` there so native packages are materialized for the local platform, replaces the bundled skills under `~/.sigil/skills`, links those skills into the Claude Code and Codex discovery directories, installs the bundled man page when present, and writes a `sigil` launcher to `~/.local/bin`. Upgrade by re-running the installer; it replaces the existing install.
+The installer verifies the downloaded archive checksum, unpacks Sigil into `~/.sigil/lib`, runs `bun install --production --frozen-lockfile` there so native packages are materialized for the local platform, replaces the bundled skills under `~/.sigil/skills`, exposes their authoritative documentation through the same installed relative layout, links those skills into the Claude Code and Codex discovery directories, installs the bundled man page when present, and writes a `sigil` launcher to `~/.local/bin`. Upgrade by re-running the installer; it replaces the existing install and removes obsolete managed skill links.
 
 Codex and Claude both use subscription auth. The installer does not create or store API keys.
 
@@ -34,6 +34,8 @@ The CLI verbs are `migrate`, `refactor`, `probe`, `plan`, `software-change`, `im
 
 ## Build agent workflows
 
+An LLM supplies reasoning and generation. An agent runtime supplies tools and session continuity. An agent role resolves through repository configuration to a runtime/provider, model, and reasoning-effort binding. A workflow coordinates agent sessions and deterministic operations while owning a state transition.
+
 Sigil is built around a small set of workflow concepts:
 
 - **[agent](./docs/explanation/primitives-and-composition.md#agent)**: one configured tool-using model object with its own context
@@ -45,14 +47,14 @@ Sigil is built around a small set of workflow concepts:
 - **[artifact write](./docs/explanation/primitives-and-composition.md#artifact-write)**: require an agent turn to produce a named file
 - **[eval gate](./docs/explanation/primitives-and-composition.md#eval-gate)**: run a configured deterministic check such as `build` or `test`
 - **[shell or script step](./docs/explanation/primitives-and-composition.md#shell-or-script-step)**: run deterministic local logic when a model is the wrong tool
-- **[nested sigil](./docs/explanation/primitives-and-composition.md#nested-sigil)**: call one sigil from another
+- **[nested workflow](./docs/explanation/primitives-and-composition.md#nested-workflow)**: call one workflow from another
 - **[delivery policy](./docs/explanation/primitives-and-composition.md#delivery-policy)**: let the caller decide whether to publish, merge, queue, or stop
 
-A sigil is a composable workflow unit: a plain async TypeScript callable with typed input and output. TypeScript itself provides the control flow: `if`, `for`, functions, arrays, and ordinary async calls. Sigil adds agent, artifact, gate, parallel, and nested-sigil primitives on top of that. Reuse the same agent object when later prompt steps should build on earlier context; create a new agent object when work should stay independent.
+A TypeScript Sigil is a workflow implemented as a plain async TypeScript callable with typed input and output. TypeScript provides ordinary control flow. Sigil adds agent, artifact, gate, parallel, and nested-workflow primitives. Reuse the same agent object when later prompt steps should build on earlier context; create a new agent object when work should stay independent.
 
-Some sigils are built in, such as `softwareChange`, `plan`, `implement`, `review`, `breakdown`, and `dispatch`. You can also save your own sigils in a repo, or write one temporarily for a substantial one-off request.
+Built-in workflows include `softwareChange`, `plan`, `implement`, `review`, `breakdown`, and `dispatch`. You can also maintain a custom TypeScript Sigil in a repository or write one temporarily for a substantial one-off request.
 
-### A tiny custom sigil
+### A tiny TypeScript Sigil
 
 This is the smallest useful workflow shape: one agent, a couple of prompt steps, one output file, and one named check.
 
@@ -97,13 +99,13 @@ See [examples/01-custom-sigil-minimal.ts](./examples/01-custom-sigil-minimal.ts)
 | [Structured output](#structured-output) | `await analyst.prompt(..., Schema)` |
 | [Artifact write](#artifact-write) | `await analyst.prompt(..., { writes: "file.md" })` |
 | [Parallel jobs](#parallel-jobs) | `await ctx.parallel([...])` |
-| [Nested workflow](#nested-workflow) | `await ctx.run(plan, input)` |
+| [Nested workflow](#nested-workflow) | `await ctx.run(softwareChange, input)` |
 | [Eval gate](#eval-gate) | `await ctx.evals("build")` |
 | [Run a TypeScript sigil](#run-a-typescript-sigil) | `sigil run-sigil --repo . --file workflow.ts` |
 
 #### Agent with shared context
 
-An agent object is one model context. Reuse the same variable when later prompt steps should build on earlier ones.
+An agent object wraps one live tool-using model session. Reuse the same variable when later prompt steps should build on earlier ones.
 
 ```ts
 await using analyst = ctx.agent("reviewer");
@@ -157,11 +159,11 @@ const gate = await ctx.evals("build");
 
 #### Run a TypeScript sigil
 
-Use `run-sigil` for saved or temporary TypeScript sigils. It loads an optional JSON input object, adds the resolved `repo`, creates a context, launches a detached worker, and returns the run handle.
+Use `run-sigil` for maintained or temporary TypeScript Sigils. It loads an optional JSON input object, adds the resolved `repo`, creates a context, launches a detached worker, and returns the run handle.
 
 ```sh
 sigil validate-sigil workflow.ts
-sigil run-sigil --repo /path/to/repo --file workflow.ts --input input.json --run-dir /path/to/repo/.sigil/runs/custom-workflow
+sigil run-sigil --repo /path/to/repo --file workflow.ts
 ```
 
 Runs default to durable persistence. Sigil rejects temporary repositories, workflow files, inputs, outputs, and run directories unless the command explicitly selects `--persistence ephemeral`. Built-in and custom workflows keep their artifacts beneath an isolated run in the ignored `<repo>/.sigil/runs/` directory. Nested workflows inherit that run instead of selecting another artifact root.
@@ -170,57 +172,48 @@ For a dedicated nested-workflow example, see [examples/05-nested-workflow.ts](./
 
 #### Nested workflow
 
-A nested workflow is one sigil calling another through the same run context. That lets you reuse shipped workflows or your own custom workflows without dropping down to file-path handoffs or a second orchestration layer.
+A nested workflow is one workflow calling another through the same run context. That lets you reuse shipped or custom workflows without file-path handoffs or a second orchestration layer.
 
 ```ts
-import { implement, plan, sigil } from "sigil";
+import { sigil, softwareChange } from "sigil";
 
 export const buildIssueChange = sigil(
   "build-issue-change",
   async (ctx, input: { repo: string; issue: string; brief?: string }) => {
-    const planned = await ctx.run(plan, {
+    const change = await ctx.run(softwareChange, {
       repo: input.repo,
       intent: input.issue,
       brief: input.brief,
     });
 
-    if (!planned.valid) {
-      return { ok: false, stage: "plan", issues: planned.issues };
-    }
-
-    const implemented = await ctx.run(implement, {
-      repo: input.repo,
-      taskFile: planned.taskFile,
-    });
-
     return {
-      ok: !implemented.reviewBlocking && implemented.failedTasks.length === 0,
-      stage: "implement",
-      branch: implemented.branch,
-      issues: implemented.issues,
+      ok: change.valid,
+      stage: change.stage,
+      branch: change.branch,
+      issues: change.issues,
     };
   },
 );
 ```
 
-`ctx.run(...)` keeps the composition typed and explicit. The child workflow receives the current context instead of starting a separate orchestration universe.
+`ctx.run(...)` keeps composition typed and explicit. The child receives the current `SigilContext` and artifact root. Use `ctx.fork(...)` when a child operation needs an explicit artifact namespace.
 
 ### Learn the surface in order
 
 If you want to write your own workflows, read the examples in order:
 
-1. [Minimal custom sigil](./examples/01-custom-sigil-minimal.ts)
+1. [Minimal TypeScript Sigil](./examples/01-custom-sigil-minimal.ts)
 2. [Parallel analysis](./examples/02-parallel-analysis.ts)
-3. [Plan plus implement](./examples/03-plan-implement.ts)
+3. [Unified software change](./examples/03-software-change.ts)
 4. [Custom delivery policy](./examples/04-custom-delivery.ts)
 5. [Nested workflow](./examples/05-nested-workflow.ts)
 6. [Full issue workflow](./examples/06-issue-workflow.ts)
 
 There is also an [examples guide](./examples/README.md) that explains what each file teaches and why the example files import from the local source tree while the README snippets import from the public `sigil` entrypoint.
 
-### When to write a custom sigil
+### When to write a custom workflow
 
-Write a custom sigil when the task is large enough to benefit from orchestration and the built-in workflows do not already match it. A custom sigil may be saved for reuse or kept in the repository's ignored `.sigil/runs/` directory for one request.
+Write a custom workflow when the task benefits from orchestration and no built-in workflow already owns the required transition. A TypeScript Sigil may be maintained for reuse or written temporarily for one request.
 
 Typical cases:
 
@@ -237,20 +230,20 @@ Examples:
 - **Incident investigation workflow**: analyze logs, propose likely causes, generate a repro or repair brief, then require a deterministic artifact or passing check before closing the loop.
 - **Research workflow**: send agents to search web, docs, and repo sources from different angles, then synthesize what is known, uncertain, and decision-relevant.
 
-Use the built-in workflows when the shipped path already matches your need. Write a custom sigil when your task needs runtime branching, model specialization, synthesis, sequential deepening, or task-specific policy.
+Use a built-in workflow when the shipped path already matches the need. Write a TypeScript Sigil when the task needs runtime branching, model specialization, synthesis, sequential deepening, or task-specific policy.
 
 | Use this | When |
 | --- | --- |
-| Built-in sigil | The shipped path already matches your task |
-| Saved custom sigil | The workflow will be repeated, shared, or maintained |
-| Temporary custom sigil | The workflow is substantial and custom to one request |
+| Built-in workflow | The shipped path already matches your task |
+| Maintained TypeScript Sigil | The workflow will be repeated, shared, or maintained |
+| Temporary TypeScript Sigil | The workflow is substantial and custom to one request |
 | Static YAML workflow | The topology is fixed and the readable stage/job/step structure is the main value |
 
-Run saved or temporary TypeScript sigils with `validate-sigil` and `run-sigil` so they receive the normal Sigil context and artifact root:
+Run maintained or temporary TypeScript Sigils with `validate-sigil` and `run-sigil` so they receive the normal Sigil context and artifact root:
 
 ```sh
 env -u CLAUDECODE sigil validate-sigil ./my-workflow.ts
-env -u CLAUDECODE sigil run-sigil --repo /path/to/repo --file ./my-workflow.ts --input input.json --out result.json --run-dir /path/to/repo/.sigil/runs/custom-workflow
+env -u CLAUDECODE sigil run-sigil --repo /path/to/repo --file ./my-workflow.ts
 ```
 
 Direct Bun execution is a lower-level development option for scripts that create their own context. `run-sigil` owns detached execution and records its PID, status, events, logs, artifacts, result, and error in the durable run directory.
@@ -373,25 +366,15 @@ export async function buildChange(repo: string, intent: string) {
 }
 ```
 
-**Plan and build one change with the stage boundary exposed:**
+**Run one complete local software change:**
 
-See [examples/03-plan-implement.ts](./examples/03-plan-implement.ts) for a richer version that carries `brief` and `outFile` through planning and returns explicit stage state.
+See [examples/03-software-change.ts](./examples/03-software-change.ts) for a richer version that carries `brief` and `outFile` through planning and returns explicit stage state.
 
 ```ts
-import { implement, plan } from "sigil";
+import { softwareChange } from "sigil";
 
 export async function buildChange(repo: string, intent: string) {
-  const planned = await plan({ repo, intent });
-  if (!planned.valid) return { ok: false, stage: "plan", issues: planned.issues };
-
-  const implemented = await implement({ repo, taskFile: planned.taskFile });
-  return {
-    ok: !implemented.reviewBlocking && implemented.failedTasks.length === 0,
-    stage: "implement",
-    branch: implemented.branch,
-    prBody: implemented.prBody,
-    issues: implemented.issues,
-  };
+  return softwareChange({ repo, intent });
 }
 ```
 
@@ -400,24 +383,19 @@ export async function buildChange(repo: string, intent: string) {
 See [examples/04-custom-delivery.ts](./examples/04-custom-delivery.ts) for a stronger policy wrapper that decides whether to publish and shapes the PR title.
 
 ```ts
-import { implement, plan, publish } from "sigil";
+import { publish, softwareChange } from "sigil";
 
 export async function shipWhenClean(repo: string, intent: string, base = "main") {
-  const planned = await plan({ repo, intent });
-  if (!planned.valid) return { shipped: false, issues: planned.issues };
-
-  const implemented = await implement({ repo, taskFile: planned.taskFile });
-  if (implemented.reviewBlocking || implemented.failedTasks.length) {
-    return { shipped: false, implemented };
-  }
+  const change = await softwareChange({ repo, intent });
+  if (!change.valid || !change.branch || !change.prBody) return { shipped: false, change };
 
   const published = await publish(repo, {
-    branch: implemented.branch,
-    title: implemented.branch,
-    body: implemented.prBody,
+    branch: change.branch,
+    title: change.branch,
+    body: change.prBody,
     base,
   });
-  return { shipped: published.pr?.ok === true, implemented, published };
+  return { shipped: published.pr?.ok === true, change, published };
 }
 ```
 
@@ -468,7 +446,7 @@ The boundary stays explicit: planning, implementation, review, publishing, and m
 
 ## Authoring modes
 
-Use **TypeScript** when the workflow needs runtime adaptation: dynamic batching, runtime branching, sequential investigation, model selection, iterative repair, or composition with other sigils. This is the most expressive way to author Sigil workflows because the workflow is ordinary code.
+Use a **TypeScript Sigil** when the workflow needs runtime adaptation: dynamic batching, runtime branching, sequential investigation, model selection, iterative repair, or nested workflow composition. This is the most expressive authoring surface because the workflow is ordinary code.
 
 Use **YAML** when the workflow topology is fixed ahead of time and readability as stages, jobs, and steps is the main value. YAML can still choose agents, run parallel jobs, use prompt steps, write artifacts, run deterministic checks, and apply simple conditions. The tradeoff is that YAML is less suited to workflows that discover their own shape while running.
 
@@ -487,20 +465,19 @@ Each target repo needs a [`sigil.config.json`](./sigil.config.json). `loadConfig
 
 Every configured eval command must be non-interactive. It must never prompt. Set `CI=1`, pass `--yes` or `--no-interactive` flags where tools support them, and disable analytics or first-run prompts. A command that prompts can hang the gate forever.
 
-If a sigil references an eval that is not defined in `evals`, Sigil skips it.
+If a workflow references an eval that is not defined in `evals`, Sigil skips it.
 
 ## Learn the model in more depth
 
 If you want the deeper model behind the examples and workflow surfaces, see:
 
 - [SIGIL_USAGE.md](./SIGIL_USAGE.md), the primary usage reference
-- [LLMs, agents, agent SDKs, and workflows](./docs/explanation/llms-agents-and-workflows.md)
+- [LLMs, agent runtimes, agents, and workflows](./docs/explanation/llms-agents-and-workflows.md)
 - [Workflow shapes: static and dynamic](./docs/explanation/workflow-shapes.md)
 - [Primitives and composition](./docs/explanation/primitives-and-composition.md)
 - [Prompt patterns](./docs/explanation/prompt-patterns.md)
 - [Workflow patterns](./docs/explanation/workflow-patterns.md)
-- [Ephemeral Sigil pattern catalog](./docs/explanation/ephemeral-sigil-patterns.md)
-- [Ephemeral sigils](./docs/how-to/ephemeral-sigils.md)
+- [Create and run a temporary TypeScript Sigil](./docs/how-to/temporary-typescript-sigil.md)
 
 ## Development
 

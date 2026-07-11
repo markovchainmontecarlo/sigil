@@ -50,6 +50,37 @@ link_managed_skill() {
   link_managed_skill_into "$CODEX_SKILL_DIR" "$name"
 }
 
+remove_obsolete_managed_link() {
+  skill_dir="$1"
+  name="$2"
+  target="$skill_dir/$name"
+  managed_source="$SKILL_DIR/$name"
+
+  [ -L "$target" ] || return 0
+  [ "$(readlink "$target")" = "$managed_source" ] || return 0
+  [ ! -e "$managed_source" ] || return 0
+
+  rm "$target"
+}
+
+remove_obsolete_managed_skill() {
+  name="$1"
+
+  remove_obsolete_managed_link "$CLAUDE_SKILL_DIR" "$name"
+  remove_obsolete_managed_link "$CODEX_SKILL_DIR" "$name"
+}
+
+link_installed_document() {
+  name="$1"
+  source="$LIB_DIR/$name"
+  target="$SIGIL_HOME/$name"
+
+  [ -e "$source" ] || return 0
+
+  rm -rf "$target"
+  ln -s "$source" "$target"
+}
+
 tmp="$(mktemp -d)"
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT HUP INT TERM
@@ -95,6 +126,12 @@ mkdir -p "$stage"
 tar -xzf "$tarball" -C "$stage" --strip-components=1
 (cd "$stage" && bun install --production --frozen-lockfile)
 old="$tmp/old-lib"
+old_skill_names="$tmp/old-skill-names"
+if [ -d "$SKILL_DIR" ]; then
+  find "$SKILL_DIR" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort > "$old_skill_names"
+else
+  : > "$old_skill_names"
+fi
 rm -rf "$old"
 if [ -d "$LIB_DIR" ]; then mv "$LIB_DIR" "$old"; fi
 mv "$stage" "$LIB_DIR"
@@ -108,6 +145,16 @@ if [ -d "$LIB_DIR/skills" ]; then
     link_managed_skill "$(basename "$skill_path")"
   done
 fi
+
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  remove_obsolete_managed_skill "$name"
+done < "$old_skill_names"
+
+link_installed_document "SIGIL_USAGE.md"
+link_installed_document "ARCHITECTURE.md"
+link_installed_document "README.md"
+link_installed_document "docs"
 
 if [ -f "$LIB_DIR/man/sigil.1" ]; then
   mkdir -p "$MAN_DIR"

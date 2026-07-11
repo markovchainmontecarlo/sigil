@@ -1,4 +1,4 @@
 interface:
   display_name: "Sigil Refactor"
-  short_description: "Run one verified behavior-preserving refactor"
-  default_prompt: "Create and run one bounded Sigil refactor with explicit intent, advisory focus, and protected paths."
+  short_description: "Run one verified structural transformation"
+  default_prompt: "Use $sigil-refactor to run one bounded behavior-preserving structural transformation."

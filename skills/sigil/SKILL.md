@@ -1,53 +1,59 @@
 ---
 name: sigil
-description: "Route Sigil work to the right surface: built-in SWE flows, direct task-graph implementation, static YAML workflows, temporary TypeScript sigils, or saved reusable sigils. Use when a user asks to plan, implement, review, decompose, dispatch, validate, run, or author Sigil workflows against a repository."
+description: "Route Sigil work by user intent, accepted state, and the unfinished state transition. Use when a request may benefit from a built-in workflow, static YAML workflow, custom TypeScript Sigil, or specialized dispatch, refactor, or migration operation."
 ---
 
-# sigil
+# Sigil router
 
-Use this skill to choose the right Sigil path. Sigil is useful when the task benefits from agents, gates, artifacts, task graphs, delivery policy, or repeatable workflow structure. It is too heavy for quick factual checks, short answers, or simple one-shot edits that do not need orchestration.
+Use this skill to decide whether Sigil adds value and, when it does, select the narrowest workflow that owns the unfinished transition.
 
-## Route the request
+Read the routing section of [SIGIL_USAGE.md](../../SIGIL_USAGE.md) before selecting a built-in surface. Read the [workflow pattern catalog](../../docs/explanation/workflow-patterns.md) only when custom orchestration remains a candidate.
 
-- **Hypothesis-driven usage or behavior audit**: run `probe -> implement` when the right change requires sandboxed experiments, edge-case checks, or falsifying assumptions before planning.
-- **One-PR SWE change, not already planned**: run `plan -> implement`. Use `review` alone when the user only wants a diff reviewed.
-- **Large SWE mission needing several PRs**: run `breakdown -> dispatch`. Use `integrationBranch` to accumulate automatically merged item PRs behind one unmerged final PR. Use `mergeWhenGreen` only when each verified item should merge directly to main.
-- **Work already understood**: write a task graph directly, run `sigil validate [--repo <dir>] <task-file>`, then run `sigil implement --repo <dir> --task-file <task-file>`. Do not invoke `plan` just to convert known work into JSON.
-- **Fixed topology workflow**: use static YAML with `validate-workflow` and `run-workflow` when stages, jobs, and steps are known before the run.
-- **Dynamic or substantial custom workflow**: use a TypeScript sigil. For temporary or saved TypeScript workflows, use the `sigil-authoring` skill.
-- **Reusable workflow requested**: save a TypeScript sigil in the repo with a clear input/output shape and examples. Use `validate-sigil` before recommending it.
+## Decide whether orchestration helps
 
-## Commands to remember
+Use Sigil when agents, typed handoffs, artifacts, deterministic gates, repair, delivery policy, or repeatable workflow structure materially improve the result.
 
-- `sigil setup [--dir <repo>] [--force]`
-- `sigil probe --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--max-probes <n>]`
-- `sigil plan --repo <dir> --intent <text> [--brief <file>] [--out <file>]`
-- `sigil validate [--repo <dir>] <task-file>`
-- `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>]`
-- `sigil review --repo <dir> --base <ref> [--no-autofix] [--context <text>]`
-- `sigil breakdown --repo <dir> --mission <text> [--out <file>]`
-- `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen|integrationBranch [--integration-branch <branch>]`
-- `sigil validate-workflow [--repo <dir>] <workflow-file>`
-- `sigil run-workflow --repo <dir> --file <workflow-file>`
-- `sigil validate-sigil <workflow.ts>`
-- `sigil run-sigil --repo <dir> --file <workflow.ts> [--input <input.json>] [--out <result.json>] [--run-dir <dir>]`
-- `sigil discover-env [--repo <dir>]`
+Answer or edit directly when the request is a quick factual check, short explanation, or simple one-shot change that does not need orchestration.
+
+## Inspect accepted state
+
+Before choosing a workflow, inspect the state the user already accepts:
+
+- task graph;
+- probe result;
+- existing diff or branch change;
+- backlog;
+- dispatch checkpoint and active item branch;
+- refactor or migration run state;
+- completed gates and reviews.
+
+Do not repeat planning, implementation, review, or delivery work merely because a higher-level workflow normally includes it.
+
+## Route the unfinished transition
+
+- **One ordinary software change with no accepted task graph**: use `software-change`.
+- **Planning is the requested output**: use `plan`.
+- **The correct change requires safe behavioral experiments**: use `probe`, then reuse its task graph through `software-change --task-file` or `implement` according to the requested boundary.
+- **Accepted task graph**: skip planning. Prefer `software-change --task-file`; use `implement` when the implementation stage itself is the requested boundary.
+- **Existing diff or branch change**: use `review` without replanning or reimplementation.
+- **Mission requiring several dependent deliverables**: use the `sigil-dispatch` skill.
+- **One bounded behavior-preserving structural change**: use the `sigil-refactor` skill.
+- **Repository-wide structural migration**: use the `sigil-migration` skill.
+- **Fixed custom topology**: use a YAML workflow with `validate-workflow` and `run-workflow`.
+- **Dynamic custom orchestration**: select or adapt a pattern, then use the `sigil-authoring` skill.
+
+Use `SIGIL_USAGE.md` for exact commands, flags, persistence, artifact layout, and the distinction between library results and CLI-owned external effects. Do not reproduce that reference here.
+
+## Authority and effects
+
+Identify whether the selected path may edit, commit, publish, merge, deploy, or perform another external effect. The user, caller, or configured policy grants authority. Deterministic code must enforce that boundary.
+
+Do not add an approval checkpoint to low-risk local work unless the user requests it. Require explicit authority before publishing, merging, deployment, destructive changes, access changes, or other consequential external effects.
 
 ## Operating rules
 
-- Use subscription or local account auth. Do not set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` for Sigil runs.
-- When running Sigil from inside another agent shell, prefix commands with `env -u CLAUDECODE` so nested agents do not inherit the wrong session marker.
-- Built-in `implement` requires a clean target working tree and owns one branch and one PR.
-- Acceptance criteria in task graphs are outcomes, not mechanism mandates.
-- Artifacts are outside the target tree by default. With `run-sigil --run-dir`, TypeScript sigil artifacts land under that run directory's `artifacts/` directory.
-
-## References
-
-Use these when deeper explanation is needed, but do not copy them into normal answers:
-
-- `docs/explanation/llms-agents-and-workflows.md`
-- `docs/explanation/workflow-shapes.md`
-- `docs/explanation/primitives-and-composition.md`
-- `docs/explanation/prompt-patterns.md`
-- `docs/explanation/workflow-patterns.md`
-- `docs/how-to/ephemeral-sigils.md`
+- Use subscription or local account authentication rather than provider API keys for ordinary Sigil runs.
+- Clear an inherited Claude session marker when Sigil launches nested agents from another agent shell.
+- Treat task-graph acceptance criteria as outcomes rather than stale mechanism mandates.
+- Use configured workspace bootstrap and gates rather than inventing untracked preparation steps.
+- Report the useful result and material failures. Do not dump raw run artifacts unless the user asks.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sigil Authoring"
+  short_description: "Author dynamic custom TypeScript workflows"
+  default_prompt: "Use $sigil-authoring to create and run the smallest fitting TypeScript Sigil."

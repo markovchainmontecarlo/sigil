@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sigil Router"
+  short_description: "Route work to the right Sigil workflow"
+  default_prompt: "Use $sigil to choose and operate the narrowest workflow for this request."

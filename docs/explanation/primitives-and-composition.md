@@ -1,6 +1,6 @@
 # Primitives and composition
 
-Sigil's authoring surface is intentionally small. A sigil is a plain async TypeScript workflow over a context. YAML workflows use the same core ideas in a static, declarative shape.
+Sigil's authoring surface is intentionally small. A TypeScript Sigil is a workflow implemented as a plain async TypeScript callable over a context. YAML workflows use the same core ideas in a static, declarative shape.
 
 The useful way to think about Sigil is not as a list of commands. It is a set of primitives for arranging tool-using agents behind deterministic workflow control.
 
@@ -196,26 +196,19 @@ if (classification.kind === "bug") {
 }
 ```
 
-## Nested sigil
+## Nested workflow
 
-`ctx.run(child, input)` calls another sigil through the same run context. This is how larger workflows compose smaller ones without inventing a second orchestration layer.
+`ctx.run(child, input)` calls another workflow through the same `SigilContext` and artifact root. This is how larger workflows compose smaller ones without inventing a second orchestration layer. Use `ctx.fork(...)` explicitly when a child operation needs its own artifact namespace.
 
 ```ts
-import { implement, plan, sigil } from "sigil";
+import { sigil, softwareChange } from "sigil";
 
 export const buildChange = sigil(
   "build-change",
   async (ctx, input: { repo: string; intent: string }) => {
-    const planned = await ctx.run(plan, {
+    return ctx.run(softwareChange, {
       repo: input.repo,
       intent: input.intent,
-    });
-
-    if (!planned.valid) return planned;
-
-    return ctx.run(implement, {
-      repo: input.repo,
-      taskFile: planned.taskFile,
     });
   },
 );
@@ -249,11 +242,11 @@ return {
 }
 ```
 
-Inside a sigil, built-in workflows such as `plan` and `implement` load configured context for you. A custom sigil can call `await ctx.renderContextBlock()` and include the rendered context in its own prompts when it needs the same orientation behavior.
+Inside a TypeScript Sigil, built-in workflows such as `plan` and `implement` load configured context for you. A custom workflow can call `await ctx.renderContextBlock()` and include the rendered context in its own prompts when it needs the same orientation behavior.
 
 ## Agent bindings
 
-Agent bindings connect a workflow role to a provider and model. This lets a sigil arrange models strategically instead of treating every model call as interchangeable.
+Agent bindings connect a workflow role to an agent-runtime integration, model, and reasoning effort. This lets a workflow arrange models strategically instead of treating every agent session as interchangeable.
 
 ```json
 {
@@ -280,7 +273,7 @@ Then compare the current docs with this repository's usage and write a recommend
 
 ## Delivery policy
 
-A delivery policy is the caller's rule for what to do with completed work. Sigils can produce work, verify it, review it, and prepare delivery artifacts, but the caller decides whether to publish, merge, queue, stop, or run more checks.
+A delivery policy is the caller's rule for what to do with completed work. Workflows can produce work, verify it, review it, and prepare delivery artifacts, but the caller decides whether to publish, merge, queue, stop, or run more checks.
 
 This keeps production and delivery separate. For example, `implement` returns a branch and PR body, while a caller can decide to open a PR, stop on review findings, merge only after green gates, or hand the result to another workflow.
 
@@ -306,7 +299,7 @@ return { shipped: published.pr?.ok === true, implemented, published };
 
 ## Composition
 
-Sigil workflows compose in ordinary TypeScript. You can call built-in sigils, custom sigils, or nested sigils directly. The workflow model is not a separate orchestration DSL.
+Sigil workflows compose in ordinary TypeScript. You can call built-in workflows or custom TypeScript Sigils directly. The workflow model is not a separate orchestration DSL.
 
 ```ts
 export const investigateThenDecide = sigil(

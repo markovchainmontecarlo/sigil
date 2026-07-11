@@ -45,9 +45,11 @@ env -u CLAUDECODE sigil refactor \
   --protected-path <path>
 ```
 
-Run long processes through an observable background execution session and poll them. Do not wrap the command in `nohup`.
+Run long processes through an observable background execution session and poll them. Do not wrap the command in `nohup`. Use configured `workspace.bootstrap` for dependency preparation when it is available; do not invent a second preparation path.
 
-Monitor the context `status.json`, append-only `events.jsonl`, stderr progress, and the target Git state. A red baseline must recover before analysis begins. Every slice repair must pass build and test before the next slice, and every review repair must receive fresh independent reviews.
+During direct CLI execution, monitor stderr progress and the target Git state. The command does not expose its generated context artifact root before completion, so do not guess a `status.json` path. After completion, inspect the result-referenced event and review artifacts. Context status is distinct from the status, logs, result, and error files owned by a detached `run-sigil` worker.
+
+A red baseline must recover before analysis begins. Every slice repair must pass build and test before the next slice, and every review repair must receive fresh independent reviews.
 
 Treat repair budgets as local to the failure. Each distinct review finding, gate failure, and protected-path violation receives its own attempts. Continue fresh comprehensive review rounds while new findings are discovered. Do not apply one shared budget across the review phase.
 

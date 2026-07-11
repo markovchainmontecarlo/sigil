@@ -40,7 +40,7 @@ type MigrationItem = {
 };
 ```
 
-`focus` is advisory. It tells the Refactor Sigil where to begin but does not restrict dependency discovery. Every repository path is available when justified by the intent unless it is under a top-level `protectedPaths` entry.
+`focus` is advisory. It tells the refactor workflow where to begin but does not restrict dependency discovery. Every repository path is available when justified by the intent unless it is under a top-level `protectedPaths` entry.
 
 Rules:
 

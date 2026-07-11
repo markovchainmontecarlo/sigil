@@ -4,24 +4,28 @@ This is the single usage guide for Sigil. Use `README.md` for the product overvi
 
 ## What Sigil is
 
-Sigil is a workflow layer over tool-using agents. Agents read files, edit files, run tools, and keep model context. Sigil owns the deterministic structure around that work: control flow, agent selection, parallel jobs, artifacts, eval gates, issue accumulation, nested workflows, and delivery policy.
+Sigil is a workflow runtime over tool-using agent runtimes. An LLM supplies reasoning and generation. An agent runtime supplies tools and session continuity. A configured agent role resolves to a provider/runtime, model, and reasoning-effort binding. `ctx.agent(...)` creates a live agent session from that binding.
 
-A sigil is a plain async TypeScript workflow with typed input and output. TypeScript supplies ordinary control flow. Sigil supplies the context object, agent creation, artifact helpers, eval gates, shell helpers, parallel execution, and calls into nested sigils.
+A workflow owns control flow and a state transition. Agents supply bounded judgment inside workflow operations. Users, callers, or configured policy grant authority; deterministic code enforces authority boundaries and owns persistence, gates, checkpoints, and effect execution.
+
+A TypeScript Sigil is a workflow implemented with the `sigil()` API. TypeScript supplies ordinary control flow. Sigil supplies the context object, agent creation, artifact helpers, eval gates, shell helpers, parallel execution, and nested workflow calls. A YAML workflow is the declarative surface for a fixed topology. See [LLMs, agent runtimes, agents, and workflows](./docs/explanation/llms-agents-and-workflows.md) for the complete glossary.
 
 ## Choose the right surface
 
-Use the smallest surface that fits the work:
+Reuse accepted artifacts and verified state. Invoke the narrowest workflow that owns the unfinished transition.
 
-| Surface | Use when | Main commands |
+| Accepted state or intent | Next surface | Main commands |
 | --- | --- | --- |
-| Unified single-change workflow | One local software change should be planned, implemented, verified/reviewed, and summarized without publishing. | `sigil software-change` |
-| Advanced single-change stages | You need to inspect or reuse the stage boundary between planning, implementation, and review. | `sigil plan`, `sigil implement`, `sigil review` |
-| Probe planning | The right change is unclear until Sigil actively tests behavior in a sandbox. | `sigil probe`, then `sigil implement` or `sigil software-change --task-file` |
-| Direct task graph | The work is already understood and only needs the implementation runner. | `sigil validate`, `sigil implement` |
-| Backlog delivery | A mission needs several dependent deliverables with publish or merge policy. | `sigil breakdown`, `sigil dispatch` |
-| Repository migration | A target architecture should be applied through checkpointed refactor items. | `sigil migrate` |
-| Static YAML workflow | The stage, job, and step topology is known before the run. | `sigil validate-workflow`, `sigil run-workflow` |
-| TypeScript sigil | The workflow needs runtime branching, iteration, parallel analysis, synthesis, artifact handoff, gates, or nested workflow composition. | `sigil validate-sigil`, `sigil run-sigil` |
+| One software change with no accepted task graph | Run the complete local single-change workflow. Use `plan` alone only when the planning boundary is the requested output. | `sigil software-change`, `sigil plan` |
+| Uncertain change that requires safe behavioral experiments | Produce an evidence-backed task graph in a sandbox, then reuse it downstream. | `sigil probe`, then `sigil software-change --task-file` or `sigil implement` |
+| Accepted task graph | Skip planning. Use the unified workflow unless the implementation stage itself is the desired boundary. | `sigil software-change --task-file`, `sigil implement` |
+| Existing diff or branch change | Review the current diff without repeating planning or implementation. | `sigil review` |
+| Large mission without an accepted backlog | Produce the backlog, then deliver it according to explicit policy. | `sigil breakdown`, `sigil dispatch` |
+| Accepted or partially delivered backlog | Start or resume dependency-ordered delivery. | `sigil dispatch` |
+| One behavior-preserving structural boundary | Run one verified structural transformation. | `sigil refactor` |
+| Repository-wide structural target and backlog | Run a checkpointed migration program. | `sigil migrate` |
+| Fixed custom stage, job, and step topology | Use a YAML workflow. | `sigil validate-workflow`, `sigil run-workflow` |
+| Dynamic custom orchestration | Select a workflow pattern, then author a TypeScript Sigil. | `sigil validate-sigil`, `sigil run-sigil` |
 
 Do not use Sigil for quick factual checks, simple edits, or one-turn answers that do not need orchestration.
 
@@ -94,7 +98,6 @@ Config sections:
 - `plan`: planner agent names and one synthesizer agent name.
 - `implement`: coder agent, batch size, repair limit, branch prefix, base branch, and optional test report settings.
 - `review`: reviewer agent and the number of fresh reviews allowed after repair. `followUpReviews` defaults to `0`; repairs still run configured verification gates.
-- `review`: reviewer agent name.
 
 Configured context is orientation, not proof. Verify important claims against source or observed behavior before relying on them. `update: true` marks a drift-controlled write-back target. `update: false` marks read-only context unless the task explicitly declares that file as an output. Missing configured context files are skipped and reported in the rendered context block.
 
@@ -112,7 +115,7 @@ env -u CLAUDECODE sigil <command> ...
 
 ## CLI reference
 
-Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed reference.
+Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed reference. CLI help and command parsers are the executable authority for supported syntax and exit behavior; this guide is the canonical human-facing explanation of how to choose and operate those commands.
 
 | Command | What it does | Exit code `0` means |
 | --- | --- | --- |
@@ -215,9 +218,9 @@ Reference rules that matter in practice:
 
 Prefer TypeScript when the workflow discovers its own shape while running.
 
-## TypeScript sigils
+## TypeScript Sigils
 
-Use TypeScript for saved reusable workflows and substantial one-off workflows. A workflow file must export either a default callable or a named `workflow` callable.
+Use a TypeScript Sigil for maintained dynamic workflows and substantial one-off workflows. A workflow file must export either a default callable or a named `workflow` callable.
 
 Validate the export before launching long agent work:
 
@@ -225,15 +228,13 @@ Validate the export before launching long agent work:
 env -u CLAUDECODE sigil validate-sigil workflow.ts
 ```
 
-Run with an explicit result file and run directory:
+Launch with durable defaults. Input, output, and run-directory flags are optional:
 
 ```sh
 env -u CLAUDECODE sigil run-sigil \
   --repo /path/to/repo \
   --file workflow.ts \
-  --input input.json \
-  --out result.json \
-  --run-dir /path/to/repo/.sigil/runs/custom-workflow
+  --input input.json
 ```
 
 `run-sigil` validates the launch inputs, starts a detached worker, and returns the run handle. The worker writes status, events, logs, artifacts, results, and errors into the run directory. The CLI-resolved `--repo` value is authoritative. If `input.json` contains a `repo` field, the runner replaces it with the resolved command-line repository path. `--input` must be a JSON object.
@@ -242,7 +243,7 @@ Run persistence defaults to `durable`. Durable runs reject repositories, workflo
 
 Use `--persistence ephemeral` only when every run input and artifact is intentionally disposable. Ephemeral mode permits operating-system temporary directories and makes their loss an accepted outcome.
 
-When `--run-dir` is supplied, agent and workflow artifacts are written under `<run-dir>/artifacts/`. Detached-run status, events, logs, results, and errors are written into the same durable run directory:
+When `--run-dir` is supplied, agent and workflow artifacts are written under `<run-dir>/artifacts/`. Detached-run status, events, logs, results, and errors are written into the same durable run directory. Use this only when a stable explicit path materially helps the user or another system:
 
 ```sh
 env -u CLAUDECODE sigil run-sigil \
@@ -255,7 +256,7 @@ env -u CLAUDECODE sigil run-sigil \
 
 Use `ctx.artifacts.write`, `ctx.artifacts.read`, and `ctx.artifacts.path` for files owned by the run. Use project file writes only when the workflow is intentionally changing the target repository.
 
-Inside a TypeScript sigil, the main context and agent surfaces are:
+Inside a TypeScript Sigil, the main context and agent surfaces are:
 
 | Need | Surface |
 | --- | --- |
@@ -269,87 +270,21 @@ Inside a TypeScript sigil, the main context and agent surfaces are:
 | Run a configured gate | `ctx.evals("build")` |
 | Run deterministic local logic | `ctx.sh(...)` |
 | Include configured context in custom prompts | `await ctx.renderContextBlock()` |
-| Compose shipped workflows | `ctx.run(plan, input)`, `ctx.run(implement, input)`, or another exported sigil |
+| Compose shipped workflows in the same context | `ctx.run(softwareChange, input)` or another exported workflow |
+| Create an explicit child artifact namespace | `ctx.fork(...)` |
 | Record a non-fatal issue | `ctx.issue(detail)` |
 
 Use config-backed role names such as `explorer`, `implementer`, and `reviewer` when practical. If an inline binding is necessary, use medium reasoning effort unless the user explicitly requests high effort for that run.
 
-## Ephemeral TypeScript sigils
+## Temporary TypeScript Sigils
 
-An ephemeral sigil is a temporary TypeScript sigil for one substantial request. Use one when the task benefits from orchestration: repo exploration followed by synthesis, independent parallel analysis, structured classification followed by routing, artifact creation with review, or deterministic checks around generated work.
+Use a temporary TypeScript Sigil for one substantial request when dynamic orchestration adds value and no built-in workflow already owns the required transition. Select a shape from the [workflow pattern catalog](./docs/explanation/workflow-patterns.md), then follow [Create and run a temporary TypeScript Sigil](./docs/how-to/temporary-typescript-sigil.md).
 
-Do not use an ephemeral sigil when a normal assistant answer is enough, a built-in workflow already fits, or the workflow should clearly be saved and maintained.
+The durable runner defaults remain the same as for maintained TypeScript Sigils. When `--run-dir` is omitted, Sigil creates an isolated ignored run directory beneath `<repo>/.sigil/runs/`. Input, output, and explicit run-directory flags are optional controls, not required ceremony.
 
-Use the repository's ignored run directory when the workflow, evidence, or logs may be inspected later:
+Use operating-system temporary storage only with `--persistence ephemeral` when loss of the workflow, inputs, evidence, logs, and result is acceptable.
 
-```text
-<repo>/.sigil/runs/<topic>/
-  workflow.ts
-  input.json
-  artifacts/
-  result.json
-  run.log
-```
-
-Use operating-system temporary storage only for a disposable run whose loss is acceptable:
-
-```text
-/tmp/sigil-<topic>/
-  workflow.ts
-  input.json
-  artifacts/
-  result.json
-  run.log
-```
-
-Before writing `workflow.ts`, decide the goal, final output shape, sequential steps, independent parallel analyses, agent roles, artifacts, deterministic gates, partial-failure behavior, caveats, and next action. Use the smallest workflow that earns the orchestration cost.
-
-Minimal template:
-
-```ts
-import { sigil } from "sigil";
-
-export default sigil(
-  "ephemeral-investigation",
-  async (ctx, input: { repo: string; question: string }) => {
-    const context = await ctx.renderContextBlock();
-
-    const report = await ctx.withAgent("explorer", (agent) =>
-      agent.prompt([
-        "Investigate this question. Read relevant repo files before deciding.",
-        context,
-        `Question: ${input.question}`,
-      ].filter(Boolean).join("\n\n")),
-    );
-
-    const reportPath = await ctx.artifacts.write("report.md", report);
-
-    return {
-      report,
-      artifacts: { report: reportPath },
-      issues: ctx.issues,
-    };
-  },
-);
-```
-
-Run it:
-
-```sh
-cd /tmp/sigil-<topic>
-env -u CLAUDECODE sigil validate-sigil workflow.ts
-env -u CLAUDECODE sigil run-sigil \
-  --repo /path/to/repo \
-  --file workflow.ts \
-  --input input.json \
-  --out result.json \
-  --persistence ephemeral \
-  --run-dir .
-```
-
-After the run, read `result.json`, inspect important artifacts, and skim `run.log` for failures. Report the useful answer, workflow shape, artifact paths when they matter, failed gates, recorded issues, caveats, and the next action. Do not paste every raw artifact into chat unless the user asks for it.
-
-Promote an ephemeral sigil to a saved repo workflow only when it will be reused, reviewed, tested, or documented as a stable project capability.
+Promote a temporary TypeScript Sigil to maintained project code only when it will be reused, reviewed, tested, or documented as a stable capability.
 
 ## Troubleshooting
 
@@ -357,7 +292,7 @@ Promote an ephemeral sigil to a saved repo workflow only when it will be reused,
 - Unknown agent: check that the name appears under `agents` and that `plan`, `implement`, `review`, or YAML jobs reference the same name.
 - Hanging eval: make eval commands non-interactive. Add CI flags, disable first-run prompts, and avoid commands that wait for input.
 - Dirty working tree: `implement` requires a clean target working tree before it starts. Commit, stash, or move unrelated changes before implementation.
-- TypeScript sigil import failure: run `sigil validate-sigil workflow.ts`; check that imports resolve and the file exports a default callable or named `workflow` function.
+- TypeScript Sigil import failure: run `sigil validate-sigil workflow.ts`; check that imports resolve and the file exports a default callable or named `workflow` function.
 - Invalid input JSON: `--input` must point to a JSON object. The CLI-supplied `--repo` value wins over any `repo` field in the input file.
 - Durable run refused: move the repository, workflow, inputs, outputs, and run directory out of operating-system temporary storage. Use `--persistence ephemeral` only when loss is acceptable.
 - Artifacts not where expected: durable custom runs default to `<repo>/.sigil/runs/`; with `--run-dir`, artifacts are under `<run-dir>/artifacts/`.
@@ -366,7 +301,7 @@ Promote an ephemeral sigil to a saved repo workflow only when it will be reused,
 
 - `README.md`: product overview and example ladder.
 - `ARCHITECTURE.md`: runtime architecture and system contracts.
-- `docs/how-to/ephemeral-sigils.md`: assistant-facing ephemeral sigil workflow.
+- `docs/how-to/temporary-typescript-sigil.md`: how to create and run a temporary TypeScript Sigil.
 - `docs/explanation/`: conceptual background and workflow patterns.
 - `examples/`: runnable authoring patterns.
 - `man/sigil.1`: installed CLI manual source.

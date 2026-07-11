@@ -1,93 +1,129 @@
-# LLMs, agents, agent SDKs, and workflows
+# LLMs, agent runtimes, agents, and workflows
 
-Sigil sits above agent runtimes. It uses agents for tool-using work and TypeScript workflows for deterministic orchestration.
+Sigil is a workflow runtime over tool-using agent runtimes. This glossary names each layer so models, live sessions, workflow code, CLI commands, and assistant skills are not treated as the same object.
 
 ## The stack
 
 ```text
 Sigil workflow
-  owns: control flow, branching, parallel work, artifacts, gates, composition
+  owns control flow, state transitions, artifacts, gates, and composition
 
-Agent SDK / agent runtime
-  owns: tool use, session context, source reads, file edits, shell/browser/search tools
+Agent session
+  supplies bounded judgment through a continuing tool-using context
+
+Agent runtime
+  supplies tools, session continuity, permissions, and model access
 
 LLM
-  owns: language, reasoning, generation, structured output
+  supplies reasoning, language generation, and structured output
 ```
 
-The boundary matters. The model can reason and generate. The agent runtime gives the model tools and a continuing session. The workflow decides what runs next, what must be checked, and how each result becomes input to the next step.
+The supporting surfaces sit beside that execution stack:
+
+```text
+Agent binding  selects a runtime integration, model, and reasoning effort
+Sigil CLI      adapts user commands to workflows and runtime services
+Skill          tells an assistant how to select or operate Sigil
+```
 
 ## LLM
 
-A large language model is the raw model capability. You send input, and it returns text or structured output. By itself, an LLM does not define tool use, file edits, shell commands, retries, artifacts, gates, or workflow control flow.
+A large language model supplies reasoning, language generation, and structured output. A raw model call does not by itself provide repository tools, file edits, shell commands, durable artifacts, gates, or workflow control flow.
 
-Raw LLM calls are useful for small structured tasks: classify this input, rewrite this paragraph, extract these fields, summarize this text. Once the task needs repository tools, web or docs search, multi-turn investigation, durable files, or repair loops, a raw model call is only one part of the system.
+## Model provider
 
-## Agent
+A model provider is the service or product family that supplies model access. Provider identity and model identity are configuration choices, not live agent sessions.
 
-An agent is an LLM operating inside a bounded runtime that can carry context across turns and use tools. Those tools might include repository search, file reads and writes, shell commands, browser or web search tools, and provider-specific capabilities.
+## Agent runtime
 
-In Sigil terms, one `ctx.agent(...)` call creates one agent object. Reusing that object keeps one shared conversation. Creating a new agent object gives the workflow an independent context.
+An agent runtime places a model inside a tool-using environment. It owns session continuity, tool availability, permission handling, and communication with the model provider.
 
-## Agent SDK
+Sigil integrates several agent runtimes behind the common `SigilAgent` interface in `src/agents.ts`. The integrations do not all use the same transport:
 
-An agent SDK is the programmatic interface for launching and talking to an agent runtime. Sigil builds on agent SDKs instead of raw LLM endpoints because the useful work often happens through tool-using agents, not isolated completions.
+- Claude uses a Mastra adapter over the Claude Agent SDK.
+- Codex uses Mastra ACP with a Codex ACP process.
+- GitHub Copilot uses the Copilot SDK.
 
-In this repo, `src/agents.ts` is the seam that wraps Claude, Codex, and GitHub Copilot behind one `SigilAgent` interface. Sigil does not need every provider to expose identical internals. It needs a common way to prompt an agent, ask for structured output when supported, and close the agent when the workflow is done.
+Call these agent-runtime integrations or provider adapters when the transport does not matter. Use the precise term, such as SDK, CLI, or protocol adapter, only when that implementation boundary matters.
+
+## Agent SDK, provider CLI, and protocol adapter
+
+An **agent SDK** is a library interface used to launch or communicate with an agent runtime.
+
+A **provider CLI** is an executable interface used to host or communicate with an agent runtime. Qualify it as a provider CLI so it is not confused with the Sigil CLI.
+
+A **protocol adapter** bridges Sigil to an agent runtime through a protocol such as ACP.
+
+These are integration mechanisms. They are not different kinds of workflow.
+
+## Agent role, binding, and session
+
+An **agent role** is a repository-configured name such as `explorer`, `implementer`, or `reviewer`.
+
+An **agent binding** maps that role to an agent-runtime integration, model, and reasoning effort:
+
+```json
+{
+  "reviewer": {
+    "provider": "codex",
+    "model": "<model-name>",
+    "effort": "medium"
+  }
+}
+```
+
+An **agent session** is the live tool-using model context created when a workflow resolves a binding through `ctx.agent(...)`. Reuse the same agent object when later prompts should share context. Create separate agent objects when work should remain independent.
+
+The agent session supplies judgment inside a bounded operation. It may read files, search, edit, run tools, and return prose or structured output. It does not own deterministic gate outcomes or the parent workflow's state transition.
+
+## Operation
+
+An operation is one conceptual bounded action inside a workflow, such as a prompt, gate, script, artifact write, nested workflow call, or external effect. It is useful architectural vocabulary, but it is not necessarily a first-class runtime type.
 
 ## Workflow
 
-A workflow is the deterministic structure around one or more agents. It owns the shape of the work: which agent runs, which prompt runs next, which steps run in parallel, what artifacts must be written, what gates must pass, and when to stop, repair, continue, or publish.
+A workflow coordinates operations and owns a state transition. It decides which agent runs, which operations run sequentially or in parallel, what artifacts are written, what gates must pass, and when to stop, repair, continue, or invoke another workflow.
 
-The agent owns the tool-using work inside a step. The workflow does not micromanage every search query, and the agent does not decide whether a deterministic gate passed.
+Agents supply judgment. Users, callers, or configured policy grant authority. Deterministic code enforces authority boundaries and owns persistence, gates, checkpoints, and effect execution.
 
-## What a sigil is in this stack
+## TypeScript Sigil and YAML workflow
 
-A sigil is the workflow layer written as TypeScript. It arranges agents, prompt steps, artifacts, deterministic checks, and nested sigils. The agent does the tool-using work; the sigil decides the shape of the work.
+A **TypeScript Sigil** is a workflow implemented with the `sigil()` TypeScript API. TypeScript supplies ordinary control flow; Sigil supplies agents, artifacts, gates, parallel execution, issues, configured context, and nested workflow calls.
 
-A research sigil might create several agents with separate contexts, ask each to investigate a different angle, synthesize their findings with a fresh agent, and write a report artifact. A software engineering sigil might plan a change, implement each task, run build and test gates, review the diff with a fresh agent, and return a PR body for the caller's delivery policy.
+A **YAML workflow** is the declarative surface for a fixed stage, job, and step topology.
 
-## Raw LLM workflow versus agent SDK workflow
+Use **workflow** as the general term. Use **TypeScript Sigil** when the `sigil()` implementation surface matters. A TypeScript Sigil is one way to implement a workflow, not a separate layer above or below workflows.
 
-A workflow that calls raw LLM endpoints usually owns prompt construction, validation, tool wiring, context movement, and any file edits itself. That can work well for simple prompt chains and small structured outputs.
+## Built-in and custom workflows
 
-A workflow that calls agent SDKs delegates bounded cognitive work to stronger tool-using agents, while deterministic code still owns orchestration. That is the category Sigil fits. Sigil lets agents search, read, write, investigate, and reason inside steps, while the TypeScript workflow owns branching, parallelism, artifacts, gates, and composition.
+A **built-in workflow** is a callable workflow shipped by Sigil, such as `plan`, `softwareChange`, or `dispatch`.
 
-## What Sigil owns
+A **custom workflow** is a temporary or maintained TypeScript Sigil or YAML workflow created for a repository or use case.
 
-Sigil owns the deterministic workflow layer:
+Workflows compose from operations and nested workflows. Avoid describing this as sigils being stitched into a different workflow layer.
 
-- control flow
-- agent selection
-- sequential or independent contexts
-- parallel analysis
-- synthesis steps
-- artifact paths and handoffs
-- structured-output boundaries
-- eval gates
-- shell or script checks
-- nested sigils
-- issue accumulation
-- delivery-policy boundaries
+## Sigil CLI
 
-## What the agent owns
+The Sigil CLI is the user-facing command surface. A command parses input, invokes a workflow or runtime service, formats output, and maps the outcome to an exit code. Workflow commands are thin adapters and do not own workflow state transitions.
 
-The agent owns the tool-using work inside a prompt step:
+Some CLI adapters add an external effect after a workflow returns. For example, the `implement` workflow returns branch state and a pull-request body, while the `sigil implement` command may publish that branch. Documentation must name the workflow boundary and CLI effect separately.
 
-- reading files
-- searching the repository
-- editing files when asked
-- running tools exposed by its runtime
-- using web search when the runtime supports it
-- reasoning over the context it has gathered
-- producing prose, structured output, or artifact files
+## Skill
 
-## Workflow surfaces
+A skill is assistant-facing operating guidance. It helps an assistant decide whether Sigil adds value, choose a built-in or custom workflow, and operate specialized workflows safely. A skill is not a runtime workflow, agent, prompt, or CLI command.
 
-Sigil exposes TypeScript sigils for dynamic workflows, saved workflows, and temporary one-off workflows. It also exposes YAML workflows for static stage/job/step structures. See [Workflow shapes: static and dynamic](./workflow-shapes.md) for the difference.
+## Run data
 
-## Why this distinction matters
+- A **workflow run** is one workflow invocation under a `SigilContext`.
+- A **detached run** is a worker-managed TypeScript workflow run with launcher status, events, logs, result, and error files.
+- A **result** is the typed value returned by a workflow.
+- An **artifact** is a named file output or piece of evidence owned by a workflow context. Its durability follows the run persistence policy.
+- **Checkpoint state** is resumable progress owned by a stateful workflow. It is not an ordinary output artifact.
+- A **contract** is a typed handoff across workflow or stage boundaries.
+- A **gate** is a deterministic evaluation that owns pass or fail.
 
-Sigil is not only a prompt helper and not only an agent wrapper. The value is the workflow layer around agents: composition, deterministic checks, artifact flow, model specialization, and reusable structure.
+## Why the distinctions matter
 
-That is what lets a user ask for a larger outcome in ordinary language while Sigil arranges multiple agents, custom prompts, intermediate artifacts, and verification steps behind the scenes.
+The model reasons. The agent runtime provides tools and context. The agent session performs bounded judgment. The workflow owns control flow and state transitions. The caller grants authority. Deterministic code enforces boundaries and verifies effects. The CLI exposes those capabilities, and skills help assistants choose them.
+
+Keeping those responsibilities separate is what makes workflows independently callable, safely composable, and able to reuse accepted artifacts without repeating finished work.

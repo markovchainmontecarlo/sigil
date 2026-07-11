@@ -1,54 +1,65 @@
 ---
 name: sigil-authoring
-description: "Create and run temporary or saved TypeScript sigils for substantial custom workflows. Use when an assistant should write workflow.ts and optional input.json, validate with validate-sigil, execute with run-sigil, inspect artifacts, and report the useful result without making the user learn the Sigil API."
+description: "Author and run temporary or maintained TypeScript Sigils when dynamic custom orchestration is more appropriate than a built-in workflow or fixed YAML workflow."
 ---
 
-# sigil-authoring
+# TypeScript Sigil authoring
 
-Use this skill when the right Sigil route is a TypeScript sigil: the workflow is dynamic, needs several model roles, benefits from sequential context or independent parallel analysis, branches on structured output, writes artifacts, runs gates, or wraps delivery policy. Do not use it for quick answers or when a built-in SWE flow already fits.
+Use this skill after the Sigil router has determined that a dynamic custom workflow is justified. Prefer a built-in workflow when it already owns the required transition, and prefer YAML when the complete stage, job, and step topology is known before the run.
 
-## Autonomy inside protected boundaries
+Read the [workflow pattern catalog](../../docs/explanation/workflow-patterns.md), choose the smallest fitting pattern, and then consult [primitives and composition](../../docs/explanation/primitives-and-composition.md) for the TypeScript surface. Use a different shape only when the request has a concrete control-flow need the catalog does not cover.
 
-Constrain outcomes, invariants, protected resources, external effects, and verification. Leave plans, dependency discovery, file selection, implementation, and bounded repair open to model judgment.
+## Define the boundary
 
-Treat focus paths as advisory starting points, never as a complete allowlist. A Sigil may follow any repository dependency justified by its intent unless the caller explicitly protects that path. Record paths discovered beyond focus with their justification. Route protected-path changes and actual failed evaluations through bounded repair; do not classify ordinary dependency discovery as failure.
+Before authoring, establish:
 
-## Authoring workflow
+- desired outcome;
+- typed or human-readable output;
+- accepted input and existing artifacts;
+- repository files or external resources that may change;
+- protected resources that must not change;
+- external effects and who authorizes them;
+- deterministic verification;
+- partial-failure and stopping behavior.
 
-1. Decide the workflow shape: sequential context, independent parallel analysis, synthesis, structured output, artifacts, gates, shell/script helpers, configured context, and any delivery policy.
-2. Create a durable ignored run directory at `<repo>/.sigil/runs/<topic>/` with `workflow.ts`, optional `input.json`, `result.json`, `run.log`, and `artifacts/`. Use operating-system temporary storage only when the entire run is disposable.
-3. Write `workflow.ts` as a normal exported TypeScript sigil. `create a sigil` is assistant knowledge, not a built-in Sigil command.
-4. Keep user/request data in `input.json` when useful. The runner supplies the resolved `repo` field.
-5. Run `env -u CLAUDECODE sigil validate-sigil workflow.ts` before starting model work.
-6. Run `env -u CLAUDECODE sigil run-sigil --repo <repo> --file workflow.ts --input input.json --out result.json --run-dir <run-dir>`. Add `--persistence ephemeral` only when loss of every input and artifact is acceptable.
-7. Inspect `result.json`, artifacts, and logs. Report the answer, artifact paths, caveats, failed gates, and the next action. Do not dump raw artifacts unless the user asks.
+Classify the workflow as analysis-only, artifact-producing, repository-changing, or externally acting. That classification determines its authority and verification needs.
 
-`run-sigil` launches long runs as detached workers and writes status, events, logs, artifacts, results, and errors to the durable run directory.
+## Author the workflow
+
+1. Adapt the selected pattern to the request.
+2. Reuse built-in workflows for planning, implementation, review, backlog delivery, refactor, or migration instead of recreating their behavior.
+3. Write one exported TypeScript Sigil with stable input and result types when useful.
+4. Keep prompts and model bindings outside workflow bodies when the workflow is maintained.
+5. Use durable runner defaults. Supply explicit input, output, or run paths only when stable paths materially help the user or another system.
+6. Validate the workflow before launching model work.
+7. Run it through `run-sigil`, which launches detached by default.
+8. Inspect the typed result, material artifacts, recorded issues, and failed gates before reporting completion.
+
+Use [SIGIL_USAGE.md](../../SIGIL_USAGE.md) for exact validation, launch, persistence, status, and artifact commands.
 
 ## TypeScript surface
 
-Prefer small, readable workflow bodies:
-
-- `ctx.withAgent("role", async (agent) => ...)` for scoped agent lifecycle.
+- `ctx.agent(...)` or `ctx.withAgent(...)` creates a live agent session from a role or inline binding.
 - Reuse one agent object for sequential context.
-- Use `ctx.parallel([...])` for independent successful branches, or `ctx.parallelSettled([...])` when partial failure should be synthesized.
-- Use structured output schemas when later steps branch on machine-readable data.
-- Use `agent.prompt(..., { writes: "file.md" })` when an agent must produce an artifact.
-- Use `ctx.artifacts.write/read/path` for deterministic artifact handling.
-- Use `ctx.evals("build")` for configured gates and `ctx.sh(...)` for local deterministic shell/script work.
-- Use `await ctx.renderContextBlock()` when a custom sigil should include configured repo context in its own prompts.
-- Call shipped workflows with `ctx.run(plan, input)`, `ctx.run(implement, input)`, or other exported sigils when composition is clearer than shelling out.
+- Use separate agents inside `ctx.parallel(...)` for independent work.
+- Use `ctx.parallelSettled(...)` when useful partial results should survive branch failure.
+- Use structured output when deterministic code must branch on a result.
+- Use agent writes or `ctx.artifacts` for named workflow artifacts.
+- Use `ctx.evals(...)` and `ctx.sh(...)` for deterministic checks and local logic.
+- Use `ctx.run(...)` to invoke a nested workflow in the same context.
+- Use `ctx.fork(...)` only when the child needs an explicit artifact namespace.
+- Use `ctx.issue(...)` for non-fatal issues returned with the result.
 
-Use config-backed role names such as `explorer`, `implementer`, and `reviewer` where practical. If an inline binding is necessary, set reasoning effort to `medium` unless the user explicitly requests high effort for that run.
+Use configured role names where practical. Inline bindings default to medium reasoning effort unless the user explicitly requests high effort for that run.
 
-## Temporary versus saved
+## Autonomy inside protected boundaries
 
-Keep a sigil temporary when it serves one request. Save it in the repo when the workflow will be reused, should be reviewed, or needs tests and documentation. A saved sigil should have stable input/output types, stable prompts, and a short explanation of when to use it.
+Constrain outcomes, protected resources, external effects, and verification. Leave dependency discovery and bounded execution open to model judgment. Focus paths are advisory; protected paths are authoritative.
 
-## References
+Route actual failed evaluations and protected-resource violations through bounded repair. Do not classify justified dependency discovery as failure.
 
-- `docs/how-to/ephemeral-sigils.md`
-- `docs/explanation/primitives-and-composition.md`
-- `docs/explanation/prompt-patterns.md`
-- `docs/explanation/workflow-patterns.md`
-- `examples/08-ephemeral-sigil.ts`
+## Temporary versus maintained
+
+Keep a TypeScript Sigil temporary when it serves one request. Save it as a maintained repository workflow when it will be reused, reviewed, tested, or documented as a stable capability.
+
+A maintained workflow needs stable input and result types, stable prompt bindings, tests, and a concise explanation of when to use it.

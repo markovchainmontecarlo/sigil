@@ -1,13 +1,13 @@
 import { sigil, type SigilContext } from "sigil";
 
-export type EphemeralInvestigationInput = {
+export type TemporaryInvestigationInput = {
   repo: string;
   question: string;
   explorer?: string;
   reviewer?: string;
 };
 
-export type EphemeralInvestigationResult = {
+export type TemporaryInvestigationResult = {
   synthesis: string;
   artifacts: {
     architecture: string;
@@ -20,8 +20,8 @@ export type EphemeralInvestigationResult = {
 };
 
 export default sigil(
-  "ephemeral-investigation",
-  async (ctx, input: EphemeralInvestigationInput): Promise<EphemeralInvestigationResult> => {
+  "temporary-investigation",
+  async (ctx, input: TemporaryInvestigationInput): Promise<TemporaryInvestigationResult> => {
     const explorer = input.explorer ?? "explorer";
     const reviewer = input.reviewer ?? "reviewer";
     const context = await ctx.renderContextBlock();
