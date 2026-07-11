@@ -421,7 +421,7 @@ describe("cli", () => {
     expect(stdout).toContain("provider=claude");
     expect(stdout).toContain("model=claude-sonnet-4-5");
     expect(claudeLine).toContain("effort=medium");
-    expect(stdout).toContain("codex native acp available:");
+    expect(stdout).toContain("codex acp available:");
     expect(stdout).toContain("claude auth source: api billing");
     expect(stdout).toContain("copilot cli available:");
     expect(stdout).toContain("copilot sdk available:");
