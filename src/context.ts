@@ -6,7 +6,7 @@ import type { z } from "zod";
 import { agent as createAgent, isSchemaPromptError, type SigilAgent } from "./agents.js";
 import { loadConfig, type AgentBinding, type ContextEntry } from "./config.js";
 import { emit as gateEmit, evalGate, type EmitOptions, type EmitResult, type EvalGateResult } from "./gate.js";
-import { artifactDir } from "./paths.js";
+import { createArtifactRoot, ensureRunStorageIgnored } from "./paths.js";
 
 export type LoadedContextEntry = {
   path: string;
@@ -88,8 +88,9 @@ export function createContext(
     onObserve?: (stage: string, details: Record<string, string>) => Promise<void>;
   } = {},
 ): SigilContext {
+  ensureRunStorageIgnored(repo);
   const issues: string[] = [];
-  const dir = resolve(options.artifactRoot ?? artifactDir(repo));
+  const dir = resolve(options.artifactRoot ?? createArtifactRoot(repo));
   const agentFactory: ContextAgentFactory = options.createAgent ?? ((binding, opts) => (typeof binding === "string" ? createAgent(binding, opts) : createAgent(binding, opts)));
   const artifacts: ArtifactHelpers = {
     dir,

@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { runTypeScriptSigil, SigilRunnerError, validateTypeScriptSigil } from "../src/sigil-runner.js";
-import { artifactDir } from "../src/paths.js";
 
 function tempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "sigil-runner-repo-"));
@@ -209,7 +208,7 @@ describe("TypeScript sigil runner", () => {
     expect(readFileSync(output.artifact, "utf8")).toBe("artifact body\n");
   });
 
-  test("uses the default artifact directory when runDir is omitted", async () => {
+  test("creates an isolated local artifact directory when runDir is omitted", async () => {
     const repo = tempRepo();
     const workflowFile = writeWorkflow(tempDir(), `
       import { sigil } from "sigil";
@@ -221,7 +220,8 @@ describe("TypeScript sigil runner", () => {
 
     const result = await runTypeScriptSigil({ repo, file: workflowFile });
 
-    expect(JSON.parse(result.formatted)).toEqual({ artifactDir: artifactDir(repo) });
+    const output = JSON.parse(result.formatted);
+    expect(output.artifactDir.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
   });
 
   test("fails clearly when the workflow file is missing", async () => {

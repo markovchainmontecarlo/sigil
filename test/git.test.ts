@@ -22,6 +22,7 @@ function repo(): string {
   run(dir, ["init"]);
   run(dir, ["config", "user.email", "test@example.com"]);
   run(dir, ["config", "user.name", "Test User"]);
+  run(dir, ["config", "core.hooksPath", ".git/hooks"]);
   writeFileSync(join(dir, "tracked.txt"), "one\n");
   writeFileSync(join(dir, "old-name.txt"), "old\n");
   run(dir, ["add", "."]);

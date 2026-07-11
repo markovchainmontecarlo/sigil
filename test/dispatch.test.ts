@@ -5,8 +5,8 @@ import { describe, expect, test } from "bun:test";
 
 import { BACKLOG_CONTRACT_VERSION, type Backlog } from "../src/contracts/backlog.js";
 import { CONTRACT_VERSION, type TaskGraph } from "../src/contracts/task-graph.js";
-import { dispatch, verifyBase } from "../src/workflows/dispatch/index.js";
-import { artifactDir } from "../src/paths.js";
+import { createContext } from "../src/context.js";
+import { createDispatch, dispatchWithOptions as dispatch, verifyBase } from "../src/workflows/dispatch/index.js";
 import type { AttemptResult, PublishResult } from "../src/git.js";
 import type { SoftwareChangeInput, SoftwareChangeResult } from "../src/workflows/software-change/workflow.js";
 
@@ -72,10 +72,10 @@ function changeResult(input: SoftwareChangeInput, override: Partial<SoftwareChan
   const reviewBlocking = override.reviewBlocking ?? false;
   return {
     stage: "implementation",
-    taskFile: input.taskFile ?? input.outFile ?? join(artifactDir(input.repo), "task-graph.json"),
+    taskFile: input.taskFile ?? input.outFile ?? join(input.repo, ".sigil", "runs", "task-graph.json"),
     taskCount: 1,
     valid: override.valid ?? (issues.length === 0 && failedTasks.length === 0 && !reviewBlocking),
-    plan: { taskFile: input.taskFile ?? input.outFile ?? join(artifactDir(input.repo), "task-graph.json"), taskCount: 1, valid: true, issues: [], failures: [] },
+    plan: { taskFile: input.taskFile ?? input.outFile ?? join(input.repo, ".sigil", "runs", "task-graph.json"), taskCount: 1, valid: true, issues: [], failures: [] },
     implementation: {
       branch: input.branch ?? "missing-branch",
       prBody: "## Issues\n- none\n",
@@ -233,12 +233,41 @@ describe("dispatch", () => {
     });
 
     expect(result.delivered).toEqual(["base", "feature", "polish"]);
-    expect(changeCalls.map((call) => call.outFile)).toEqual([
-      join(artifactDir(repo), "dispatch", "base", "task-graph.json"),
-      join(artifactDir(repo), "dispatch", "feature", "task-graph.json"),
-      join(artifactDir(repo), "dispatch", "polish", "task-graph.json"),
+    expect(changeCalls.map((call) => call.outFile?.split("/dispatch/").at(-1))).toEqual([
+      "base/task-graph.json",
+      "feature/task-graph.json",
+      "polish/task-graph.json",
     ]);
-    expect(existsSync(join(artifactDir(repo), "dispatch", "base", "task-graph.json"))).toBe(true);
+    expect(changeCalls[0]?.outFile?.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
+    expect(existsSync(changeCalls[0]?.outFile ?? "")).toBe(true);
+  });
+
+  test("keeps nested software-change artifacts under the active run context", async () => {
+    const repo = tempRepo();
+    const artifactRoot = join(repo, ".sigil", "runs", "active", "artifacts");
+    const ctx = createContext(repo, { artifactRoot });
+    const changeCalls: ChangeCall[] = [];
+    const workflow = createDispatch({
+      softwareChange: makeSoftwareChangeStub(changeCalls),
+      publish: makePublishStub(),
+      merge: makeMergeStub(),
+      verifyBase: makeVerifyBaseStub(),
+    });
+
+    await workflow(
+      {
+        repo,
+        backlogFile: backlogFile(repo, backlog()),
+        deliveryPolicy: "mergeWhenGreen",
+      },
+      ctx,
+    );
+
+    expect(changeCalls.map((call) => call.outFile)).toEqual([
+      join(artifactRoot, "dispatch", "base", "task-graph.json"),
+      join(artifactRoot, "dispatch", "feature", "task-graph.json"),
+      join(artifactRoot, "dispatch", "polish", "task-graph.json"),
+    ]);
   });
 
   test("uses ready task files without planning and still publishes through delivery policy", async () => {
@@ -265,7 +294,8 @@ describe("dispatch", () => {
     expect(result.delivered).toEqual(["ready", "ordinary"]);
     expect(changeCalls.map((call) => call.intent)).toEqual(["Should not plan.", "Plan ordinary item."]);
     expect(changeCalls.map((call) => call.taskFile)).toEqual([readyTaskFile, undefined]);
-    expect(changeCalls.map((call) => call.outFile)).toEqual([undefined, join(artifactDir(repo), "dispatch", "ordinary", "task-graph.json")]);
+    expect(changeCalls[0]?.outFile).toBeUndefined();
+    expect(changeCalls[1]?.outFile?.split("/dispatch/").at(-1)).toBe("ordinary/task-graph.json");
     expect(publishCalls.map((call) => call.branch)).toEqual(["sigil/ready", "sigil/ordinary"]);
   });
 
@@ -560,7 +590,8 @@ describe("dispatch", () => {
 
     expect(diagram).toContain("read and validate backlog");
     expect(diagram).toContain("serial dependency-ordered item loop");
-    expect(diagram).toContain("call softwareChange on item branch from delivery base using refreshed origin delivery ref");
+    expect(diagram).toContain("fork dispatch item artifact context");
+    expect(diagram).toContain("call softwareChange in item context on item branch from refreshed delivery base");
     expect(diagram).toContain("create or resume integration branch");
     expect(diagram).toContain("publish one final integration PR to main");
     expect(diagram).toContain("fetch origin delivery base and detach worktree there");

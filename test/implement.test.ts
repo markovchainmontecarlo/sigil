@@ -9,7 +9,6 @@ import { createContext, type SigilContext } from "../src/context.js";
 import type { EvalGateResult } from "../src/gate.js";
 import { review, type ReviewInput, type ReviewResult } from "../src/workflows/software-change/review/index.js";
 import { CONTRACT_VERSION, type Task, type TaskGraph } from "../src/contracts/task-graph.js";
-import { artifactDir } from "../src/paths.js";
 import { implement } from "../src/workflows/software-change/implementation/index.js";
 
 class StubAgent implements SigilAgent {
@@ -76,7 +75,10 @@ type StubContextOptions = {
 };
 
 function stubContext(repo: string, seams: StubContextOptions): SigilContext {
-  const base = createContext(repo, { createAgent: (binding) => seams.createAgent(binding) });
+  const base = createContext(repo, {
+    artifactRoot: testArtifactDir(repo),
+    createAgent: (binding) => seams.createAgent(binding),
+  });
   const ctx = Object.create(base) as SigilContext;
   ctx.evals = seams.evalGate ?? okEval;
   ctx.run = async (child, input) => {
@@ -87,6 +89,10 @@ function stubContext(repo: string, seams: StubContextOptions): SigilContext {
     return child(input, ctx);
   };
   return ctx;
+}
+
+function testArtifactDir(repo: string): string {
+  return join(repo, ".sigil", "runs", "test-artifacts");
 }
 
 describe("implement", () => {
@@ -257,7 +263,7 @@ describe("implement", () => {
     const initial = fixture([]).repo;
     const tasks = [task(initial, "a"), task(initial, "b")];
     const { repo, taskFile } = fixture(tasks);
-    const replyDir = join(artifactDir(repo), "implement-replies");
+    const replyDir = join(testArtifactDir(repo), "implement-replies");
     rmSync(replyDir, { recursive: true, force: true });
 
     await implement({ repo, taskFile, branch: "impl/replies" }, stubContext(repo,
@@ -282,7 +288,7 @@ describe("implement", () => {
     const maliciousId = `../../escape-${basename(initial)}`;
     const tasks = [task(initial, maliciousId)];
     const { repo, taskFile } = fixture(tasks);
-    const replyDir = join(artifactDir(repo), "implement-replies");
+    const replyDir = join(testArtifactDir(repo), "implement-replies");
     const escapedPath = join(replyDir, `${maliciousId}.md`);
     rmSync(replyDir, { recursive: true, force: true });
     rmSync(escapedPath, { force: true });
@@ -305,7 +311,7 @@ describe("implement", () => {
     const initial = fixture([]).repo;
     const tasks = [task(initial, "a")];
     const { repo, taskFile } = fixture(tasks);
-    const replyDir = join(artifactDir(repo), "implement-replies");
+    const replyDir = join(testArtifactDir(repo), "implement-replies");
     rmSync(replyDir, { recursive: true, force: true });
     let buildCalls = 0;
 
@@ -329,9 +335,9 @@ describe("implement", () => {
     const base = fixture([]).repo;
     const tasks = [task(base, "a")];
     const { repo, taskFile } = fixture(tasks);
-    const replyDir = join(artifactDir(repo), "implement-replies");
+    const replyDir = join(testArtifactDir(repo), "implement-replies");
     rmSync(replyDir, { recursive: true, force: true });
-    mkdirSync(artifactDir(repo), { recursive: true });
+    mkdirSync(testArtifactDir(repo), { recursive: true });
     writeFileSync(replyDir, "not a directory");
 
     const result = await implement({ repo, taskFile, branch: "impl/reply-write-failure" }, stubContext(repo,

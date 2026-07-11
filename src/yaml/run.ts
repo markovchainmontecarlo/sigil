@@ -1,9 +1,7 @@
 import { execFile } from "node:child_process";
-import { join } from "node:path";
 import { z } from "zod";
 
 import { createContext, type SigilContext } from "../context.js";
-import { artifactDir } from "../paths.js";
 import { breakdown } from "../workflows/breakdown/index.js";
 import { dispatch } from "../workflows/dispatch/index.js";
 import { implement } from "../workflows/software-change/implementation/index.js";
@@ -179,10 +177,6 @@ export async function runYamlWorkflowFile(file: string, repo: string, ctxOverrid
   if (checked.errors.length || !checked.workflow) throw new Error(checked.errors.join("\n") || "invalid yaml workflow");
   const compiled = compileYamlWorkflow(checked.workflow, repo);
   return runCompiledWorkflow(compiled, repo, ctxOverride ?? createContext(repo));
-}
-
-export function defaultYamlRunDir(repo: string, file: string): string {
-  return join(artifactDir(repo), "yaml", file.split(/[\\/]/).pop() ?? "workflow");
 }
 
 export { parseYamlWorkflow, validateYamlWorkflowFile } from "./validate.js";

@@ -1,19 +1,14 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import type { SigilAgent } from "../src/agents.js";
 import { BACKLOG_CONTRACT_VERSION, checkBacklog, orderItems, type Backlog } from "../src/contracts/backlog.js";
 import { createContext } from "../src/context.js";
-import { artifactDir } from "../src/paths.js";
 import { breakdownPrompts } from "../src/workflows/breakdown/prompts.js";
 import { breakdown } from "../src/workflows/breakdown/index.js";
-
-function outsideRepo(repo: string, path: string): boolean {
-  return relative(repo, path).startsWith("..");
-}
 
 class StubAgent implements SigilAgent {
   calls: string[] = [];
@@ -104,9 +99,9 @@ function testContext(repo: string, agents: Record<string, StubAgent>) {
 }
 
 describe("breakdown", () => {
-  test("two planners produce a valid ordered backlog outside the target repo by default", async () => {
+  test("two planners produce a valid ordered backlog under local run storage", async () => {
     const repo = tempRepo(["planner-a", "planner-b"]);
-    rmSync(artifactDir(repo), { recursive: true, force: true });
+    rmSync(join(repo, ".sigil", "runs"), { recursive: true, force: true });
     const plannerA = writeCutAgent("- setup: prepare contract\n- consumer: depends on setup\n");
     const plannerB = writeCutAgent("- setup: same boundary\n- consumer: same dependency\n");
     const synth = synthAgent();
@@ -123,8 +118,8 @@ describe("breakdown", () => {
 
     expect(result.valid).toBe(true);
     expect(result.itemCount).toBe(2);
-    expect(outsideRepo(repo, result.backlogFile)).toBe(true);
-    expect(outsideRepo(repo, synth.files.backlog)).toBe(true);
+    expect(result.backlogFile.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
+    expect(synth.files.backlog.startsWith(join(repo, ".sigil", "runs"))).toBe(true);
     expect(checked.errors).toEqual([]);
     expect(ids).toEqual(ordered.map((item) => item.id));
     expect(synth.agent.calls[0]).toContain("planner 1: planner-a");
