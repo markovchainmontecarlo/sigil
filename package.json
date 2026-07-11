@@ -1,6 +1,6 @@
 {
   "name": "sigil",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "CLI and TypeScript toolkit for repository workflows, static YAML workflows, and TypeScript sigils over configured agents",
@@ -8,8 +8,14 @@
   "types": "./src/index.ts",
   "files": [
     "LICENSE",
+    "README.md",
+    "ARCHITECTURE.md",
+    "SIGIL_USAGE.md",
     "bun.lock",
     "package.json",
+    "docs/explanation",
+    "docs/how-to",
+    "examples",
     "src",
     "skills",
     "man"

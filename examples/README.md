@@ -4,11 +4,11 @@ Read these in order.
 
 1. [01-custom-sigil-minimal.ts](./01-custom-sigil-minimal.ts): the first step up from the README example; add structured output on top of the same minimal workflow shape.
 2. [02-parallel-analysis.ts](./02-parallel-analysis.ts): parallel jobs with separate agent context, then a joined recommendation step.
-3. [03-plan-implement.ts](./03-plan-implement.ts): compose shipped workflows for one change and surface explicit stage results.
+3. [03-software-change.ts](./03-software-change.ts): use the unified `softwareChange` workflow for one complete local change and surface its stage result.
 4. [04-custom-delivery.ts](./04-custom-delivery.ts): keep delivery policy outside the workflow work and decide when to publish.
-5. [05-nested-workflow.ts](./05-nested-workflow.ts): call shipped workflows through `ctx.run(...)` and return one combined result.
+5. [05-nested-workflow.ts](./05-nested-workflow.ts): call a shipped workflow through `ctx.run(...)` and return its typed result from the shared workflow context.
 6. [06-issue-workflow.ts](./06-issue-workflow.ts): add structured branching, artifact handoff, parallel jobs, evals, and nested workflows together.
 7. [07-triage-workflow.yaml](./07-triage-workflow.yaml): the first static YAML workflow, using stages, jobs, steps, prompt actions, artifact writes, conditions, and eval gates.
-8. [08-ephemeral-sigil.ts](./08-ephemeral-sigil.ts): a temporary TypeScript sigil meant for `validate-sigil` and `run-sigil`, with multiple agents, independent parallel analysis, synthesis, run-directory artifacts, a gate, and a JSON result.
+8. [08-temporary-sigil.ts](./08-temporary-sigil.ts): a temporary TypeScript Sigil meant for `validate-sigil` and `run-sigil`, with multiple agents, independent parallel analysis, synthesis, artifacts, a gate, and a JSON result.
 
-These files are authoring patterns, not required locations. Put your own workflow file wherever it fits your repo. Most checked-in TypeScript examples import from `../src/index.js` so they typecheck against the local source tree; the ephemeral sigil example imports from the public `sigil` entrypoint because `run-sigil` resolves that import for ignored one-off run directories.
+These files are authoring patterns, not required locations. Put your own workflow file wherever it fits your repo. Most checked-in TypeScript examples import from `../src/index.js` so they typecheck against the local source tree; the temporary workflow example imports from the public `sigil` entrypoint because `run-sigil` resolves that import for one-off workflows outside the source tree.

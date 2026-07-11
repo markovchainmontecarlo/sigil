@@ -22,7 +22,7 @@ Read [references/contracts.md](references/contracts.md) before writing either in
 
 `target.md` must define the final structure, ownership boundaries, dependency direction, required behavior, invariants, exclusions, and verification targets.
 
-`backlog.json` must divide the whole target into dependency-ordered, independently verifiable rewrites. Each item may name advisory focus paths. The Sigil follows justified dependencies anywhere in the repository except top-level protected paths.
+`backlog.json` must divide the whole target into dependency-ordered, independently verifiable rewrites. Each item may name advisory focus paths. The migration workflow follows justified dependencies anywhere in the repository except top-level protected paths.
 
 ## Prepare the worktree
 
@@ -32,7 +32,7 @@ Create a clean named branch from the intended base. Do not run migration against
 git -C <repo> worktree add -b <migration-branch> <worktree> <base>
 ```
 
-Ensure repository dependencies are available without making the worktree dirty.
+Use configured `workspace.bootstrap` for dependency preparation when it is available. It must leave tracked repository files unchanged.
 
 ## Run the queue
 
@@ -59,10 +59,12 @@ ps -axo pid,ppid,stat,etime,command | grep -E 'src/cli.ts migrate|codex-acp' | g
 tail -80 <run-root>/stderr.log
 tail -40 <run-root>/run/events.jsonl
 cat <run-root>/run/state.json
-cat <artifact-root>/status.json
+cat <run-root>/run/runtime/status.json
 git -C <worktree> status --short --branch
 git -C <worktree> log --oneline <base>..HEAD
 ```
+
+`runtime/status.json` is the latest event observed by the migration's `SigilContext`. It is not detached-worker status and it is not the migration checkpoint in `state.json`.
 
 Treat justified dependency discovery as normal execution. Inspect `discoveries` for paths added beyond focus. Recovery is reserved for actual gate, review, provider, checkpoint, or protected-path failures.
 
@@ -87,4 +89,6 @@ Require:
 - `git diff --check` passing;
 - no duplicate legacy modules or prompt trees prohibited by the target.
 
-Inspect all per-item attempts under `<run-root>/run/items/<id>/attempt-<n>/` and final review rounds under `<run-root>/run/final/`. Then push, open a PR, wait for required checks, and merge only when green.
+Inspect all per-item attempts under `<run-root>/run/items/<id>/attempt-<n>/` and final review rounds under `<run-root>/run/final/`.
+
+Migration owns verified local checkpoint commits. Publishing and merging remain caller-owned. Push, open a pull request, wait for required checks, or merge only when the user's requested delivery boundary explicitly authorizes those effects.

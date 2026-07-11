@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
@@ -53,6 +53,8 @@ describe("distribution scripts", () => {
     expect(script).toContain("=== update install ===");
     expect(script).toContain("SIGIL_RELEASE_TARBALL");
     expect(script).toContain("stale-skill");
+    expect(script).toContain("sigil-plan");
+    expect(script).toContain("user-skill");
     expect(script).toContain(".claude/skills/sigil");
     expect(script).toContain(".claude/skills/sigil-authoring");
     expect(script).toContain(".codex/skills/sigil");
@@ -61,6 +63,44 @@ describe("distribution scripts", () => {
     expect(script).toContain("readlink");
     expect(script).toContain("distribution smoke passed");
     expect(script).not.toContain("durable-context");
+  });
+
+  test("the packaged skill set and its authoritative documents agree", () => {
+    const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
+    const skills = readdirSync("skills", { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+
+    expect(skills).toEqual([
+      "sigil",
+      "sigil-authoring",
+      "sigil-dispatch",
+      "sigil-migration",
+      "sigil-refactor",
+    ]);
+    expect(manifest.files).toContain("SIGIL_USAGE.md");
+    expect(manifest.files).toContain("docs/explanation");
+    expect(manifest.files).toContain("docs/how-to");
+    expect(existsSync("docs/explanation/workflow-patterns.md")).toBe(true);
+    expect(existsSync("docs/explanation/ephemeral-sigil-patterns.md")).toBe(false);
+    expect(existsSync("docs/how-to/temporary-typescript-sigil.md")).toBe(true);
+    expect(existsSync("docs/how-to/ephemeral-sigils.md")).toBe(false);
+
+    for (const skill of skills) {
+      const skillFile = `skills/${skill}/SKILL.md`;
+      const contents = readFileSync(skillFile, "utf8");
+      const metadata = readFileSync(`skills/${skill}/agents/openai.yaml`, "utf8");
+
+      expect(contents).not.toContain("ephemeral-sigil-patterns.md");
+      expect(metadata).toContain(`$${skill}`);
+
+      const links = [...contents.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)].map((match) => match[1]);
+      for (const link of links) {
+        if (link.startsWith("http://") || link.startsWith("https://") || link.startsWith("#")) continue;
+        expect(existsSync(resolve(dirname(skillFile), link.split("#", 1)[0]))).toBe(true);
+      }
+    }
   });
 
   test("generate-man.ts renders the checked-in man page from command help", () => {

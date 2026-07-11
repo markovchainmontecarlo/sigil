@@ -1,10 +1,10 @@
 # Prompt patterns
 
-Prompt patterns are reusable moves inside a sigil. They are usually too small to be top-level workflows, but they are the building blocks that make larger workflows reliable.
+Prompt patterns are reusable operations inside a workflow. They are usually too small to be top-level workflows, but they are building blocks for reliable orchestration.
 
-A prompt pattern should tell the agent what to inspect, what judgment to make, what evidence to include, and what output shape to produce. Patterns become powerful when a sigil arranges them: verify first, generate next, critique with a fresh agent, repair under a deterministic gate, then synthesize.
+A prompt pattern should tell the agent what to inspect, what judgment to make, what evidence to include, and what output shape to produce. Patterns become powerful when a workflow arranges them: verify first, generate next, critique with a fresh agent, repair under a deterministic gate, then synthesize.
 
-Use prompt patterns for single steps or short sequences. When the work needs multiple agents, branching, gates, artifacts, or retries, use a workflow pattern or a custom sigil.
+Use prompt patterns for single steps or short sequences. When the work needs multiple agents, branching, gates, artifacts, or retries, use a workflow pattern or custom workflow.
 
 Checked-in workflow prompt templates live with the feature that owns the stage using them. Planning prompts live under `src/workflows/software-change/planning/prompts/`, implementation prompts under `src/workflows/software-change/implementation/prompts/`, review prompts under `src/workflows/software-change/review/prompts/`, and backlog-authoring prompts under `src/workflows/breakdown/prompts/`. Keep reusable examples in documentation, not as parallel prompt trees.
 

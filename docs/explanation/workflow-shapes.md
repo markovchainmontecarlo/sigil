@@ -27,7 +27,7 @@ Static workflows are useful for release checklists, fixed review pipelines, simp
 
 ## Dynamic workflow
 
-A dynamic workflow changes shape based on what the run discovers. Runtime results can change which work runs next, how many branches exist, which agents are chosen, whether to iterate, or which child sigils get called.
+A dynamic workflow changes shape based on what the run discovers. Runtime results can change which work runs next, how many branches exist, which agents are chosen, whether to iterate, or which child workflows get called.
 
 ```text
 research topic
@@ -37,7 +37,7 @@ research topic
   -> synthesize
 ```
 
-The workflow discovers its own next steps. TypeScript is the natural fit because the workflow is ordinary code: it can branch, iterate, choose agents, compose sigils, and adapt at runtime.
+The workflow discovers its own next steps. A TypeScript Sigil is the natural fit because the workflow is ordinary code: it can branch, iterate, choose agents, compose workflows, and adapt at runtime.
 
 Dynamic workflows are useful for repository exploration where later reads depend on earlier findings, research workflows that follow sources or leads, parallel analysis followed by synthesis and follow-up investigation, and generated artifacts that need critique, repair, and validation loops.
 

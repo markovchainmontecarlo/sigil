@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sigil Dispatch"
+  short_description: "Deliver dependency-ordered backlogs safely"
+  default_prompt: "Use $sigil-dispatch to prepare or resume dependency-ordered delivery with explicit authority."
