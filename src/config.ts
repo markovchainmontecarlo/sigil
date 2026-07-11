@@ -8,6 +8,7 @@ export type ContextEntry = { path: string; update: boolean };
 export type SigilConfig = {
   agents: Record<string, AgentBinding>;
   evals: Record<string, string>;
+  workspace: { bootstrap?: string };
   context: ContextEntry[];
   plan: { planners: string[]; synthesizer: string };
   implement: {
@@ -31,6 +32,7 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
     reviewer: { provider: "codex", model: "gpt-5.5", effort: "medium" },
   },
   evals: {},
+  workspace: {},
   context: [],
   plan: { planners: ["implementer"], synthesizer: "implementer" },
   implement: {
@@ -57,6 +59,7 @@ const ContextEntrySchema = z.object({
 const ConfigSchema: z.ZodType<SigilConfig> = z.object({
   agents: z.record(z.string(), AgentBindingSchema),
   evals: z.record(z.string(), z.string().min(1)),
+  workspace: z.object({ bootstrap: z.string().min(1).optional() }).default({}),
   context: z.array(ContextEntrySchema).default([]),
   plan: z.object({ planners: z.array(z.string().min(1)), synthesizer: z.string().min(1) }),
   implement: z.object({

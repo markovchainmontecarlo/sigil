@@ -60,6 +60,9 @@ A representative config shape is:
     "build": "<non-interactive build command>",
     "test": "<non-interactive test command>"
   },
+  "workspace": {
+    "bootstrap": "bun install --frozen-lockfile"
+  },
   "context": [
     { "path": "ARCHITECTURE.md", "update": true },
     { "path": "README.md", "update": false }
@@ -85,6 +88,7 @@ Config sections:
 
 - `agents`: named provider and model bindings. Supported providers are `codex`, `claude`, and `copilot`.
 - `evals`: named shell commands. Commands run under the target repo and must be non-interactive. Missing eval names are skipped.
+- `workspace.bootstrap`: optional deterministic preparation command run before implementation or refactor baseline gates. It must leave tracked files unchanged.
 - `context`: repo-relative files loaded at run start. Paths cannot escape the repo.
 - `plan`: planner agent names and one synthesizer agent name.
 - `implement`: coder agent, batch size, repair limit, branch prefix, base branch, and optional test report settings.

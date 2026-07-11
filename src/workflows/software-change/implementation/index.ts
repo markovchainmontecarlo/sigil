@@ -16,6 +16,7 @@ import {
   type VerificationResult,
 } from "../../../verification.js";
 import { review } from "../review/index.js";
+import { bootstrapWorkspace } from "../../../workspace.js";
 
 export type ImplementInput = {
   taskFile: string;
@@ -223,6 +224,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
   const baseBranch = input.baseBranch ?? config.implement.baseBranch;
   const branch = branchName(config, input, graph);
   await checkoutFreshBranch(input.repo, branch, baseBranch);
+  await bootstrapWorkspace(ctx, input.repo, config);
   const loadedContext = await loadConfiguredContext(input.repo, config.context);
   const contextBlock = implementationContextBlock(renderContextBlock(loadedContext), input.instructions);
   const baselineSha = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();

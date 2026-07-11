@@ -1,6 +1,7 @@
 import { appendFile, readFile } from "node:fs/promises";
 
 import { z } from "zod";
+import { bootstrapWorkspace } from "../../workspace.js";
 
 import {
   promptAgentWithRecovery,
@@ -78,6 +79,7 @@ export const refactor = sigil<RefactorInput, RefactorResult>("refactor", async (
   const config = loadConfig(input.repo);
   await requireCleanTree(input.repo);
   const branch = await currentBranch(input.repo);
+  await bootstrapWorkspace(ctx, input.repo, config);
   const context = renderContextBlock(await loadConfiguredContext(input.repo, config.context));
   await recordStage(eventsFile, "baseline-gates");
   const baseline = await establishBaselineWithRecovery(

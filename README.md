@@ -26,7 +26,7 @@ In the repository you want to run Sigil against, create the default config:
 sigil setup
 ```
 
-Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` commands for that repo, such as build and test. Unconfigured evals are skipped.
+Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` commands for that repo, such as build and test. Repositories that need dependencies or generated tool state before baseline gates can also define `workspace.bootstrap`. Unconfigured evals are skipped.
 
 ## CLI
 
@@ -478,6 +478,7 @@ Each target repo needs a [`sigil.config.json`](./sigil.config.json). `loadConfig
 
 - `agents` (`codex`, `claude`, or `copilot` provider/model bindings)
 - `evals`
+- `workspace`
 - `plan`
 - `implement`
 - `review`
