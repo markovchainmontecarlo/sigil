@@ -499,6 +499,7 @@ If you want the deeper model behind the examples and workflow surfaces, see:
 - [Primitives and composition](./docs/explanation/primitives-and-composition.md)
 - [Prompt patterns](./docs/explanation/prompt-patterns.md)
 - [Workflow patterns](./docs/explanation/workflow-patterns.md)
+- [Ephemeral Sigil pattern catalog](./docs/explanation/ephemeral-sigil-patterns.md)
 - [Ephemeral sigils](./docs/how-to/ephemeral-sigils.md)
 
 ## Development
