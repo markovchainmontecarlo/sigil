@@ -17,6 +17,7 @@ Use a built-in workflow when it already fits. Use a normal assistant answer for 
 | [Repository and ecosystem fit](#repository-and-ecosystem-fit) | Join local constraints with current external options. | Package selection |
 | [Goal-directed execution with verification](#goal-directed-execution-with-verification) | Act, verify, adapt, and stop at protected boundaries. | Repository repair |
 | [Research-backed roadmap and dispatch](#research-backed-roadmap-and-dispatch) | Convert evidence into an executable backlog and deliver it. | Product development program |
+| [Human approval checkpoint](#human-approval-checkpoint) | Separate preparation from an action that requires human authority. | Production deployment |
 
 These patterns form a progression from analysis to verified execution:
 
@@ -28,6 +29,7 @@ flowchart LR
   Produce --> Decide[Context-specific decision]
   Decide --> Execute[Verified execution]
   Execute --> Program[Roadmap delivery]
+  Program --> Approve[Human approval checkpoint]
 ```
 
 ## Parallel analysis and synthesis
@@ -261,9 +263,7 @@ flowchart TD
   Options --> Evaluate[Value, differentiation, cost, and risk]
   Evaluate --> Review[Independent roadmap review]
   Review --> Roadmap[Prioritized roadmap]
-  Roadmap --> Approval{Approved for delivery?}
-  Approval -->|revise| Options
-  Approval -->|yes| Backlog[Dependency-ordered backlog]
+  Roadmap --> Backlog[Dependency-ordered backlog]
   Backlog --> Dispatch[Dispatch through integration branch]
   Dispatch --> Verify[Verify accumulated product]
   Verify --> FinalPR[Final pull request to main]
@@ -279,7 +279,7 @@ Avoid it when the requested outcome is already decided, the work fits one pull r
 
 ### Example prompt
 
-> Create and run a Sigil that develops and executes a research-backed roadmap for **[PRODUCT GOAL]**. Build a current capability model from the repository, investigate user workflows and current external alternatives, and generate candidate product investments. Evaluate user value, differentiation, evidence quality, implementation cost, operational risk, reversibility, and dependencies. Use independent reviewers to challenge weak claims and unnecessary scope. Produce a dependency-ordered backlog and stop for approval. Once approved, dispatch the backlog through an integration branch and leave the final pull request to main open for review.
+> Create and run a Sigil that develops and executes a research-backed roadmap for **[PRODUCT GOAL]**. Build a current capability model from the repository, investigate user workflows and current external alternatives, and generate candidate product investments. Evaluate user value, differentiation, evidence quality, implementation cost, operational risk, reversibility, and dependencies. Use independent reviewers to challenge weak claims and unnecessary scope. Produce a dependency-ordered backlog, dispatch it through an integration branch, and leave the final pull request to main open for review.
 
 ### Common applications
 
@@ -287,6 +287,41 @@ Avoid it when the requested outcome is already decided, the work fits one pull r
 - Platform modernization roadmaps
 - Competitive-response planning
 - Research-to-delivery automation
+
+## Human approval checkpoint
+
+```mermaid
+flowchart TD
+  Request[Consequential action] --> Prepare[Prepare candidate and evidence]
+  Prepare --> Verify[Automated verification]
+  Verify --> Packet[Approval packet]
+  Packet --> Stop[First run stops]
+  Stop --> Human{Human decision}
+  Human -->|reject or revise| Prepare
+  Human -->|approve| Authorization[Explicit approval input]
+  Authorization --> Execute[Second run executes action]
+  Execute --> Confirm[Verify resulting state]
+  Confirm --> Report[Execution report]
+```
+
+### Use when
+
+Use this pattern when automation can prepare and verify a consequential action but a person owns the authority to proceed. Typical boundaries include production changes, destructive operations, public communication, access grants, and financial actions.
+
+### Avoid when
+
+Avoid it when deterministic policy already authorizes the action, when the action is low-risk and reversible, or when a person cannot meaningfully evaluate the approval packet.
+
+### Example prompt
+
+> Create and run an ephemeral Sigil that prepares **[CONSEQUENTIAL ACTION]** for human approval. Produce the exact proposed action, evidence, verification results, risks, rollback plan, and unresolved issues, then stop without executing it. If I later approve it explicitly, run a separate execution Sigil that consumes the approved action, verifies that its assumptions are still current, performs only the authorized effects, and confirms the resulting state.
+
+### Common applications
+
+- Production deployment
+- Destructive data migration
+- Permission or access changes
+- Public release or communication
 
 ## From pattern to workflow
 
