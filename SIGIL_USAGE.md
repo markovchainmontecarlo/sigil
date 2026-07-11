@@ -79,7 +79,8 @@ A representative config shape is:
     "baseBranch": "main"
   },
   "review": {
-    "reviewer": "reviewer"
+    "reviewer": "reviewer",
+    "followUpReviews": 0
   }
 }
 ```
@@ -92,6 +93,7 @@ Config sections:
 - `context`: repo-relative files loaded at run start. Paths cannot escape the repo.
 - `plan`: planner agent names and one synthesizer agent name.
 - `implement`: coder agent, batch size, repair limit, branch prefix, base branch, and optional test report settings.
+- `review`: reviewer agent and the number of fresh reviews allowed after repair. `followUpReviews` defaults to `0`; repairs still run configured verification gates.
 - `review`: reviewer agent name.
 
 Configured context is orientation, not proof. Verify important claims against source or observed behavior before relying on them. `update: true` marks a drift-controlled write-back target. `update: false` marks read-only context unless the task explicitly declares that file as an output. Missing configured context files are skipped and reported in the rendered context block.
