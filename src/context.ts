@@ -3,7 +3,7 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { z } from "zod";
 
-import { agent as createAgent, isSchemaPromptError, type SigilAgent } from "./agents.js";
+import { agent as createAgent, isSchemaPromptError, type AgentOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agents.js";
 import { loadConfig, type AgentBinding, type ContextEntry } from "./config.js";
 import { emit as gateEmit, evalGate, type EmitOptions, type EmitResult, type EvalGateResult } from "./gate.js";
 import { createArtifactRoot, ensureRunStorageIgnored } from "./paths.js";
@@ -61,11 +61,16 @@ export interface RichSigilAgent extends SigilAgent {
   prompt(text: string, opts: AgentWriteOptions<string[]>): Promise<Record<string, string>>;
 }
 
-export type ContextAgentFactory = (binding: string | AgentBinding, opts: { cwd: string }) => SigilAgent;
-export type CreateContextOptions = { createAgent?: ContextAgentFactory; artifactRoot?: string };
+export type ContextAgentFactory = (binding: string | AgentBinding, opts: AgentOptions & { cwd: string }) => SigilAgent;
+export type CreateContextOptions = {
+  createAgent?: ContextAgentFactory;
+  artifactRoot?: string;
+  agentOptions?: Omit<AgentOptions, "cwd">;
+  onAgentRuntime?: (runtime: AgentRuntimeMetadata) => void | Promise<void>;
+};
 
 export interface SigilContext {
-  agent(binding: string | AgentBinding): RichSigilAgent;
+  agent(binding: string | AgentBinding, options?: Omit<AgentOptions, "cwd" | "onRuntimeUpdate">): RichSigilAgent;
   withAgent<T>(binding: string | AgentBinding, fn: (agent: RichSigilAgent) => Promise<T>): Promise<T>;
   parallel<T>(jobs: Array<() => Promise<T>>): Promise<T[]>;
   parallelSettled<T>(jobs: Array<() => Promise<T>>): Promise<ParallelSettledResult<T>[]>;
@@ -91,7 +96,9 @@ export function createContext(
   ensureRunStorageIgnored(repo);
   const issues: string[] = [];
   const dir = resolve(options.artifactRoot ?? createArtifactRoot(repo));
-  const agentFactory: ContextAgentFactory = options.createAgent ?? ((binding, opts) => (typeof binding === "string" ? createAgent(binding, opts) : createAgent(binding, opts)));
+  const agentFactory: ContextAgentFactory = options.createAgent ?? ((binding, opts) => (
+    typeof binding === "string" ? createAgent(binding, opts) : createAgent(binding, opts)
+  ));
   const artifacts: ArtifactHelpers = {
     dir,
     path(name: string) {
@@ -116,8 +123,13 @@ export function createContext(
   let statusSequence = 0;
 
   const ctx: SigilContext = {
-    agent(binding) {
-      return wrapAgentForContext(agentFactory(binding, { cwd: repo }), {
+    agent(binding, agentOptions = {}) {
+      return wrapAgentForContext(agentFactory(binding, {
+        cwd: repo,
+        ...options.agentOptions,
+        ...agentOptions,
+        onRuntimeUpdate: options.onAgentRuntime,
+      }), {
         artifactPath: artifacts.path,
         issue: recordIssue,
         observe: ctx.observe,
@@ -197,6 +209,8 @@ export function createContext(
           operationPath: child.operationPath,
           ...details,
         }),
+        agentOptions: options.agentOptions,
+        onAgentRuntime: options.onAgentRuntime,
       });
     },
     get issues() {

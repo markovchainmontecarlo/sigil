@@ -1,6 +1,6 @@
 {
   "name": "sigil",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "CLI and TypeScript toolkit for repository workflows, static YAML workflows, and TypeScript sigils over configured agents",
@@ -28,6 +28,7 @@
   },
   "dependencies": {
     "@agentclientprotocol/codex-acp": "^1.1.2",
+    "@agentclientprotocol/sdk": "^0.21.0",
     "@anthropic-ai/claude-agent-sdk": "^0.3.201",
     "@github/copilot-sdk": "^1.0.5",
     "@mastra/acp": "^0.3.0",

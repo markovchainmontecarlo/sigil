@@ -6,6 +6,7 @@ import { sigil, type SigilContext } from "../../../context.js";
 import { git } from "../../../git.js";
 import { runGateSet } from "../../../verification.js";
 import { reviewPrompts } from "./prompts.js";
+import { runReviewOperation } from "./state.js";
 
 export type ReviewInput = { repo: string; base: string; autofix?: boolean; context?: string };
 
@@ -74,6 +75,25 @@ function renderFindings(findings: ReviewFinding[]): string {
   ].join("\n")).join("\n\n");
 }
 
+async function writeDispositions(
+  ctx: SigilContext,
+  findings: ReviewFinding[],
+  unresolved: Set<string>,
+): Promise<void> {
+  await ctx.artifacts.write(
+    "review/dispositions.json",
+    `${JSON.stringify({
+      findings: findings.map((finding) => ({
+        id: finding.id,
+        source: finding.source,
+        disposition: actionable(finding)
+          ? (unresolved.has(findingKey(finding)) ? "unresolved" : "resolved")
+          : "not-actionable",
+      })),
+    }, null, 2)}\n`,
+  );
+}
+
 async function readReviewScope(repo: string, base: string): Promise<ReviewScope> {
   const paths = await git(repo, ["diff", "--name-only", base, "--"]);
   if (paths.code !== 0) return { ok: false, issue: paths.log || `git diff --name-only ${base} failed` };
@@ -97,16 +117,28 @@ async function collectCorrectnessFindings(
   limit: number,
   timeoutMs: number,
 ): Promise<ReviewFinding[]> {
-  const reviewed = await runFreshAgentOperation(
+  const operationInput = {
+    context: input.context ?? "",
+    base: input.base,
+    changedPaths: scope.paths,
+    diffStat: scope.stat,
+  };
+  const reviewed = await runReviewOperation(
     ctx,
-    reviewer,
-    { stage: "software-change:review", limit, timeoutMs },
-    (agent) => agent.prompt(reviewPrompts.findings({
-      CONTEXT: input.context ?? "",
-      BASE: input.base,
-      CHANGED_PATHS: scope.paths.join("\n"),
-      DIFF_STAT: scope.stat,
-    }), ReviewOutputSchema),
+    "review/panel",
+    "correctness",
+    operationInput,
+    () => runFreshAgentOperation(
+      ctx,
+      reviewer,
+      { stage: "software-change:review", limit, timeoutMs },
+      (agent) => agent.prompt(reviewPrompts.findings({
+        CONTEXT: operationInput.context,
+        BASE: operationInput.base,
+        CHANGED_PATHS: operationInput.changedPaths.join("\n"),
+        DIFF_STAT: operationInput.diffStat,
+      }), ReviewOutputSchema),
+    ),
   );
   if (!reviewed.ok) throw new Error(reviewed.failure.evidence);
   return reviewed.value.findings.map((finding) => ({ ...finding, source: "correctness" }));
@@ -126,11 +158,17 @@ async function collectTestIntegrityFindings(
   const testDiff = await git(input.repo, ["diff", input.base, "--", ...testPaths]);
   if (testDiff.code !== 0) throw new Error(testDiff.log || "test integrity diff failed");
 
-  const reviewed = await runFreshAgentOperation(
+  const reviewed = await runReviewOperation(
     ctx,
-    reviewer,
-    { stage: "software-change:test-integrity", limit, timeoutMs },
-    (agent) => agent.prompt(reviewPrompts.testIntegrity({ DIFF: testDiff.stdout }), TestIntegrityOutputSchema),
+    "review/test-integrity",
+    "test-integrity",
+    { paths: testPaths, diff: testDiff.stdout },
+    () => runFreshAgentOperation(
+      ctx,
+      reviewer,
+      { stage: "software-change:test-integrity", limit, timeoutMs },
+      (agent) => agent.prompt(reviewPrompts.testIntegrity({ DIFF: testDiff.stdout }), TestIntegrityOutputSchema),
+    ),
   );
   if (!reviewed.ok) throw new Error(reviewed.failure.evidence);
   return reviewed.value.weakened ? reviewed.value.findings : [];
@@ -148,7 +186,15 @@ async function collectFindings(
 
   const correctness = await collectCorrectnessFindings(ctx, input, scope, reviewer, limit, timeoutMs);
   const integrity = await collectTestIntegrityFindings(ctx, input, scope, reviewer, limit, timeoutMs);
-  return { scope, findings: [...correctness, ...integrity] };
+  const findings = [...correctness, ...integrity];
+  await runReviewOperation(
+    ctx,
+    "review/synthesis",
+    "synthesis",
+    { correctness, integrity },
+    async () => ({ findings }),
+  );
+  return { scope, findings };
 }
 
 async function repairFindings(
@@ -158,17 +204,29 @@ async function repairFindings(
   limit: number,
   timeoutMs: number,
 ): Promise<void> {
-  const repaired = await runFreshAgentOperation(
+  const repaired = await runReviewOperation(
     ctx,
-    coder,
-    { stage: "software-change:review-repair", limit, timeoutMs },
-    (agent) => agent.prompt(reviewPrompts.fix({ FINDINGS: JSON.stringify(findings, null, 2) })).then(() => undefined),
+    "review/repair",
+    "repair",
+    { findings },
+    () => runFreshAgentOperation(
+      ctx,
+      coder,
+      { stage: "software-change:review-repair", limit, timeoutMs },
+      (agent) => agent.prompt(reviewPrompts.fix({ FINDINGS: JSON.stringify(findings, null, 2) })),
+    ),
   );
   if (!repaired.ok) throw new Error(repaired.failure.evidence);
 }
 
 async function verifyRepair(ctx: SigilContext): Promise<string | undefined> {
-  const verification = await runGateSet(ctx, ["build", "test", "e2e", "verify"]);
+  const verification = await runReviewOperation(
+    ctx,
+    "post-review-verification",
+    "post-review-verification",
+    { gates: ["build", "test", "e2e", "verify"] },
+    () => runGateSet(ctx, ["build", "test", "e2e", "verify"]),
+  );
   const configured = verification.gates.filter((gate) => !gate.result.skipped);
   if (!configured.length || verification.ok) return undefined;
   return verification.evidence;
@@ -184,6 +242,7 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
   const config = loadConfig(input.repo);
   const findingsFile = ctx.artifacts.path("review-findings.md");
   const attempts = new Map<string, number>();
+  const encountered = new Map<string, ReviewFinding>();
   let followUpReviewsRemaining = config.review.followUpReviews;
   let fixRan = false;
 
@@ -195,6 +254,7 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
       config.implement.repairLimit,
       config.implement.operationTimeoutMs,
     );
+    for (const finding of reviewed.findings) encountered.set(findingKey(finding), finding);
     if (!reviewed.scope.ok) {
       return { valid: false, findings: "", structuredFindings: [], findingsFile, unresolvedHigh: 0, fixRan, issues: [reviewed.scope.issue] };
     }
@@ -204,6 +264,11 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
       if (exhausted.length) {
         const rendered = renderFindings(reviewed.findings);
         await ctx.artifacts.write("review-findings.md", rendered);
+        await writeDispositions(
+          ctx,
+          [...encountered.values()],
+          new Set(reviewed.findings.filter(actionable).map(findingKey)),
+        );
         return {
           valid: false,
           findings: rendered,
@@ -261,11 +326,17 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
         config.implement.repairLimit,
         config.implement.operationTimeoutMs,
       );
+      for (const finding of reviewed.findings) encountered.set(findingKey(finding), finding);
     }
 
     const rendered = renderFindings(reviewed.findings);
     await ctx.artifacts.write("review-findings.md", rendered);
     const unresolved = reviewed.findings.filter(actionable);
+    await writeDispositions(
+      ctx,
+      [...encountered.values()],
+      new Set(unresolved.map(findingKey)),
+    );
     return {
       valid: unresolved.length === 0,
       findings: rendered,

@@ -30,7 +30,7 @@ Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` comm
 
 ## CLI
 
-The CLI verbs are `migrate`, `refactor`, `probe`, `plan`, `software-change`, `implement`, `review`, `breakdown`, `dispatch`, `validate`, `validate-workflow`, `validate-sigil`, `run-workflow`, `run-sigil`, `setup`, and `discover-env`. Run `sigil <verb> --help` for flags and exit codes. Use [SIGIL_USAGE.md](./SIGIL_USAGE.md) as the canonical operator reference.
+The CLI verbs are `migrate`, `refactor`, `probe`, `plan`, `software-change`, `implement`, `review`, `breakdown`, `dispatch`, `codex-profile`, `validate`, `validate-workflow`, `validate-sigil`, `run-workflow`, `run-sigil`, `setup`, and `discover-env`. Run `sigil <verb> --help` for flags and exit codes. Use [SIGIL_USAGE.md](./SIGIL_USAGE.md) as the canonical operator reference.
 
 ## Build agent workflows
 
@@ -348,7 +348,8 @@ The public TypeScript entrypoint exports these async functions and their input/r
 - `review`: reviews the diff against a base branch and can run an autofix pass for actionable findings.
 - `probePlan`: runs sandboxed probes and produces a typed task graph for implementation.
 - `breakdown`: turns a mission into an ordered backlog file.
-- `dispatch`: calls `softwareChange` for backlog items, repairs actionable review and weakened-test findings on the existing branch, and owns resumable publish, green-check merge, and base verification policy.
+- `dispatch`: calls `softwareChange` for backlog items and records write-ahead operation inputs, outputs, repository state, gates, provider sessions, and child ownership so interrupted work can resume without resetting an active branch or replaying completed delivery work.
+- `codex-profile`: manages user-local Codex subscription and metered profiles. Account class and subscription capacity come from Codex protocols, credentials remain Codex-owned, status redacts profile paths, and assignments remain fixed for each ACP process.
 - `refactor`: applies one bounded structural change with protected-path checks and independent reviews.
 - `migrate`: runs checkpointed repository migration items through `refactor` from an external run directory.
 

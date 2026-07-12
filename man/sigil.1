@@ -2,6 +2,8 @@
 .SH NAME
 sigil \- composable workflow CLI with built-in software-change workflows
 .SH SYNOPSIS
+.B sigil codex\-profile <add|remove|list|status|automatic|next|enable|disable|prime|rearm> ...
+.br
 .B sigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir>
 .br
 .B sigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]...
@@ -18,7 +20,7 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]
 .br
-.B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>] [\-\-final\-action openPullRequest|mergeWhenGreen] [\-\-production\-gate <name>]
+.B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch \-\-run\-dir <dir> [...] | sigil dispatch \-\-resume <dir>
 .br
 .B sigil validate [\-\-repo <dir>] <task\-file>
 .br
@@ -37,6 +39,41 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .SH DESCRIPTION
 Sigil is a composable workflow system with built-in software-change workflows. Run \fBsigil <verb> --help\fR for command-specific help.
 .SH COMMANDS
+.SS codex\-profile
+Manage local Codex routing profiles and admission limits.
+.P
+Usage: \fBsigil codex\-profile <add|remove|list|status|automatic|next|enable|disable|prime|rearm> ...\fR
+.P
+Arguments and flags:
+.TP
+\fBadd <name> \-\-home <dir>\fR
+Register a Codex\-owned authentication home after verifying its account class through account/read.
+.TP
+\fB\-\-concurrency <count>\fR
+Limit simultaneous assignments for the profile.
+.TP
+\fB\-\-token\-limit <count>\fR
+Set the metered admission token budget.
+.TP
+\fB\-\-start\-limit <count>\fR
+Set the metered agent\-start budget.
+.TP
+\fB\-\-runtime\-limit\-ms <count>\fR
+Set the cumulative metered runtime budget.
+.TP
+\fB\-\-reservation\-tokens <count>\fR
+Reserve this maximum token charge for each admitted metered agent.
+.TP
+\fB\-\-require\-rearm\fR
+Block later metered assignments after completion until explicit rearm.
+.TP
+\fBnext <name> \-\-agents <count>\fR
+Route the next bounded number of new agents to a profile.
+.TP
+\fBprime [name]... [\-\-repo <dir>]\fR
+Explicitly start inactive subscription windows with the configured Codex binding; automatic priming remains disabled.
+.P
+Exit codes: 0 when the requested local profile operation succeeds; 1 otherwise.
 .SS migrate
 Apply a dependency\-ordered repository migration with verified commit checkpoints.
 .P
@@ -212,7 +249,7 @@ Exit codes: 0 when the produced backlog is valid; 1 otherwise.
 .SS dispatch
 Call software\-change for backlog items, then merge and verify by policy.
 .P
-Usage: \fBsigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch [\-\-integration\-branch <branch>] [\-\-final\-action openPullRequest|mergeWhenGreen] [\-\-production\-gate <name>]\fR
+Usage: \fBsigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch \-\-run\-dir <dir> [...] | sigil dispatch \-\-resume <dir>\fR
 .P
 Arguments and flags:
 .TP
@@ -233,6 +270,12 @@ Integration delivery action after all items pass. Defaults to openPullRequest.
 .TP
 \fB\-\-production\-gate <name>\fR
 Configured gate run after a successful final merge.
+.TP
+\fB\-\-run\-dir <dir>\fR
+Required durable dispatch manifest, operation, and recovery directory.
+.TP
+\fB\-\-resume <dir>\fR
+Resume the recorded operation after validating repository state and live process ownership.
 .P
 Exit codes: 0 when dispatch finishes without stopping; 1 when it stops at a backlog item.
 .SS validate

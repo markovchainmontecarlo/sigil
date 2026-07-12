@@ -6,6 +6,8 @@ import { runGateSet } from "../../verification.js";
 import { review } from "../software-change/review/index.js";
 import type { SoftwareChangeResult } from "../software-change/workflow.js";
 import { dispatchPrompts } from "./prompts.js";
+import { plan } from "../software-change/planning/index.js";
+import { access } from "node:fs/promises";
 
 export type ExistingBranchRepairInput = {
   repo: string;
@@ -14,6 +16,7 @@ export type ExistingBranchRepairInput = {
   taskFile: string;
   item: WorkItem;
   issues: string[];
+  providerSessionId?: string;
 };
 
 async function checkoutExistingBranch(repo: string, branch: string): Promise<void> {
@@ -66,7 +69,9 @@ export async function repairExistingChange(
     if (exhausted.length) return repairedResult(input, exhausted.map((issue) => `recovery exhausted: ${issue}`));
     for (const issue of issues) attempts.set(issue, (attempts.get(issue) ?? 0) + 1);
 
-    await using coder = ctx.agent(config.implement.coder);
+    await using coder = ctx.agent(config.implement.coder, {
+      resumeSessionId: input.providerSessionId,
+    });
     await coder.prompt(dispatchPrompts.repair({
       ITEM_ID: input.item.id,
       BRIEF: input.item.brief,
@@ -94,4 +99,64 @@ export async function repairExistingChange(
   const commit = await commitAll(input.repo, `${input.item.id}: recovery repairs`);
   if (commit.status === "failed") return repairedResult(input, [commit.log]);
   return repairedResult(input, []);
+}
+
+export async function recoverInterruptedSoftwareChange(
+  ctx: SigilContext,
+  input: ExistingBranchRepairInput,
+): Promise<SoftwareChangeResult> {
+  await ensureTaskFile(ctx, input);
+  await ensureActiveBranch(input.repo, input.branch, input.baseBranch);
+  const reviewEvidence = await readReviewEvidence(ctx);
+  return repairExistingChange(ctx, {
+    ...input,
+    issues: [
+      ...input.issues,
+      ...reviewEvidence,
+      "Continue the interrupted implementation from the persisted task graph and current repository state.",
+    ],
+  });
+}
+
+async function readReviewEvidence(ctx: SigilContext): Promise<string[]> {
+  const names = [
+    "review/correctness-output.json",
+    "review/test-integrity-output.json",
+    "review/synthesis-output.json",
+    "review/repair-input.json",
+    "review/post-review-verification-output.json",
+  ];
+  const evidence: string[] = [];
+  for (const name of names) {
+    try {
+      evidence.push(`${name}:\n${await ctx.artifacts.read(name)}`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  return evidence;
+}
+
+async function ensureTaskFile(ctx: SigilContext, input: ExistingBranchRepairInput): Promise<void> {
+  try {
+    await access(input.taskFile);
+    return;
+  } catch {
+    const planned = await ctx.run(plan, {
+      repo: input.repo,
+      intent: input.item.brief,
+      outFile: input.taskFile,
+    });
+    if (!planned.valid) throw new Error(`could not reconstruct interrupted plan: ${planned.issues.join("; ")}`);
+  }
+}
+
+async function ensureActiveBranch(repo: string, branch: string, base: string): Promise<void> {
+  const existing = await git(repo, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+  if (existing.code === 0) {
+    await checkoutExistingBranch(repo, branch);
+    return;
+  }
+  const created = await git(repo, ["checkout", "-b", branch, base]);
+  if (created.code !== 0) throw new Error(created.log || `failed to create interrupted item branch ${branch}`);
 }

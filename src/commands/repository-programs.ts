@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { createContext } from "../context.js";
 import { assertDurablePaths } from "../storage.js";
@@ -15,6 +15,11 @@ import { UsageError } from "./errors.js";
 import { readOptionalFile } from "./input.js";
 import { printJson } from "./output.js";
 import { parseCommandArgs, rejectPositionals, repeatedValues, requireValue, value } from "./parse.js";
+import { readDispatchCheckpoint, readDispatchRuntime, writeDispatchRuntime } from "../workflows/dispatch/state.js";
+import { acquireRunLock, assertNoLiveChildren, removeProcessLease, writeProcessLease } from "../recovery/process-lease.js";
+import type { AgentRuntimeMetadata } from "../agents.js";
+import { reconcileRepository } from "../recovery/git-snapshot.js";
+import { writeDispatchCheckpoint } from "../workflows/dispatch/state.js";
 
 function deliveryPolicy(raw: string | undefined): DeliveryPolicy {
   if (raw === "mergeWhenGreen" || raw === "integrationBranch") return raw;
@@ -165,18 +170,78 @@ export async function dispatchCommand(args: string[]): Promise<number> {
     "integration-branch": { type: "string" },
     "final-action": { type: "string" },
     "production-gate": { type: "string" },
+    "run-dir": { type: "string" },
+    resume: { type: "string" },
   });
   rejectPositionals(parsed);
 
+  const resumeDir = value(parsed, "resume");
+  const runDir = resolve(resumeDir ?? requireValue(parsed, "run-dir"));
+  const resumed = resumeDir
+    ? await readDispatchCheckpoint(join(runDir, "artifacts", "dispatch-state.json"))
+    : undefined;
+
   const input = dispatchInput(
-    requireValue(parsed, "repo"),
-    requireValue(parsed, "backlog"),
-    value(parsed, "policy"),
-    value(parsed, "integration-branch"),
+    resumed?.repository ?? requireValue(parsed, "repo"),
+    resumed?.backlogFile ?? requireValue(parsed, "backlog"),
+    resumed?.deliveryPolicy ?? value(parsed, "policy"),
+    value(parsed, "integration-branch") ?? (resumed?.deliveryPolicy === "integrationBranch" ? resumed.deliveryBase : undefined),
     value(parsed, "final-action"),
     value(parsed, "production-gate"),
   );
-  const result = await dispatch(input);
+  const childLeaseDir = join(runDir, "children");
+  const runtimeFile = join(runDir, "artifacts", "dispatch-runtime.json");
+  await assertNoLiveChildren(childLeaseDir);
+  await using _lock = await acquireRunLock(join(runDir, "dispatch.lock"));
+  if (resumed?.operation && resumed.operation.status === "running") {
+    const runtime = await readDispatchRuntime(runtimeFile);
+    if (runtime?.providerSessionId) {
+      resumed.operation.agent = {
+        binding: runtime.binding ?? "default",
+        providerSessionId: runtime.providerSessionId,
+      };
+    }
+    if (runtime?.childProcessId && runtime.childStartIdentity) {
+      resumed.operation.child = {
+        pid: runtime.childProcessId,
+        startIdentity: runtime.childStartIdentity,
+      };
+    }
+    const repository = await reconcileRepository(
+      resumed.repository,
+      resumed.operation.repository,
+      resumed.operation.id,
+      {
+        activeBranch: resumed.active?.branch,
+        allowDirty: resumed.operation.type === "implementation/task"
+          || resumed.operation.type === "review/repair",
+      },
+    );
+    if (repository.recoveryRef) {
+      resumed.operation.repository.recoveryRef = repository.recoveryRef;
+      resumed.operation.repository.diffDigest = repository.diffDigest;
+      await writeDispatchCheckpoint(join(runDir, "artifacts", "dispatch-state.json"), resumed);
+    }
+  }
+  const result = await dispatch(input, createContext(input.repo, {
+    artifactRoot: join(runDir, "artifacts"),
+    onAgentRuntime: async (runtime) => {
+      await writeDispatchRuntime(runtimeFile, runtime);
+      await updateAgentLease(childLeaseDir, runtime);
+    },
+  }));
   printJson(result);
   return result.stoppedAt === undefined ? 0 : 1;
+}
+
+async function updateAgentLease(directory: string, runtime: AgentRuntimeMetadata): Promise<void> {
+  if (!runtime.childProcessId || !runtime.childStartIdentity) return;
+  const lease = {
+    pid: runtime.childProcessId,
+    startIdentity: runtime.childStartIdentity,
+    heartbeat: new Date().toISOString(),
+  };
+  const path = join(directory, `${runtime.childProcessId}.json`);
+  if (runtime.active === false) await removeProcessLease(path, lease);
+  else await writeProcessLease(path, lease);
 }
