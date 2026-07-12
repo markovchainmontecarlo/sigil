@@ -29,11 +29,15 @@ Classify the workflow as analysis-only, artifact-producing, repository-changing,
 1. Adapt the selected pattern to the request.
 2. Reuse built-in workflows for planning, implementation, review, backlog delivery, refactor, or migration instead of recreating their behavior.
 3. Write one exported TypeScript Sigil with stable input and result types when useful.
-4. Keep prompts and model bindings outside workflow bodies when the workflow is maintained.
-5. Use durable runner defaults. Supply explicit input, output, or run paths only when stable paths materially help the user or another system.
-6. Validate the workflow before launching model work.
-7. Run it through `run-sigil`, which launches detached by default.
-8. Inspect the typed result, material artifacts, recorded issues, and failed gates before reporting completion.
+4. Make the workflow body read top to bottom as its plain-language description, with one named statement per conceptual step.
+5. Use ordinary TypeScript branches and loops for dynamic behavior. Do not replace clear control flow with graph mutation or configuration expressions.
+6. Pass cross-step state through typed returns. Do not use artifacts as write-then-read couriers when a value is sufficient.
+7. Keep prompts, model bindings, resource lifecycle, serialization, and repeated recovery plumbing behind the operation that owns them.
+8. Keep consequential decisions, bounded stop conditions, verification results, state transitions, and external effects visible in the body.
+9. Use durable runner defaults. Supply explicit input, output, or run paths only when stable paths materially help the user or another system.
+10. Validate the workflow before launching model work.
+11. Run it through `run-sigil`, which launches detached by default.
+12. Inspect the typed result, material artifacts, recorded issues, and failed gates before reporting completion.
 
 Use [SIGIL_USAGE.md](../../SIGIL_USAGE.md) for exact validation, launch, persistence, status, and artifact commands.
 

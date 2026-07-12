@@ -2,6 +2,8 @@
 
 These patterns describe reusable orchestration shapes, not fixed built-in commands. They apply to temporary and maintained custom workflows. Start with the diagram, choose the shape that matches the work, then adapt it to the repository and authority boundary.
 
+In TypeScript, implement the selected shape so the workflow body reads as the process: one named statement per conceptual step, ordinary control flow for dynamic behavior, and typed values between operations. Keep prompts and repeated plumbing behind their owning operations while leaving consequential decisions, stop conditions, verification, and external effects visible.
+
 Sigil owns run storage, validation, detached TypeScript workflow execution, status, logs, and result inspection. A user prompt should describe the work and its boundaries rather than repeat those mechanics.
 
 Use a built-in workflow when it already fits. Use a normal assistant answer for a short investigation or simple edit. A custom workflow earns its cost when agent roles, parallel work, artifacts, gates, branching, or repair behavior materially improve the result.

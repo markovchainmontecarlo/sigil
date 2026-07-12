@@ -1,5 +1,9 @@
 # Architecture
 
+**Agent workflows you can read, reason about, and verify.**
+
+Build composable agent workflows in ordinary TypeScript, with explicit control flow, typed state, and deterministic verification.
+
 Sigil is a TypeScript workflow system organized around cohesive feature modules inside one package. The public command surface is `migrate`, `refactor`, `probe`, `plan`, `software-change`, `implement`, `review`, `breakdown`, `dispatch`, `validate`, `validate-workflow`, `validate-sigil`, `run-workflow`, `run-sigil`, `setup`, and `discover-env`. `src/cli.ts` is intentionally thin: it selects the command, routes global and per-command help, and maps top-level usage or unhandled errors to process exit codes. It delegates all command-specific work to the command registry in `src/commands/index.ts`.
 
 `src/commands/` is the CLI adapter layer. Command modules parse flags, load files named by flags, call typed workflow functions, format JSON output, and map command results to exit codes. The adapters do not own workflow state transitions. `src/commands/software-change.ts` adapts `plan`, `software-change`, `implement`, and `review`. `src/commands/repository-programs.ts` adapts `probe`, `refactor`, `migrate`, `breakdown`, and `dispatch`. `validation.ts`, `run.ts`, `setup.ts`, and `environment.ts` own their narrower command surfaces.
@@ -15,6 +19,16 @@ Sigil is the product and workflow runtime. A workflow coordinates operations and
 An LLM supplies reasoning and generation. An agent runtime supplies tools, permissions, and session continuity. An agent role such as `reviewer` resolves through configuration to an agent binding containing the runtime/provider, model, and reasoning effort. `ctx.agent(...)` creates a live agent session from that binding. See [LLMs, agent runtimes, agents, and workflows](./docs/explanation/llms-agents-and-workflows.md) for the complete glossary.
 
 Users, callers, or configured policy grant authority for repository and external effects. Deterministic code enforces those boundaries and owns persistence, gates, checkpoints, and effect execution. Agents supply bounded judgment inside workflow operations.
+
+## Workflow readability
+
+TypeScript owns sequencing, branching, iteration, concurrency, state transitions, and failure propagation. Agents inspect, propose, decide, create, critique, and repair inside those boundaries. An agent loop is ordinary program control around one or more nondeterministic operations; the loop itself is not an agent abstraction.
+
+A workflow body should read top to bottom as its plain-language description. Each conceptual step should appear as one named statement in the same order. Cross-step state travels through typed returns. Prompts and bindings stay outside maintained workflow bodies. Resource lifecycle stays scoped to the operation that owns it. Repeated checkpoint serialization, schema parsing, retry counters, and issue accumulation belong behind the producing or policy-owning operation rather than interrupting every call site.
+
+This rule does not require TypeScript to look declarative or hide meaningful behavior. Ordinary `if`, `for`, `while`, and function calls are the clearest representation of dynamic control flow. Consequential state transitions, stop conditions, verification decisions, and authority-bearing effects remain visible even when their plumbing is encapsulated.
+
+YAML and TypeScript share the same workflow concepts. A concept that takes one readable line in a static YAML workflow should take approximately one readable line in TypeScript. YAML is appropriate when topology is fixed; TypeScript is appropriate when runtime evidence changes the work, branch count, agent choice, iteration, or child workflow selection.
 
 ## Ownership and dependency direction
 

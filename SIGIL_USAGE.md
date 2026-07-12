@@ -4,11 +4,17 @@ This is the single usage guide for Sigil. Use `README.md` for the product overvi
 
 ## What Sigil is
 
+**Agent workflows you can read, reason about, and verify.**
+
+Build composable agent workflows in ordinary TypeScript, with explicit control flow, typed state, and deterministic verification.
+
 Sigil is a workflow runtime over tool-using agent runtimes. An LLM supplies reasoning and generation. An agent runtime supplies tools and session continuity. A configured agent role resolves to a provider/runtime, model, and reasoning-effort binding. `ctx.agent(...)` creates a live agent session from that binding.
 
 A workflow owns control flow and a state transition. Agents supply bounded judgment inside workflow operations. Users, callers, or configured policy grant authority; deterministic code enforces authority boundaries and owns persistence, gates, checkpoints, and effect execution.
 
 A TypeScript Sigil is a workflow implemented with the `sigil()` API. TypeScript supplies ordinary control flow. Sigil supplies the context object, agent creation, artifact helpers, eval gates, shell helpers, parallel execution, and nested workflow calls. A YAML workflow is the declarative surface for a fixed topology. See [LLMs, agent runtimes, agents, and workflows](./docs/explanation/llms-agents-and-workflows.md) for the complete glossary.
+
+TypeScript workflows are intended to read as the process they execute, not to imitate YAML. Use ordinary branches and loops for dynamic behavior, one named statement per conceptual step, and typed returns between steps. Use agents for judgment; use deterministic code for control, verification, persistence, and external effects.
 
 ## Choose the right surface
 

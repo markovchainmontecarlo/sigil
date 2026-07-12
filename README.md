@@ -4,7 +4,11 @@
   <img src="./assets/sigil-logo.png" alt="Sigil logo" width="420" />
 </p>
 
-Sigil is a composable workflow runtime over tool-using agent runtimes. It includes independently callable software workflows, a TypeScript authoring API, a static YAML surface, and a CLI.
+**Agent workflows you can read, reason about, and verify.**
+
+Build composable agent workflows in ordinary TypeScript, with explicit control flow, typed state, and deterministic verification.
+
+Sigil is a composable workflow runtime over tool-using agent runtimes. Ordinary TypeScript owns control flow, agents supply bounded judgment, and deterministic code verifies results and controls external effects. Sigil includes independently callable software workflows, a TypeScript authoring API, a static YAML surface, and a CLI.
 
 ## Install
 
@@ -51,6 +55,8 @@ Sigil is built around a small set of workflow concepts:
 - **[delivery policy](./docs/explanation/primitives-and-composition.md#delivery-policy)**: let the caller decide whether to publish, merge, queue, or stop
 
 A TypeScript Sigil is a workflow implemented as a plain async TypeScript callable with typed input and output. TypeScript provides ordinary control flow. Sigil adds agent, artifact, gate, parallel, and nested-workflow primitives. Reuse the same agent object when later prompt steps should build on earlier context; create a new agent object when work should stay independent.
+
+Readable does not mean making TypeScript resemble YAML. A workflow body should read from top to bottom as the process it executes: one statement for each conceptual step, ordinary `if` and loop constructs for decisions and iteration, and typed values between operations. Keep prompts, serialization, resource management, and repeated recovery plumbing behind the operation that owns them. Keep consequential state transitions and authority-bearing effects visible.
 
 Built-in workflows include `softwareChange`, `plan`, `implement`, `review`, `breakdown`, and `dispatch`. You can also maintain a custom TypeScript Sigil in a repository or write one temporarily for a substantial one-off request.
 
