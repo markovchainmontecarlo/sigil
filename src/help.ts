@@ -9,6 +9,23 @@ export type CommandHelp = {
 
 export const commandHelps = [
   {
+    name: "codex-profile",
+    summary: "Manage local Codex routing profiles and admission limits.",
+    usage: "sigil codex-profile <add|remove|list|status|automatic|next|enable|disable|prime|rearm> ...",
+    flags: [
+      { name: "add <name> --home <dir>", description: "Register a Codex-owned authentication home after verifying its account class through account/read." },
+      { name: "--concurrency <count>", description: "Limit simultaneous assignments for the profile." },
+      { name: "--token-limit <count>", description: "Set the metered admission token budget." },
+      { name: "--start-limit <count>", description: "Set the metered agent-start budget." },
+      { name: "--runtime-limit-ms <count>", description: "Set the cumulative metered runtime budget." },
+      { name: "--reservation-tokens <count>", description: "Reserve this maximum token charge for each admitted metered agent." },
+      { name: "--require-rearm", description: "Block later metered assignments after completion until explicit rearm." },
+      { name: "next <name> --agents <count>", description: "Route the next bounded number of new agents to a profile." },
+      { name: "prime [name]... [--repo <dir>]", description: "Explicitly start inactive subscription windows with the configured Codex binding; automatic priming remains disabled." },
+    ],
+    exitCode: "0 when the requested local profile operation succeeds; 1 otherwise.",
+  },
+  {
     name: "migrate",
     summary: "Apply a dependency-ordered repository migration with verified commit checkpoints.",
     usage: "sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir>",
@@ -111,7 +128,7 @@ export const commandHelps = [
   {
     name: "dispatch",
     summary: "Call software-change for backlog items, then merge and verify by policy.",
-    usage: "sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen|integrationBranch [--integration-branch <branch>] [--final-action openPullRequest|mergeWhenGreen] [--production-gate <name>]",
+    usage: "sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen|integrationBranch --run-dir <dir> [...] | sigil dispatch --resume <dir>",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--backlog <file>", description: "Required. Backlog JSON file." },
@@ -119,6 +136,8 @@ export const commandHelps = [
       { name: "--integration-branch <branch>", description: "Required with integrationBranch. Accumulating branch for item changes." },
       { name: "--final-action openPullRequest|mergeWhenGreen", description: "Integration delivery action after all items pass. Defaults to openPullRequest." },
       { name: "--production-gate <name>", description: "Configured gate run after a successful final merge." },
+      { name: "--run-dir <dir>", description: "Required durable dispatch manifest, operation, and recovery directory." },
+      { name: "--resume <dir>", description: "Resume the recorded operation after validating repository state and live process ownership." },
     ],
     exitCode: "0 when dispatch finishes without stopping; 1 when it stops at a backlog item.",
   },

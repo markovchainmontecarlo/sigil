@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
@@ -109,12 +109,25 @@ describe("structured software-change review", () => {
       },
     ];
 
-    const result = await review({ repo, base, autofix: true }, context(repo, actions));
+    const ctx = context(repo, actions);
+    const result = await review({ repo, base, autofix: true }, ctx);
+    const operations = JSON.parse(readFileSync(ctx.artifacts.path("review/operations.json"), "utf8")) as {
+      operations: Array<{ type: string; status: string; inputArtifact: string; outputArtifact?: string }>;
+    };
 
     expect(result.valid).toBe(true);
     expect(result.fixRan).toBe(true);
     expect(result.structuredFindings).toEqual([]);
     expect(actions).toHaveLength(0);
+    expect(operations.operations.map((operation) => operation.type)).toEqual([
+      "review/panel",
+      "review/synthesis",
+      "review/repair",
+      "post-review-verification",
+    ]);
+    expect(operations.operations.every((operation) => operation.status === "completed")).toBe(true);
+    expect(operations.operations.every((operation) => operation.inputArtifact && operation.outputArtifact)).toBe(true);
+    expect(readFileSync(ctx.artifacts.path("review/dispositions.json"), "utf8")).toContain("resolved");
   });
 
   test("runs the configured number of follow-up reviews", async () => {

@@ -24,6 +24,8 @@ export type SigilConfig = {
 };
 
 export const CONFIG_FILE = "sigil.config.json";
+export const CODEX_EXECUTABLE = "codex";
+export const CODEX_PROVIDER: AgentProvider = "codex";
 
 export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
   agents: {

@@ -130,7 +130,9 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 | `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>]` | Apply a task graph, review it, then push and open a PR. | PR creation succeeded, review is not blocking, and no failed tasks or issues were reported. |
 | `sigil review --repo <dir> --base <ref> [--no-autofix] [--context <text>]` | Review the current diff. | There are no unresolved high findings and no issues. |
 | `sigil breakdown --repo <dir> --mission <text> [--out <file>]` | Turn a mission into a backlog. | The produced backlog is valid. |
-| `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch [--integration-branch <branch>] [--final-action openPullRequest\|mergeWhenGreen] [--production-gate <name>]` | Deliver a backlog in dependency order through main or an accumulating integration branch. | Dispatch finished without stopping. |
+| `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch --run-dir <dir>` | Start durable backlog delivery through main or an accumulating integration branch. | Dispatch finished without stopping. |
+| `sigil dispatch --resume <dir>` | Resume the recorded operation after repository and process ownership checks. | Dispatch finished without stopping. |
+| `sigil codex-profile <action>` | Manage local Codex profiles, spawn-time routing, reservations, and metered admission limits. | Profile operation completed. |
 | `sigil validate-workflow [--repo <dir>] <workflow-file>` | Validate a static YAML workflow. | The workflow error array is empty. |
 | `sigil run-workflow --repo <dir> --file <workflow-file>` | Run a static YAML workflow inline. | The workflow completed without recorded issues. |
 | `sigil validate-sigil <workflow.ts>` | Validate a TypeScript sigil without running it. | The workflow imports and has a callable export. |
@@ -165,7 +167,9 @@ env -u CLAUDECODE sigil probe --repo /path/to/repo --intent "<usage or product i
 env -u CLAUDECODE sigil software-change --repo /path/to/repo --intent "<same intent>" --task-file /path/to/repo/.sigil/runs/task-graph.json
 ```
 
-For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. `dispatch` consumes that backlog, calls `softwareChange` for each deliverable item, then owns repair convergence, publishing, merge, and delivery-base verification. Its run artifact directory contains `dispatch-state.json`; rerun with the same run context to resume the active branch and stage. Pull-request creation is idempotent, merge waits for green checks, and delivered items are not replayed. Use `integrationBranch` to accumulate item PRs away from main. The default final action opens one final PR. `--final-action mergeWhenGreen` also merges that PR, and `--production-gate <name>` verifies the configured deployment gate afterward. Use the direct `mergeWhenGreen` policy only when every verified item should merge directly to main.
+For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. Start dispatch with a durable `--run-dir`, then use `--resume` after interruption. Resume validates the repository, backlog, policy, delivery base, active branch, and process ownership before allowing mutation. Completed items are not replayed, and expected in-progress repair edits are preserved rather than reset. Use `integrationBranch` to accumulate item pull requests away from main. The default final action opens one final pull request. `--final-action mergeWhenGreen` also merges that pull request, and `--production-gate <name>` verifies the configured deployment gate afterward.
+
+Codex profiles are user-local routing configuration. Sigil asks Codex for account class and subscription capacity without reading authentication contents. Subscription profiles are selected by remaining percentage at new-agent boundaries. `codex-profile next` can route a bounded number of new agents to a selected subscription or manual metered profile. Metered profiles support token, start, concurrency, runtime, per-reservation, and explicit-rearm admission limits. Active agents retain their original profile until close, and status output omits profile paths.
 
 ```sh
 env -u CLAUDECODE sigil breakdown --repo /path/to/repo --mission "<mission>" --out /path/to/repo/.sigil/runs/backlog.json
@@ -173,7 +177,8 @@ env -u CLAUDECODE sigil dispatch \
   --repo /path/to/repo \
   --backlog /path/to/repo/.sigil/runs/backlog.json \
   --policy integrationBranch \
-  --integration-branch feature/mission
+  --integration-branch feature/mission \
+  --run-dir $HOME/.sigil/runs/dispatch/mission
 ```
 
 For repository migration, define a stable target and dependency-ordered backlog outside the target worktree, then run `migrate` on a clean named branch. Each backlog item runs the `refactor` workflow, commits only verified results, snapshots evidence under the run directory, and advances checkpoint state atomically. Repository-wide final repairs are also committed and checkpointed. Resume with the same command only when the target, backlog, branch, and checkpoint HEAD still match.

@@ -1,5 +1,4 @@
 import { approveAll, CopilotClient, type CopilotSession, type SessionConfig } from "@github/copilot-sdk";
-import { AcpAgent } from "@mastra/acp";
 import { ClaudeSDKAgent } from "@mastra/claude";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -9,15 +8,39 @@ import { z } from "zod";
 
 import { type AgentBinding, loadConfig, resolveAgentBinding } from "./config.js";
 import { retryPromptLoop } from "./gate.js";
+import { readCodexAccountStatus } from "./codex-rate-limits.js";
+import { releaseCodexProfile, reserveCodexProfile } from "./codex-router.js";
+import type { CodexAssignment, CapacityReader } from "./codex-router.js";
+import type { CodexProfileStore, CodexUsage } from "./codex-profiles.js";
+import type { CodexProfile } from "./codex-profiles.js";
+import { OwnedCodexAcpConnection, type OwnedAcpEvent } from "./codex-acp.js";
+import type { ProcessIdentity } from "./process-identity.js";
 
 export interface SigilAgent {
   prompt(text: string): Promise<string>;
   prompt<T>(text: string, schema: z.ZodType<T>): Promise<T>;
   close(): Promise<void>;
   [Symbol.asyncDispose](): Promise<void>;
+  readonly runtime?: AgentRuntimeMetadata;
 }
 
-export type AgentOptions = { cwd?: string };
+export type AgentRuntimeMetadata = {
+  binding?: string;
+  profile?: string;
+  providerSessionId?: string;
+  childProcessId?: number;
+  childStartIdentity?: string;
+  usage?: CodexUsage;
+  active?: boolean;
+};
+
+export type AgentOptions = {
+  cwd?: string;
+  capacityReader?: CapacityReader;
+  profileStore?: CodexProfileStore;
+  resumeSessionId?: string;
+  onRuntimeUpdate?: (runtime: AgentRuntimeMetadata) => void | Promise<void>;
+};
 export const SCHEMA_PROMPT_RETRY_ATTEMPTS = 2;
 
 export class SchemaPromptError extends Error {
@@ -48,7 +71,7 @@ export function agent(nameOrBinding: string | AgentBinding, opts: AgentOptions =
   const cwd = opts.cwd ?? process.cwd();
   const binding = typeof nameOrBinding === "string" ? resolveAgentBinding(nameOrBinding, loadConfig(cwd)) : nameOrBinding;
   if (binding.provider === "claude") return createClaude(binding, cwd);
-  if (binding.provider === "codex") return createCodex(binding, cwd);
+  if (binding.provider === "codex") return createCodex(binding, cwd, opts);
   if (binding.provider === "copilot") return createCopilot(binding, cwd);
   throw new Error(`Unsupported agent provider "${String((binding as { provider?: unknown }).provider)}"`);
 }
@@ -112,7 +135,70 @@ function createClaude(binding: AgentBinding, cwd: string): SigilAgent {
   return createClaudeAgentFromGenerate(<T>(text: string, options?: Record<string, unknown>) => claude.generate<T>(text, options));
 }
 
-function createCodex(binding: AgentBinding, cwd: string): SigilAgent {
+function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions): SigilAgent {
+  let assignment: CodexAssignment | undefined;
+  let acp: OwnedCodexAcpConnection | undefined;
+  let usage: CodexUsage | undefined;
+  let runtimeHeartbeat: ReturnType<typeof setInterval> | undefined;
+  const runtime: AgentRuntimeMetadata = {
+    binding: `${binding.provider}:${binding.model}`,
+  };
+
+  const connection = async (): Promise<OwnedCodexAcpConnection> => {
+    if (acp) return acp;
+    assignment = await reserveCodexProfile(
+      options.capacityReader ?? (async (profile) => (await readCodexAccountStatus(profile)).capacity),
+      options.profileStore,
+    );
+    runtime.profile = assignment?.profile.name;
+    acp = createCodexAcp(binding, cwd, assignment?.profile.home, {
+      resumeSessionId: options.resumeSessionId,
+      onProcessStarted: async (identity) => {
+        assignChildRuntime(runtime, identity);
+        runtime.active = true;
+        await options.onRuntimeUpdate?.(runtime);
+        runtimeHeartbeat = setInterval(
+          () => void options.onRuntimeUpdate?.(runtime),
+          30_000,
+        );
+      },
+    });
+    return acp;
+  };
+
+  const generate = async (text: string) => {
+    const active = await connection();
+    const chunks: string[] = [];
+    let turnUsage: CodexUsage | undefined;
+    for await (const event of active.promptStream(text)) {
+      if (event.type === "text") chunks.push(event.text);
+      if (event.type === "session-update") turnUsage = usageFromEvent(event, turnUsage);
+    }
+    usage = addCodexUsage(usage, turnUsage);
+    runtime.providerSessionId = active.sessionId;
+    runtime.usage = usage;
+    await options.onRuntimeUpdate?.(runtime);
+    return chunks.join("");
+  };
+
+  return createCodexAgentFromGenerate(generate, async () => {
+    if (runtimeHeartbeat) clearInterval(runtimeHeartbeat);
+    await acp?.disconnect();
+    if (assignment) await releaseCodexProfile(assignment.reservation.id, usage, options.profileStore);
+    runtime.active = false;
+    await options.onRuntimeUpdate?.(runtime);
+  }, runtime);
+}
+
+function createCodexAcp(
+  binding: AgentBinding,
+  cwd: string,
+  codexHome?: string,
+  options: {
+    resumeSessionId?: string;
+    onProcessStarted?: (identity: ProcessIdentity) => void | Promise<void>;
+  } = {},
+): OwnedCodexAcpConnection {
   const { command, baseArgs } = resolveCodexAcpBin();
   const args = [
     ...baseArgs,
@@ -127,20 +213,33 @@ function createCodex(binding: AgentBinding, cwd: string): SigilAgent {
     "-c",
     `model_reasoning_effort=${agentEffort(binding)}`,
   ];
-  const acp = new AcpAgent({
-    id: "sigil-codex-agent",
-    name: "sigil-codex-agent",
-    description: "Sigil codex ACP agent",
+  return new OwnedCodexAcpConnection({
     command,
     args,
-    env: { NPM_CONFIG_CACHE: join(tmpdir(), "sigil-npm-cache") },
+    env: {
+      NPM_CONFIG_CACHE: join(tmpdir(), "sigil-npm-cache"),
+      ...(codexHome ? { CODEX_HOME: codexHome } : {}),
+    },
     cwd,
-    persistSession: true,
+    model: binding.model,
+    resumeSessionId: options.resumeSessionId,
+    onProcessStarted: options.onProcessStarted,
   });
-  return createCodexAgentFromGenerate(async (text) => {
-    const result = await acp.generate(text);
-    return result.text;
-  }, () => acp.connection.disconnect());
+}
+
+export async function primeCodexProfile(profile: CodexProfile, binding: AgentBinding): Promise<{
+  before: Awaited<ReturnType<typeof readCodexAccountStatus>>;
+  after: Awaited<ReturnType<typeof readCodexAccountStatus>>;
+  windowStarted: boolean;
+}> {
+  const before = await readCodexAccountStatus(profile);
+  if (before.profileClass !== "subscription") throw new Error(`profile ${profile.name} is not a subscription`);
+  if (before.capacity.remainingPercentage !== undefined) return { before, after: before, windowStarted: false };
+
+  await using acp = createCodexAcp(binding, process.cwd(), profile.home);
+  for await (const _event of acp.promptStream("Reply with OK.")) {}
+  const after = await readCodexAccountStatus(profile);
+  return { before, after, windowStarted: after.capacity.remainingPercentage !== undefined };
 }
 
 function createCopilot(binding: AgentBinding, cwd: string): SigilAgent {
@@ -167,7 +266,11 @@ export function createClaudeAgentFromGenerate(generate: ClaudeGenerate, close: (
   };
 }
 
-export function createCodexAgentFromGenerate(generate: CodexGenerate, close: () => void | Promise<void> = () => {}): SigilAgent {
+export function createCodexAgentFromGenerate(
+  generate: CodexGenerate,
+  close: () => void | Promise<void> = () => {},
+  runtime: AgentRuntimeMetadata = {},
+): SigilAgent {
   return {
     prompt<T>(text: string, schema?: z.ZodType<T>): Promise<string | T> {
       return schema ? promptCodexWithSchema(generate, text, schema) : generate(text);
@@ -178,6 +281,36 @@ export function createCodexAgentFromGenerate(generate: CodexGenerate, close: () 
     async [Symbol.asyncDispose]() {
       await this.close();
     },
+    runtime,
+  };
+}
+
+export function usageFromEvent(event: OwnedAcpEvent, previous?: CodexUsage): CodexUsage | undefined {
+  if (event.type !== "session-update" || event.update.sessionUpdate !== "usage_update") return previous;
+  const update = event.update;
+  return {
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    outputTokens: 0,
+    reasoningTokens: 0,
+    totalTokens: update.used,
+  };
+}
+
+function assignChildRuntime(runtime: AgentRuntimeMetadata, identity: ProcessIdentity): void {
+  runtime.childProcessId = identity.pid;
+  runtime.childStartIdentity = identity.startIdentity;
+}
+
+export function addCodexUsage(total?: CodexUsage, turn?: CodexUsage): CodexUsage | undefined {
+  if (!turn) return total;
+  if (!total) return turn;
+  return {
+    inputTokens: total.inputTokens + turn.inputTokens,
+    cachedInputTokens: total.cachedInputTokens + turn.cachedInputTokens,
+    outputTokens: total.outputTokens + turn.outputTokens,
+    reasoningTokens: total.reasoningTokens + turn.reasoningTokens,
+    totalTokens: total.totalTokens + turn.totalTokens,
   };
 }
 

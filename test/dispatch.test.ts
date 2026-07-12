@@ -199,6 +199,90 @@ describe("dispatch", () => {
     expect(changeCalls.every((call) => call.outFile?.includes("/dispatch/"))).toBe(true);
   });
 
+  test("resumes interrupted implementation through recovery without software-change reset", async () => {
+    const repo = tempRepo();
+    const input = { repo, backlogFile: backlogFile(repo, backlog()), deliveryPolicy: "mergeWhenGreen" as const };
+    const context = createContext(repo, { artifactRoot: join(repo, ".sigil", "runs", "implementation-resume") });
+    let softwareCalls = 0;
+    let recoveryCalls = 0;
+
+    await expect(dispatchWithOptions(input, {
+      softwareChange: async () => { softwareCalls++; throw new Error("interrupted implementation"); },
+      wait: async () => {},
+    }, context)).rejects.toThrow("interrupted implementation");
+
+    const result = await dispatchWithOptions(input, {
+      softwareChange: async (changeInput) => {
+        softwareCalls++;
+        if (changeInput.branch === "sigil/base") throw new Error("software-change must not restart");
+        return changeResult(changeInput);
+      },
+      recoverChange: async (_ctx, recoveryInput) => {
+        recoveryCalls++;
+        return changeResult({
+          repo,
+          intent: recoveryInput.item.brief,
+          branch: recoveryInput.branch,
+          baseBranch: recoveryInput.baseBranch,
+          taskFile: recoveryInput.taskFile,
+        });
+      },
+      publish: makePublishStub(),
+      merge: makeMergeStub(),
+      verifyBase: makeVerifyBaseStub(),
+      wait: async () => {},
+    }, context);
+
+    expect(result.delivered).toEqual(["base", "feature", "polish"]);
+    expect(softwareCalls).toBe(3);
+    expect(recoveryCalls).toBe(1);
+  });
+
+  test("resumes interruption at repair, publish, merge, and verify boundaries", async () => {
+    for (const interrupted of ["repair", "publish", "merge", "verify"] as const) {
+      const repo = tempRepo();
+      const input = { repo, backlogFile: backlogFile(repo, backlog()), deliveryPolicy: "mergeWhenGreen" as const };
+      const context = createContext(repo, {
+        artifactRoot: join(repo, ".sigil", "runs", `${interrupted}-resume`),
+      });
+      let interruptedOnce = false;
+      const interrupt = async <T>(stage: typeof interrupted, value: T): Promise<T> => {
+        if (interrupted === stage && !interruptedOnce) {
+          interruptedOnce = true;
+          throw new Error(`interrupted ${stage}`);
+        }
+        return value;
+      };
+      const undeliverable: Record<string, Partial<SoftwareChangeResult>> = interrupted === "repair"
+        ? { "sigil/base": { valid: false, reviewBlocking: true, issues: ["repair me"] } }
+        : {};
+      const options: DispatchOptions = {
+        softwareChange: makeSoftwareChangeStub([], undeliverable),
+        repairChange: async (_ctx, recoveryInput) => interrupt("repair", changeResult({
+          repo,
+          intent: recoveryInput.item.brief,
+          branch: recoveryInput.branch,
+          baseBranch: recoveryInput.baseBranch,
+          taskFile: recoveryInput.taskFile,
+        })),
+        publish: async (targetRepo, publishInput) => interrupt("publish", await makePublishStub()(targetRepo, publishInput)),
+        merge: async (targetRepo, mergeInput) => interrupt("merge", await makeMergeStub()(targetRepo, mergeInput)),
+        verifyBase: async (targetRepo) => interrupt("verify", await makeVerifyBaseStub()(targetRepo)),
+        wait: async () => {},
+      };
+
+      await expect(dispatchWithOptions(input, options, context)).rejects.toThrow(`interrupted ${interrupted}`);
+      const interruptedState = JSON.parse(readFileSync(context.artifacts.path("dispatch-state.json"), "utf8")) as {
+        operation?: { status: string; inputArtifact: string };
+      };
+      expect(interruptedState.operation?.status).toBe("running");
+      expect(existsSync(interruptedState.operation!.inputArtifact)).toBe(true);
+      const resumed = await dispatchWithOptions(input, options, context);
+
+      expect(resumed.delivered).toEqual(["base", "feature", "polish"]);
+    }
+  });
+
 
   test("planning failure keeps the dispatch-facing plan failure result", async () => {
     const repo = tempRepo();
