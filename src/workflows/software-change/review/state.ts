@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import type { SigilContext } from "../../../context.js";
+import { acquireFileLock } from "../../../file-lock.js";
 import type { DispatchOperationType } from "../../dispatch/state.js";
 
 type ReviewOperationRecord = {
@@ -31,20 +32,18 @@ export async function runReviewOperation<T>(
     status: "running",
     inputArtifact,
   };
-  const state = await appendRecord(ctx, record);
+  await appendRecord(ctx, record);
 
   try {
     const result = await operation();
-    record.outputArtifact = await ctx.artifacts.write(
+    const outputArtifact = await ctx.artifacts.write(
       `review/${name}-output.json`,
       `${JSON.stringify(result, null, 2)}\n`,
     );
-    record.status = "completed";
-    await writeState(ctx, state);
+    await updateRecord(ctx, record.id, { status: "completed", outputArtifact });
     return result;
   } catch (error) {
-    record.status = "failed";
-    await writeState(ctx, state);
+    await updateRecord(ctx, record.id, { status: "failed" });
     throw error;
   }
 }
@@ -52,11 +51,28 @@ export async function runReviewOperation<T>(
 async function appendRecord(
   ctx: SigilContext,
   record: ReviewOperationRecord,
-): Promise<ReviewOperationState> {
+): Promise<void> {
+  await using _lock = await reviewStateLock(ctx);
   const state = await readState(ctx);
   state.operations.push(record);
   await writeState(ctx, state);
-  return state;
+}
+
+async function updateRecord(
+  ctx: SigilContext,
+  id: string,
+  update: Partial<ReviewOperationRecord>,
+): Promise<void> {
+  await using _lock = await reviewStateLock(ctx);
+  const state = await readState(ctx);
+  const record = state.operations.find((operation) => operation.id === id);
+  if (!record) throw new Error(`missing review operation: ${id}`);
+  Object.assign(record, update);
+  await writeState(ctx, state);
+}
+
+function reviewStateLock(ctx: SigilContext): Promise<AsyncDisposable> {
+  return acquireFileLock(`${ctx.artifacts.path("review/operations.json")}.lock`);
 }
 
 async function readState(ctx: SigilContext): Promise<ReviewOperationState> {

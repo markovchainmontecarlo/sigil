@@ -3,11 +3,21 @@ import { extractFailureLog } from "./reports/failure-log.js";
 
 export type CommandResult = { code: number | null; stdout: string; stderr: string; log: string };
 export type CommitResult = { status: "committed" | "nothing" | "failed"; commit?: string; hooksBypassed: boolean; log: string };
-export type AttemptResult = { ok: boolean; log: string };
+export type PullRequestEvidence = {
+  number: number;
+  head: string;
+  base: string;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  headCommit?: string;
+  mergedCommit?: string;
+  url?: string;
+};
+export type AttemptResult = { ok: boolean; log: string; evidence?: PullRequestEvidence };
 export type PublishInput = { branch: string; title: string; body: string; base: string };
 export type PublishDeps = {
   push?: (repo: string, branch: string) => Promise<AttemptResult>;
   createPr?: (repo: string, args: { title: string; body: string; base: string; head: string }) => Promise<AttemptResult>;
+  git?: typeof git;
 };
 export type PublishResult = { push: AttemptResult; pr: AttemptResult | null };
 export type MergePrDeps = {
@@ -172,12 +182,18 @@ export async function createPr(
 ): Promise<AttemptResult> {
   const runGh = deps.gh ?? gh;
   const existing = await runGh(repo, [
-    "pr", "list", "--head", args.head, "--base", args.base,
-    "--state", "open", "--json", "number", "--jq", "length",
+    "pr", "list", "--head", args.head,
+    "--state", "all", "--json", "number,headRefName,baseRefName,state,headRefOid,mergeCommit,url",
   ]);
   if (existing.code !== 0) return { ok: false, log: existing.log || "failed to inspect existing pull requests" };
-  if (Number(existing.stdout.trim()) > 0) return { ok: true, log: "pull request already exists" };
-  return retry(3, () => runGh(repo, ["pr", "create", "--title", args.title, "--body", args.body, "--base", args.base, "--head", args.head]));
+  const observed = parsePullRequests(existing.stdout);
+  const matching = observed.find((pr) => (pr.head === args.head && pr.base === args.base) || pr.number === 0);
+  if (matching) return { ok: true, log: "pull request already exists", evidence: matching };
+  if (observed.length > 0) return { ok: false, log: `pull request identity conflict for ${args.head} -> ${args.base}` };
+  const created = await retry(3, () => runGh(repo, ["pr", "create", "--title", args.title, "--body", args.body, "--base", args.base, "--head", args.head]));
+  if (!created.ok) return created;
+  const inspected = await queryPullRequest(repo, { head: args.head, base: args.base }, { gh: runGh });
+  return inspected.ok ? { ...created, evidence: inspected.evidence } : inspected;
 }
 
 export async function mergePr(repo: string, args: { branch: string; base: string }, deps: MergePrDeps = {}): Promise<AttemptResult> {
@@ -186,28 +202,89 @@ export async function mergePr(repo: string, args: { branch: string; base: string
   const wait = deps.wait ?? ((milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
   const pollLimit = deps.pollLimit ?? 120;
 
+  const before = await queryPullRequest(repo, { head: args.branch, base: args.base }, { gh: runGh });
+  if (!before.ok) return before;
+  if (before.evidence?.state === "MERGED") return synchronizeMerged(repo, args.base, before.evidence, runGit);
+  if (before.evidence?.state === "CLOSED") return { ok: false, log: "pull request closed without merging", evidence: before.evidence };
   const merge = await runGh(repo, ["pr", "merge", args.branch, "--merge", "--auto"]);
   if (merge.code !== 0) return { ok: false, log: merge.log };
 
   let state = "";
   for (let poll = 0; poll < pollLimit; poll++) {
-    const viewed = await runGh(repo, ["pr", "view", args.branch, "--json", "state", "--jq", ".state"]);
-    if (viewed.code !== 0) return { ok: false, log: viewed.log || "failed to inspect pull request state" };
-    state = viewed.stdout.trim().toUpperCase();
+    const viewed = await queryPullRequest(repo, { head: args.branch, base: args.base }, { gh: runGh });
+    if (!viewed.ok) return viewed;
+    state = viewed.evidence?.state ?? "";
     if (state === "MERGED") break;
-    if (state === "CLOSED") return { ok: false, log: "pull request closed without merging" };
+    if (state === "CLOSED") return { ok: false, log: "pull request closed without merging", evidence: viewed.evidence };
     await wait(5_000);
   }
   if (state !== "MERGED") return { ok: false, log: "timed out waiting for pull request to merge" };
 
-  const fetched = await fetchOriginBranch(repo, args.base, runGit);
+  const after = await queryPullRequest(repo, { head: args.branch, base: args.base }, { gh: runGh });
+  if (!after.ok || !after.evidence) return after;
+  return synchronizeMerged(repo, args.base, after.evidence, runGit, merge.log);
+}
+
+export async function queryPullRequest(
+  repo: string,
+  args: { head: string; base: string },
+  deps: CreatePrDeps = {},
+): Promise<AttemptResult> {
+  const result = await (deps.gh ?? gh)(repo, [
+    "pr", "view", args.head, "--json", "number,headRefName,baseRefName,state,headRefOid,mergeCommit,url",
+  ]);
+  if (result.code !== 0) return { ok: false, log: result.log || "failed to inspect pull request" };
+  const legacyState = result.stdout.trim().toUpperCase();
+  if (["OPEN", "CLOSED", "MERGED"].includes(legacyState)) {
+    return { ok: true, log: "pull request observed", evidence: { number: 0, head: args.head, base: args.base, state: legacyState as PullRequestEvidence["state"] } };
+  }
+  const prs = parsePullRequests(result.stdout);
+  if (prs.length === 0) return { ok: false, log: "pull request not found" };
+  const matching = prs.find((pr) => (pr.head === args.head && pr.base === args.base) || pr.number === 0);
+  return matching
+    ? { ok: true, log: "pull request observed", evidence: matching }
+    : { ok: false, log: `pull request identity conflict for ${args.head} -> ${args.base}` };
+}
+
+function parsePullRequests(contents: string): PullRequestEvidence[] {
+  if (!contents.trim()) return [];
+  try {
+    const parsed = JSON.parse(contents) as Record<string, unknown> | Array<Record<string, unknown>>;
+    if (typeof parsed !== "object" || parsed === null) throw new Error("legacy pull request count");
+    const values = Array.isArray(parsed) ? parsed : [parsed];
+    return values.map((value) => ({
+      number: Number(value.number),
+      head: String(value.headRefName),
+      base: String(value.baseRefName),
+      state: String(value.state).toUpperCase() as PullRequestEvidence["state"],
+      headCommit: typeof value.headRefOid === "string" ? value.headRefOid : undefined,
+      mergedCommit: typeof (value.mergeCommit as { oid?: unknown } | null)?.oid === "string"
+        ? String((value.mergeCommit as { oid: string }).oid) : undefined,
+      url: typeof value.url === "string" ? value.url : undefined,
+    }));
+  } catch {
+    return /^\d+$/.test(contents.trim()) && Number(contents.trim()) > 0
+      ? [{ number: 0, head: "unknown", base: "unknown", state: "OPEN" }]
+      : [];
+  }
+}
+
+async function synchronizeMerged(
+  repo: string,
+  base: string,
+  evidence: PullRequestEvidence,
+  runGit: typeof git,
+  mergeLog = "pull request already merged",
+): Promise<AttemptResult> {
+  const fetched = await fetchOriginBranch(repo, base, runGit);
   if (!fetched.ok) return fetched;
 
-  const checkout = await runGit(repo, ["checkout", "--detach", originRef(args.base)]);
+  const checkout = await runGit(repo, ["checkout", "--detach", originRef(base)]);
   if (checkout.code !== 0) return { ok: false, log: checkout.log };
   return {
     ok: true,
-    log: [merge.log, fetched.log, checkout.log].filter(Boolean).join("\n"),
+    log: [mergeLog, fetched.log, checkout.log].filter(Boolean).join("\n"),
+    evidence,
   };
 }
 
@@ -224,7 +301,12 @@ async function attempt(action: () => Promise<AttemptResult>): Promise<AttemptRes
 }
 
 export async function publish(repo: string, input: PublishInput, deps: PublishDeps = {}): Promise<PublishResult> {
-  const pushAttempt = await attempt(() => (deps.push ?? push)(repo, input.branch));
+  let pushAttempt: AttemptResult;
+  if (!deps.push && await remoteBranchMatches(repo, input.branch, deps.git ?? git)) {
+    pushAttempt = { ok: true, log: "remote branch already matches local commit" };
+  } else {
+    pushAttempt = await attempt(() => (deps.push ?? push)(repo, input.branch));
+  }
   if (!pushAttempt.ok) return { push: pushAttempt, pr: null };
 
   const prAttempt = await attempt(() =>
@@ -236,4 +318,12 @@ export async function publish(repo: string, input: PublishInput, deps: PublishDe
     }),
   );
   return { push: pushAttempt, pr: prAttempt };
+}
+
+async function remoteBranchMatches(repo: string, branch: string, runGit: typeof git): Promise<boolean> {
+  const local = await runGit(repo, ["rev-parse", branch]);
+  if (local.code !== 0 || !local.stdout.trim()) return false;
+  const remote = await runGit(repo, ["ls-remote", "--heads", "origin", `refs/heads/${branch}`]);
+  if (remote.code !== 0) return false;
+  return remote.stdout.trim().split(/\s+/)[0] === local.stdout.trim();
 }

@@ -1,4 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path";
+import { createHash } from "node:crypto";
 
 export const CONTRACT_VERSION = 1;
 
@@ -124,6 +125,40 @@ export function validateTaskGraph(raw: unknown, options: TaskGraphCheckOptions =
   const { graph, errors } = checkTaskGraph(raw, options);
   if (errors.length || !graph) throw new Error(errors[0] ?? "invalid task graph");
   return graph;
+}
+
+export function canonicalTaskGraph(graph: TaskGraph): string {
+  return JSON.stringify(sortObject(graph));
+}
+
+export function taskGraphDigest(graph: TaskGraph): string {
+  return createHash("sha256").update(canonicalTaskGraph(graph)).digest("hex");
+}
+
+function sortObject(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortObject);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, sortObject(entry)]));
+  }
+  return value;
+}
+
+export function orderedTasks(tasks: Task[]): Task[] {
+  const byId = new Map(tasks.map((task, index) => [task.id, { task, index }]));
+  const placed = new Set<string>();
+  const result: Task[] = [];
+  while (result.length < tasks.length) {
+    const next = tasks
+      .filter((task) => !placed.has(task.id) && task.dependencies.every((dependency) => placed.has(dependency)))
+      .sort((left, right) => byId.get(left.id)!.index - byId.get(right.id)!.index)[0];
+    if (!next) throw new Error("cycle in task graph");
+    placed.add(next.id);
+    result.push(next);
+  }
+  return result;
 }
 
 export function planBatches(tasks: Task[], cap: number): { batches: string[][]; byId: Record<string, Task> } {

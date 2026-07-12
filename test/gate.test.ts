@@ -1,10 +1,11 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import { emit, evalGate } from "../src/gate.js";
 import type { SigilAgent } from "../src/agents.js";
+import { processIdentityIsAlive, readProcessIdentity } from "../src/process-identity.js";
 
 class StubAgent implements SigilAgent {
   calls: string[] = [];
@@ -106,16 +107,24 @@ const config = {
   evals: {
     build: "cat fixture-marker.txt",
     failing: "node -e \"console.log('setup ok\\n'.repeat(4000) + 'ERROR boom\\n' + 'tail ok\\n'.repeat(4000)); process.exit(7)\"",
+    cancellable: "node process-tree.mjs",
   },
   plan: { planners: ["explorer"], synthesizer: "explorer" },
   implement: { coder: "implementer", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-  review: { reviewer: "reviewer" },
+  review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };
 
 function repoWithConfig(): string {
   const dir = tempDir();
   writeFileSync(join(dir, "sigil.config.json"), JSON.stringify(config, null, 2));
   writeFileSync(join(dir, "fixture-marker.txt"), "build ok from fixture\n");
+  writeFileSync(join(dir, "process-tree.mjs"), `
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+    writeFileSync("descendant.pid", String(child.pid));
+    setInterval(() => {}, 1000);
+  `);
   return dir;
 }
 
@@ -147,5 +156,20 @@ describe("evalGate", () => {
     if (result.skipped) throw new Error("expected configured eval to run");
     expect(result.log).toContain("ERROR boom");
     expect(result.log).toContain("=== failure lines (extracted) ===");
+  });
+
+  test("cancellation removes gate descendants before returning", async () => {
+    const dir = repoWithConfig();
+    const pidFile = join(dir, "descendant.pid");
+    const abort = new AbortController();
+    const running = evalGate("cancellable", { cwd: dir, signal: abort.signal });
+    while (!existsSync(pidFile)) await new Promise((resolve) => setTimeout(resolve, 10));
+    const descendant = await readProcessIdentity(Number(readFileSync(pidFile, "utf8")));
+
+    abort.abort();
+    const result = await running;
+
+    expect(result.ok).toBe(false);
+    expect(await processIdentityIsAlive(descendant)).toBe(false);
   });
 });

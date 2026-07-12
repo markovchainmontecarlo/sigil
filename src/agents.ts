@@ -9,20 +9,38 @@ import { z } from "zod";
 import { type AgentBinding, loadConfig, resolveAgentBinding } from "./config.js";
 import { retryPromptLoop } from "./gate.js";
 import { readCodexAccountStatus } from "./codex-rate-limits.js";
-import { releaseCodexProfile, reserveCodexProfile } from "./codex-router.js";
+import {
+  recordActiveCapacityExhaustion,
+  releaseCodexProfile,
+  reserveCodexProfile,
+  type CodexCapacityTelemetry,
+} from "./codex-router.js";
 import type { CodexAssignment, CapacityReader } from "./codex-router.js";
 import type { CodexProfileStore, CodexUsage } from "./codex-profiles.js";
 import type { CodexProfile } from "./codex-profiles.js";
 import { OwnedCodexAcpConnection, type OwnedAcpEvent } from "./codex-acp.js";
 import type { ProcessIdentity } from "./process-identity.js";
+import type { ProcessLifecycle } from "./owned-process.js";
+import { classifyProviderFailure, ProviderError, type ProviderFailure } from "./provider-failure.js";
 
 export interface SigilAgent {
   prompt(text: string): Promise<string>;
   prompt<T>(text: string, schema: z.ZodType<T>): Promise<T>;
+  promptWithOptions?<T>(
+    text: string,
+    schema: z.ZodType<T> | undefined,
+    options: AgentPromptOptions,
+  ): Promise<string | T>;
   close(): Promise<void>;
   [Symbol.asyncDispose](): Promise<void>;
   readonly runtime?: AgentRuntimeMetadata;
 }
+
+export type AgentProgressKind = "text" | "tool" | "provider";
+export type AgentPromptOptions = {
+  signal?: AbortSignal;
+  onProgress?: (kind: AgentProgressKind) => void;
+};
 
 export type AgentRuntimeMetadata = {
   binding?: string;
@@ -40,8 +58,12 @@ export type AgentOptions = {
   profileStore?: CodexProfileStore;
   resumeSessionId?: string;
   onRuntimeUpdate?: (runtime: AgentRuntimeMetadata) => void | Promise<void>;
+  processLifecycle?: ProcessLifecycle;
+  onCapacityTelemetry?: (telemetry: CodexCapacityTelemetry) => void | Promise<void>;
 };
 export const SCHEMA_PROMPT_RETRY_ATTEMPTS = 2;
+const DEFAULT_ACTIVE_CAPACITY_POLL_INTERVAL_MS = 30_000;
+const ACTIVE_CAPACITY_STOP_GRACE_MS = 250;
 
 export class SchemaPromptError extends Error {
   constructor(readonly issue: string) {
@@ -56,8 +78,8 @@ export function isSchemaPromptError(error: unknown): error is SchemaPromptError 
 
 type GenerateResult<T = unknown> = { text: string; object?: T };
 type ClaudeGenerate = <T>(text: string, options?: Record<string, unknown>) => Promise<GenerateResult<T>>;
-type CodexGenerate = (text: string) => Promise<string>;
-type CopilotSessionLike = Pick<CopilotSession, "sendAndWait" | "disconnect">;
+type CodexGenerate = (text: string, options?: AgentPromptOptions) => Promise<string>;
+type CopilotSessionLike = Pick<CopilotSession, "sendAndWait" | "abort" | "disconnect" | "on">;
 type CopilotClientLike = {
   createSession(config: SessionConfig): Promise<CopilotSessionLike>;
   stop(): Promise<Error[]>;
@@ -139,19 +161,35 @@ function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions):
   let assignment: CodexAssignment | undefined;
   let acp: OwnedCodexAcpConnection | undefined;
   let usage: CodexUsage | undefined;
+  let failure: ProviderFailure | undefined;
   let runtimeHeartbeat: ReturnType<typeof setInterval> | undefined;
   const runtime: AgentRuntimeMetadata = {
     binding: `${binding.provider}:${binding.model}`,
   };
+  const readCapacity = options.capacityReader ?? (async (profile: CodexProfile) => (
+    await readCodexAccountStatus(profile, { processLifecycle: options.processLifecycle })
+  ).capacity);
 
   const connection = async (): Promise<OwnedCodexAcpConnection> => {
     if (acp) return acp;
-    assignment = await reserveCodexProfile(
-      options.capacityReader ?? (async (profile) => (await readCodexAccountStatus(profile)).capacity),
+    const admission = await reserveCodexProfile(
+      readCapacity,
       options.profileStore,
     );
-    runtime.profile = assignment?.profile.name;
-    acp = createCodexAcp(binding, cwd, assignment?.profile.home, {
+    for (const telemetry of admission.telemetry) await options.onCapacityTelemetry?.(telemetry);
+    if (admission.status === "capacity-blocked") {
+      throw new ProviderError(`Codex capacity blocked: ${admission.reasons.join("; ")}`, {
+        code: "capacity_exhausted",
+      });
+    }
+    if (admission.status === "configuration-error") {
+      throw new ProviderError(`Codex profile configuration error: ${admission.errors.join("; ")}`, {
+        code: "invalid_request",
+      });
+    }
+    assignment = admission.assignment;
+    runtime.profile = assignment.profile.name;
+    acp = createCodexAcp(binding, cwd, assignment.profile.home, {
       resumeSessionId: options.resumeSessionId,
       onProcessStarted: async (identity) => {
         assignChildRuntime(runtime, identity);
@@ -162,17 +200,54 @@ function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions):
           30_000,
         );
       },
+      processLifecycle: options.processLifecycle,
     });
     return acp;
   };
 
-  const generate = async (text: string) => {
+  const generate = async (text: string, promptOptions?: AgentPromptOptions) => {
     const active = await connection();
     const chunks: string[] = [];
     let turnUsage: CodexUsage | undefined;
-    for await (const event of active.promptStream(text)) {
-      if (event.type === "text") chunks.push(event.text);
-      if (event.type === "session-update") turnUsage = usageFromEvent(event, turnUsage);
+    const promptController = new AbortController();
+    const cancelPrompt = () => promptController.abort(promptOptions?.signal?.reason);
+    promptOptions?.signal?.addEventListener("abort", cancelPrompt, { once: true });
+    if (promptOptions?.signal?.aborted) cancelPrompt();
+    let capacityFailure: ProviderError | undefined;
+    const guard = monitorActiveCodexCapacity(
+      assignment,
+      readCapacity,
+      options.profileStore,
+      async (telemetry) => {
+        capacityFailure = new ProviderError(
+          `Codex capacity floor reached for profile ${telemetry.profile}`,
+          { code: "capacity_exhausted", account: telemetry.profile },
+        );
+        promptController.abort(capacityFailure);
+        await options.onCapacityTelemetry?.(telemetry);
+      },
+    );
+    try {
+      for await (const event of active.promptStream(text, promptController.signal)) {
+        if (event.type === "text") {
+          chunks.push(event.text);
+          promptOptions?.onProgress?.("text");
+        }
+        if (event.type === "session-update") turnUsage = usageFromEvent(event, turnUsage);
+        if (event.type === "session-update" && event.update.sessionUpdate !== "usage_update") {
+          promptOptions?.onProgress?.(providerProgressKind(event));
+        }
+      }
+    } catch (error) {
+      if (capacityFailure) {
+        failure = classifyProviderFailure(capacityFailure);
+        throw capacityFailure;
+      }
+      failure = classifyProviderFailure(error);
+      throw error;
+    } finally {
+      promptOptions?.signal?.removeEventListener("abort", cancelPrompt);
+      await guard.stop();
     }
     usage = addCodexUsage(usage, turnUsage);
     runtime.providerSessionId = active.sessionId;
@@ -184,19 +259,96 @@ function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions):
   return createCodexAgentFromGenerate(generate, async () => {
     if (runtimeHeartbeat) clearInterval(runtimeHeartbeat);
     await acp?.disconnect();
-    if (assignment) await releaseCodexProfile(assignment.reservation.id, usage, options.profileStore);
+    if (assignment) await releaseCodexProfile(assignment.reservation.id, usage, failure, options.profileStore);
     runtime.active = false;
     await options.onRuntimeUpdate?.(runtime);
   }, runtime);
 }
 
+type ActiveCapacityGuard = {
+  stop(): Promise<void>;
+};
+
+export function monitorActiveCodexCapacity(
+  assignment: CodexAssignment | undefined,
+  readCapacity: CapacityReader,
+  store: CodexProfileStore | undefined,
+  cancel: (telemetry: CodexCapacityTelemetry) => Promise<void>,
+): ActiveCapacityGuard {
+  const profile = assignment?.profile;
+  if (!assignment || profile?.profileClass !== "subscription") return { stop: async () => {} };
+
+  let stopped = false;
+  let triggered = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let observation: Promise<void> | undefined;
+  const interval = profile.activeCapacityPollIntervalMs
+    ?? DEFAULT_ACTIVE_CAPACITY_POLL_INTERVAL_MS;
+  const observe = async () => {
+    const capacity = normalizeActiveCapacity(await readCapacity(profile));
+    if (stopped || triggered || capacity.kind !== "available") return;
+    const floor = profile.reserveFloorPercentage ?? 0;
+    if (capacity.remainingPercentage > floor) return;
+
+    triggered = await recordActiveCapacityExhaustion(
+      assignment.reservation.id,
+      capacity.observedAt,
+      store,
+    );
+    if (!triggered) return;
+    await cancel({
+      profile: profile.name,
+      capacityClass: "at-or-below-floor",
+      configuredFloor: floor,
+      admissionOutcome: "assigned",
+      capacityTriggeredCancellation: true,
+    });
+  };
+  const schedule = () => {
+    if (stopped || triggered) return;
+    timer = setTimeout(() => {
+      observation = observe().catch(() => {}).finally(schedule);
+    }, interval);
+  };
+  schedule();
+
+  return {
+    async stop() {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+      if (!observation) return;
+      await Promise.race([
+        observation,
+        new Promise<void>((resolve) => setTimeout(resolve, ACTIVE_CAPACITY_STOP_GRACE_MS)),
+      ]);
+    },
+  };
+}
+
+function normalizeActiveCapacity(
+  capacity: Awaited<ReturnType<CapacityReader>>,
+): import("./codex-router.js").SubscriptionCapacity {
+  if ("kind" in capacity) return capacity;
+  const observedAt = new Date().toISOString();
+  if (capacity.available && capacity.remainingPercentage !== undefined) {
+    return {
+      kind: "available",
+      available: true,
+      observedAt,
+      remainingPercentage: capacity.remainingPercentage,
+    };
+  }
+  return { kind: "unavailable", available: false, observedAt };
+}
+
 function createCodexAcp(
   binding: AgentBinding,
   cwd: string,
-  codexHome?: string,
+  codexHome: string,
   options: {
     resumeSessionId?: string;
     onProcessStarted?: (identity: ProcessIdentity) => void | Promise<void>;
+    processLifecycle?: ProcessLifecycle;
   } = {},
 ): OwnedCodexAcpConnection {
   const { command, baseArgs } = resolveCodexAcpBin();
@@ -212,34 +364,46 @@ function createCodexAcp(
     `model=${binding.model}`,
     "-c",
     `model_reasoning_effort=${agentEffort(binding)}`,
+    "-c",
+    "model_auto_compact_token_limit=270000",
+    "-c",
+    "features.multi_agent=false",
+    "-c",
+    "features.multi_agent_v2=false",
   ];
   return new OwnedCodexAcpConnection({
     command,
     args,
     env: {
       NPM_CONFIG_CACHE: join(tmpdir(), "sigil-npm-cache"),
-      ...(codexHome ? { CODEX_HOME: codexHome } : {}),
+      CODEX_HOME: codexHome,
     },
     cwd,
-    model: binding.model,
     resumeSessionId: options.resumeSessionId,
     onProcessStarted: options.onProcessStarted,
+    processLifecycle: options.processLifecycle,
   });
 }
 
-export async function primeCodexProfile(profile: CodexProfile, binding: AgentBinding): Promise<{
+export async function primeCodexProfile(
+  profile: CodexProfile,
+  binding: AgentBinding,
+  processLifecycle?: ProcessLifecycle,
+): Promise<{
   before: Awaited<ReturnType<typeof readCodexAccountStatus>>;
   after: Awaited<ReturnType<typeof readCodexAccountStatus>>;
   windowStarted: boolean;
 }> {
-  const before = await readCodexAccountStatus(profile);
+  const before = await readCodexAccountStatus(profile, { processLifecycle });
   if (before.profileClass !== "subscription") throw new Error(`profile ${profile.name} is not a subscription`);
-  if (before.capacity.remainingPercentage !== undefined) return { before, after: before, windowStarted: false };
+  if (before.capacity.kind === "available") return { before, after: before, windowStarted: false };
 
-  await using acp = createCodexAcp(binding, process.cwd(), profile.home);
+  await using acp = createCodexAcp(binding, process.cwd(), profile.home, {
+    processLifecycle,
+  });
   for await (const _event of acp.promptStream("Reply with OK.")) {}
-  const after = await readCodexAccountStatus(profile);
-  return { before, after, windowStarted: after.capacity.remainingPercentage !== undefined };
+  const after = await readCodexAccountStatus(profile, { processLifecycle });
+  return { before, after, windowStarted: after.capacity.kind === "available" };
 }
 
 function createCopilot(binding: AgentBinding, cwd: string): SigilAgent {
@@ -251,8 +415,16 @@ export function createClaudeAgentFromGenerate(generate: ClaudeGenerate, close: (
   let continued = false;
 
   return {
-    prompt<T>(text: string, schema?: z.ZodType<T>): Promise<string | T> {
-      return promptClaude(generate, continued, text, schema).then((result) => {
+    prompt<T>(text: string, schemaOrOptions?: z.ZodType<T> | AgentPromptOptions, options?: AgentPromptOptions): Promise<string | T> {
+      const schema = schemaOrOptions instanceof z.ZodType ? schemaOrOptions : undefined;
+      const promptOptions = schemaOrOptions instanceof z.ZodType ? options : schemaOrOptions;
+      return promptClaude(generate, continued, text, schema, promptOptions).then((result) => {
+        continued = true;
+        return result;
+      });
+    },
+    promptWithOptions<T>(text: string, schema: z.ZodType<T> | undefined, options: AgentPromptOptions) {
+      return promptClaude(generate, continued, text, schema, options).then((result) => {
         continued = true;
         return result;
       });
@@ -272,8 +444,17 @@ export function createCodexAgentFromGenerate(
   runtime: AgentRuntimeMetadata = {},
 ): SigilAgent {
   return {
-    prompt<T>(text: string, schema?: z.ZodType<T>): Promise<string | T> {
-      return schema ? promptCodexWithSchema(generate, text, schema) : generate(text);
+    prompt<T>(text: string, schemaOrOptions?: z.ZodType<T> | AgentPromptOptions, options?: AgentPromptOptions): Promise<string | T> {
+      const schema = schemaOrOptions instanceof z.ZodType ? schemaOrOptions : undefined;
+      const promptOptions = schema ? options : schemaOrOptions as AgentPromptOptions | undefined;
+      return schema
+        ? promptCodexWithSchema(generate, text, schema, SCHEMA_PROMPT_RETRY_ATTEMPTS, promptOptions)
+        : generate(text, promptOptions);
+    },
+    promptWithOptions<T>(text: string, schema: z.ZodType<T> | undefined, options: AgentPromptOptions) {
+      return schema
+        ? promptCodexWithSchema(generate, text, schema, SCHEMA_PROMPT_RETRY_ATTEMPTS, options)
+        : generate(text, options);
     },
     async close() {
       await close();
@@ -295,6 +476,11 @@ export function usageFromEvent(event: OwnedAcpEvent, previous?: CodexUsage): Cod
     reasoningTokens: 0,
     totalTokens: update.used,
   };
+}
+
+function providerProgressKind(event: Extract<OwnedAcpEvent, { type: "session-update" }>): AgentProgressKind {
+  const kind = event.update.sessionUpdate;
+  return kind.includes("tool") ? "tool" : "provider";
 }
 
 function assignChildRuntime(runtime: AgentRuntimeMetadata, identity: ProcessIdentity): void {
@@ -328,9 +514,23 @@ export function createCopilotAgentFromClient(client: CopilotClientLike, binding:
   };
 
   return createCopilotAgentFromGenerate(
-    async (text) => {
-      const response = await (await getSession()).sendAndWait({ prompt: text });
-      return response?.data.content ?? "";
+    async (text, options) => {
+      const active = await getSession();
+      const unsubscribe = active.on((event) => {
+        if (event.type === "assistant.message_delta") options?.onProgress?.("text");
+        else options?.onProgress?.("provider");
+      });
+      const abort = () => void active.abort();
+      options?.signal?.addEventListener("abort", abort, { once: true });
+
+      try {
+        options?.signal?.throwIfAborted();
+        const response = await active.sendAndWait({ prompt: text });
+        return response?.data.content ?? "";
+      } finally {
+        options?.signal?.removeEventListener("abort", abort);
+        unsubscribe();
+      }
     },
     async () => {
       if (session) await (await session).disconnect();
@@ -343,10 +543,32 @@ export function createCopilotAgentFromGenerate(generate: CodexGenerate, close: (
   return createCodexAgentFromGenerate(generate, close);
 }
 
-async function promptClaude<T>(generate: ClaudeGenerate, continued: boolean, text: string, schema?: z.ZodType<T>): Promise<string | T> {
+async function promptClaude<T>(
+  generate: ClaudeGenerate,
+  continued: boolean,
+  text: string,
+  schema?: z.ZodType<T>,
+  promptOptions?: AgentPromptOptions,
+): Promise<string | T> {
   let options: Record<string, unknown> | undefined = schema ? { structuredOutput: { schema } } : undefined;
-  if (continued) options = { ...(options ?? {}), sdkOptions: { continue: true } };
-  const result = await generate<T>(text, options);
+  const abortController = new AbortController();
+  const abort = () => abortController.abort(promptOptions?.signal?.reason);
+  promptOptions?.signal?.addEventListener("abort", abort, { once: true });
+  if (promptOptions?.signal?.aborted) abort();
+  options = {
+    ...(options ?? {}),
+    sdkOptions: {
+      ...(continued ? { continue: true } : {}),
+      abortController,
+    },
+  };
+
+  let result: GenerateResult<T>;
+  try {
+    result = await generate<T>(text, options);
+  } finally {
+    promptOptions?.signal?.removeEventListener("abort", abort);
+  }
   if (!schema) return result.text;
   const checked = schema.safeParse(result.object);
   if (!checked.success) {
@@ -374,13 +596,14 @@ export async function promptCodexWithSchema<T>(
   text: string,
   schema: z.ZodType<T>,
   attempts = SCHEMA_PROMPT_RETRY_ATTEMPTS,
+  options?: AgentPromptOptions,
 ): Promise<T> {
   let reply = "";
   const result = await retryPromptLoop<{ ok: true; value: T }>({
     initialPrompt: schemaPrompt(text),
     attempts,
     runTurn: async (turnPrompt) => {
-      reply = await generate(turnPrompt);
+      reply = await generate(turnPrompt, options);
     },
     validate: async () => validateJsonReply(reply, schema),
     correctionPrompt: schemaCorrectionPrompt,

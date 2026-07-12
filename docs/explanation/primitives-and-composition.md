@@ -4,6 +4,26 @@ Sigil's authoring surface is intentionally small. A TypeScript Sigil is a workfl
 
 The useful way to think about Sigil is not as a list of commands. It is a set of primitives for arranging tool-using agents behind deterministic workflow control.
 
+## Readable workflow bodies
+
+A workflow body should read top to bottom as its plain-language description. Use one statement for each conceptual step and keep those statements in execution order. Let typed return values carry state between steps.
+
+```ts
+const repository = await ctx.run(inspectRepository, input);
+const options = await ctx.run(researchOptions, { input, repository });
+const reviews = await ctx.parallel(options.map((option) => reviewOption(ctx, option)));
+const decision = await ctx.run(selectOption, { repository, options, reviews });
+const verification = await ctx.run(verifyDecision, { repository, decision });
+
+return { decision, verification };
+```
+
+The body is dynamic because runtime results can change the options and parallel work. It remains readable because ordinary TypeScript expresses the control flow directly.
+
+Push operation plumbing behind the operation that owns it. Prompt text and model bindings do not belong in maintained workflow bodies. Do not pass values through write-then-read artifact chains when a typed return is sufficient. Keep resource lifecycle scoped. Keep retry counters, checkpoint serialization, and issue collection in one policy-owning operation when they are not themselves consequential workflow decisions.
+
+Do not hide meaningful behavior merely to shorten the body. Branches, bounded loop conditions, verification decisions, state transitions, and authority-bearing effects should remain visible. Readability comes from matching code statements to workflow steps, not from making TypeScript resemble YAML.
+
 ## Agent
 
 `ctx.agent(...)` creates one tool-using agent object. The agent can be referenced by a configured name or by an inline provider/model binding. Use `ctx.withAgent(...)` when one callback should own the agent lifecycle.

@@ -71,7 +71,7 @@ function tempGitRepo(): string {
     context: [],
     plan: { planners: ["planner"], synthesizer: "synthesizer" },
     implement: { coder: "planner", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "synthesizer" },
+    review: { reviewers: ["synthesizer"], synthesizer: "synthesizer" },
   }, null, 2));
   writeFileSync(join(dir, "app.txt"), "hello\n");
   git(dir, ["init", "-b", "main"]);

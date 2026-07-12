@@ -21,7 +21,7 @@ const validConfig = {
   evals: { build: "bun run typecheck", test: "bun test" },
   plan: { planners: ["explorer", "implementer"], synthesizer: "explorer" },
   implement: { coder: "implementer", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-  review: { reviewer: "reviewer" },
+  review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };
 
 describe("loadConfig", () => {
@@ -39,6 +39,17 @@ describe("loadConfig", () => {
     expect(config.context).toEqual([]);
     expect(config.plan.planners).toEqual(["explorer", "implementer"]);
     expect(config.review.followUpReviews).toBe(0);
+    expect(config.implement.idleTimeoutMs).toBePositive();
+  });
+
+  test.each(["operationTimeoutMs", "idleTimeoutMs"])("%s must be positive", (field) => {
+    const root = tempRepo();
+    writeConfig(root, {
+      ...validConfig,
+      implement: { ...validConfig.implement, [field]: 0 },
+    });
+
+    expect(() => loadConfig(root)).toThrow();
   });
 
   test("context entries parse with update defaulting false", () => {
@@ -55,6 +66,23 @@ describe("loadConfig", () => {
       { path: "ARCHITECTURE.md", update: false },
       { path: "remaining-work.md", update: true },
     ]);
+  });
+
+  test("workspace readiness is optional and rejects empty commands", () => {
+    const root = tempRepo();
+    writeConfig(root, {
+      ...validConfig,
+      workspace: { bootstrap: "install", ready: "test -d dependencies" },
+    });
+    expect(loadConfig(root).workspace).toEqual({
+      bootstrap: "install",
+      ready: "test -d dependencies",
+    });
+
+    const invalid = tempRepo();
+    writeConfig(invalid, { ...validConfig, workspace: { bootstrap: "install", ready: "" } });
+    expect(() => loadConfig(invalid)).toThrow();
+    expect(loadConfig(root).workspace.bootstrap).toBe("install");
   });
 
   test("copilot agent provider parses", () => {

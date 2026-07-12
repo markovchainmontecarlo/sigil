@@ -40,18 +40,19 @@ export async function reconcileRepository(
   const actual = await readRepositoryState(repo);
   const branchAllowed = actual.branch === expected.branch || actual.branch === options.activeBranch;
   if (!branchAllowed) throw new Error(`unexpected branch: expected ${options.activeBranch ?? expected.branch}, found ${actual.branch}`);
-  const unchangedBranch = actual.branch === expected.branch;
-  if (unchangedBranch && expected.expectedHead && actual.head !== expected.expectedHead) {
+  if (expected.expectedHead && actual.head !== expected.expectedHead) {
     throw new Error(`unexpected commit: expected ${expected.expectedHead}, found ${actual.head}`);
   }
-  if (actual.dirty && !options.allowDirty) throw new Error("unexpected dirty working tree; resume refused before mutation");
+  if (expected.baseCommit && (await git(repo, ["merge-base", "--is-ancestor", expected.baseCommit, actual.head])).code !== 0) {
+    throw new Error(`expected base ${expected.baseCommit} is not an ancestor of ${actual.head}`);
+  }
+  if (expected.tree === "dirty" && !actual.dirty) throw new Error("expected interrupted dirty worktree, found clean state");
   if (actual.dirty
-    && !options.allowDirty
-    && unchangedBranch
-    && expected.diffDigest
-    && actual.diffDigest !== expected.diffDigest) {
+    && options.allowDirty
+    && (!expected.diffDigest || actual.diffDigest !== expected.diffDigest)) {
     throw new Error("working-tree changes do not match the interrupted operation");
   }
+  if (actual.dirty && !options.allowDirty) throw new Error("unexpected dirty working tree; resume refused before mutation");
   if (!actual.dirty) return actual;
   return { ...actual, recoveryRef: await createRecoveryRef(repo, operationId) };
 }

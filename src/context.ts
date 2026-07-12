@@ -1,12 +1,12 @@
-import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { z } from "zod";
 
-import { agent as createAgent, isSchemaPromptError, type AgentOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agents.js";
+import { agent as createAgent, isSchemaPromptError, type AgentOptions, type AgentPromptOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agents.js";
 import { loadConfig, type AgentBinding, type ContextEntry } from "./config.js";
 import { emit as gateEmit, evalGate, type EmitOptions, type EmitResult, type EvalGateResult } from "./gate.js";
 import { createArtifactRoot, ensureRunStorageIgnored } from "./paths.js";
+import { OwnedProcess, type ProcessLifecycle } from "./owned-process.js";
 
 export type LoadedContextEntry = {
   path: string;
@@ -42,6 +42,8 @@ export type ShellCommand =
       args?: string[];
       cwd?: string;
       env?: NodeJS.ProcessEnv;
+      signal?: AbortSignal;
+      timeoutMs?: number;
     };
 export type ShellResult = {
   ok: boolean;
@@ -67,9 +69,12 @@ export type CreateContextOptions = {
   artifactRoot?: string;
   agentOptions?: Omit<AgentOptions, "cwd">;
   onAgentRuntime?: (runtime: AgentRuntimeMetadata) => void | Promise<void>;
+  signal?: AbortSignal;
+  processLifecycle?: ProcessLifecycle;
 };
 
 export interface SigilContext {
+  readonly repo: string;
   agent(binding: string | AgentBinding, options?: Omit<AgentOptions, "cwd" | "onRuntimeUpdate">): RichSigilAgent;
   withAgent<T>(binding: string | AgentBinding, fn: (agent: RichSigilAgent) => Promise<T>): Promise<T>;
   parallel<T>(jobs: Array<() => Promise<T>>): Promise<T[]>;
@@ -85,6 +90,7 @@ export interface SigilContext {
   fork(options: { artifactRoot: string; operationPath: string }): SigilContext;
   readonly issues: readonly string[];
   artifacts: ArtifactHelpers;
+  readonly processLifecycle?: ProcessLifecycle;
 }
 
 export function createContext(
@@ -123,12 +129,25 @@ export function createContext(
   let statusSequence = 0;
 
   const ctx: SigilContext = {
+    repo,
     agent(binding, agentOptions = {}) {
       return wrapAgentForContext(agentFactory(binding, {
         cwd: repo,
         ...options.agentOptions,
         ...agentOptions,
+        processLifecycle: options.processLifecycle,
         onRuntimeUpdate: options.onAgentRuntime,
+        onCapacityTelemetry: async (telemetry) => {
+          await options.agentOptions?.onCapacityTelemetry?.(telemetry);
+          await agentOptions.onCapacityTelemetry?.(telemetry);
+          await ctx.observe("agent-capacity", {
+            profile: telemetry.profile,
+            capacityClass: telemetry.capacityClass,
+            configuredFloor: String(telemetry.configuredFloor),
+            admissionOutcome: telemetry.admissionOutcome,
+            capacityTriggeredCancellation: String(telemetry.capacityTriggeredCancellation),
+          });
+        },
       }), {
         artifactPath: artifacts.path,
         issue: recordIssue,
@@ -163,11 +182,15 @@ export function createContext(
       return child(input, ctx);
     },
     sh(command) {
-      return runShell(command, repo);
+      return runShell(command, repo, options.signal, options.processLifecycle);
     },
     async evals(name) {
       await ctx.observe("gate-started", { gate: name });
-      const result = await evalGate(name, { cwd: repo });
+      const result = await evalGate(name, {
+        cwd: repo,
+        signal: options.signal,
+        processLifecycle: options.processLifecycle,
+      });
       await ctx.observe("gate-completed", {
         gate: name,
         outcome: result.skipped ? "skipped" : result.ok ? "passed" : "failed",
@@ -211,12 +234,15 @@ export function createContext(
         }),
         agentOptions: options.agentOptions,
         onAgentRuntime: options.onAgentRuntime,
+        signal: options.signal,
+        processLifecycle: options.processLifecycle,
       });
     },
     get issues() {
       return issues;
     },
     artifacts,
+    processLifecycle: options.processLifecycle,
   };
   return ctx;
 }
@@ -235,31 +261,40 @@ async function runSettledJob<T>(
   }
 }
 
-function runShell(command: ShellCommand, repo: string): Promise<ShellResult> {
+async function runShell(
+  command: ShellCommand,
+  repo: string,
+  contextSignal?: AbortSignal,
+  processLifecycle?: ProcessLifecycle,
+): Promise<ShellResult> {
   const cwd = typeof command === "string" ? repo : command.cwd ?? repo;
   const executable = typeof command === "string" ? "bash" : command.command;
   const args = typeof command === "string" ? ["-lc", command] : command.args ?? [];
   const env = { ...process.env, CI: process.env.CI ?? "1", ...(typeof command === "string" ? {} : command.env) };
-
-  return new Promise((resolve) => {
-    execFile(executable, args, { cwd, env, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
-      const exitCode = shellExitCode(error);
-      const ok = exitCode === 0;
-      resolve({
-        ok,
-        stdout,
-        stderr,
-        exitCode,
-        message: ok ? "command succeeded" : `command failed with exit code ${exitCode ?? "unknown"}`,
-      });
-    });
+  const commandSignal = typeof command === "string" ? undefined : command.signal;
+  const timeoutMs = typeof command === "string" ? undefined : command.timeoutMs;
+  const signals = [commandSignal, contextSignal, timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined]
+    .filter((value): value is AbortSignal => value !== undefined);
+  const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+  await using owned = await OwnedProcess.spawn({
+    command: executable,
+    args,
+    cwd,
+    env,
+    kind: "shell",
+    signal,
+    lifecycle: processLifecycle,
   });
-}
-
-function shellExitCode(error: Error | null): number | null {
-  if (!error) return 0;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "number" ? code : null;
+  const result = await owned.wait();
+  const exitCode = result.exitCode;
+  const ok = exitCode === 0;
+  return {
+    ok,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode,
+    message: ok ? "command succeeded" : `command failed with exit code ${exitCode ?? "unknown"}`,
+  };
 }
 
 function errorMessage(error: unknown): string {
@@ -279,26 +314,54 @@ export function wrapAgentForContext(
   const emit = context.emit ?? gateEmit;
 
   return {
-    async prompt<T>(text: string, arg?: z.ZodType<T> | AgentWriteOptions<string> | AgentWriteOptions<string[]>): Promise<string | T | Record<string, string>> {
+    async prompt<T>(
+      text: string,
+      arg?: z.ZodType<T> | AgentWriteOptions<string> | AgentWriteOptions<string[]> | AgentPromptOptions,
+      promptOptions?: AgentPromptOptions,
+    ): Promise<string | T | Record<string, string>> {
       await context.observe?.("agent-started", { role: context.role ?? "agent" });
       const heartbeat = context.observe
-        ? setInterval(() => void context.observe?.("agent-waiting", { role: context.role ?? "agent" }), 30_000)
+        ? setInterval(() => void context.observe?.("agent-heartbeat", { role: context.role ?? "agent" }), 30_000)
         : undefined;
+      const schema = isSchema(arg) ? arg : undefined;
+      const options = schema ? promptOptions : isPromptOptions(arg) ? arg : undefined;
+      const observedOptions: AgentPromptOptions = {
+        ...options,
+        onProgress(kind) {
+          options?.onProgress?.(kind);
+          void context.observe?.("agent-progress", {
+            role: context.role ?? "agent",
+            kind,
+          });
+        },
+      };
       try {
         const result = await (isWriteOptions(arg)
           ? promptWithWrites(base, emit, context.artifactPath, context.issue, text, arg)
-          : arg === undefined
-            ? base.prompt(text)
-            : base.prompt(text, arg));
+          : schema
+            ? base.promptWithOptions?.(text, schema, observedOptions) ?? base.prompt(text, schema)
+            : base.promptWithOptions?.(text, undefined, observedOptions) ?? base.prompt(text));
         await context.observe?.("agent-completed", { role: context.role ?? "agent" });
-        return result;
+        return result as string | T | Record<string, string>;
       } catch (error) {
         if (isSchemaPromptError(error)) context.issue(`schema prompt failed: ${error.message}`);
+        if (options?.signal?.aborted) {
+          await context.observe?.("agent-cancelled", { role: context.role ?? "agent" });
+        }
         await context.observe?.("agent-failed", { role: context.role ?? "agent", error: errorMessage(error) });
         throw error;
       } finally {
         if (heartbeat) clearInterval(heartbeat);
       }
+    },
+    promptWithOptions<T>(
+      text: string,
+      schema: z.ZodType<T> | undefined,
+      options: AgentPromptOptions,
+    ) {
+      return schema
+        ? Reflect.apply(this.prompt, this, [text, schema, options])
+        : Reflect.apply(this.prompt, this, [text, options]);
     },
     close() {
       return base.close();
@@ -307,6 +370,17 @@ export function wrapAgentForContext(
       return base[Symbol.asyncDispose]();
     },
   };
+}
+
+function isSchema(value: unknown): value is z.ZodType {
+  return typeof value === "object" && value !== null && "safeParse" in value;
+}
+
+function isPromptOptions(value: unknown): value is AgentPromptOptions {
+  return typeof value === "object"
+    && value !== null
+    && !isWriteOptions(value)
+    && !isSchema(value);
 }
 
 function isWriteOptions(value: unknown): value is AgentWriteOptions {

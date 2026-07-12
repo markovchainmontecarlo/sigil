@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import { readCodexAccountStatus } from "../src/codex-rate-limits.js";
 import type { CodexProfile } from "../src/codex-profiles.js";
+import { processIdentityIsAlive, readProcessIdentity } from "../src/process-identity.js";
 
 const profile: CodexProfile = {
   name: "test",
@@ -18,7 +19,10 @@ function appServer(source: string) {
   const directory = mkdtempSync(join(tmpdir(), "sigil-app-server-"));
   const script = join(directory, "server.mjs");
   writeFileSync(script, source);
-  return () => spawn(process.execPath, [script], { stdio: ["pipe", "pipe", "pipe"] });
+  return () => spawn(process.execPath, [script], {
+    detached: process.platform !== "win32",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
 }
 
 describe("Codex app-server capacity reads", () => {
@@ -40,23 +44,36 @@ describe("Codex app-server capacity reads", () => {
     const status = await readCodexAccountStatus(profile, { spawnAppServer, timeoutMs: 500 });
 
     expect(status.profileClass).toBe("subscription");
-    expect(status.capacity.remainingPercentage).toBe(65);
+    expect(status.capacity.kind).toBe("available");
+    expect(status.capacity.kind === "available" && status.capacity.remainingPercentage).toBe(65);
   });
 
   test("bounds a non-responsive profile", async () => {
-    const spawnAppServer = appServer("setInterval(() => {}, 1000);");
+    const directory = mkdtempSync(join(tmpdir(), "sigil-capacity-descendant-"));
+    const pidFile = join(directory, "descendant.pid");
+    const spawnAppServer = appServer(`
+      import { spawn } from "node:child_process";
+      import { writeFileSync } from "node:fs";
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+      setInterval(() => {}, 1000);
+    `);
     const started = Date.now();
 
-    await expect(readCodexAccountStatus(profile, { spawnAppServer, timeoutMs: 30 }))
-      .rejects.toThrow("timed out");
+    const reading = readCodexAccountStatus(profile, { spawnAppServer, timeoutMs: 100 });
+    while (!existsSync(pidFile)) await new Promise((resolve) => setTimeout(resolve, 5));
+    const descendant = await readProcessIdentity(Number(readFileSync(pidFile, "utf8")));
+
+    await expect(reading).resolves.toMatchObject({ capacity: { kind: "unknown" } });
     expect(Date.now() - started).toBeLessThan(500);
+    expect(await processIdentityIsAlive(descendant)).toBe(false);
   });
 
   test("rejects pending requests when the child exits", async () => {
     const spawnAppServer = appServer("process.exit(7);");
 
     await expect(readCodexAccountStatus(profile, { spawnAppServer, timeoutMs: 500 }))
-      .rejects.toThrow("exited before completing");
+      .resolves.toMatchObject({ capacity: { kind: "unknown" } });
   });
 
   test("rejects JSON-RPC errors", async () => {
@@ -68,6 +85,6 @@ describe("Codex app-server capacity reads", () => {
     `);
 
     await expect(readCodexAccountStatus(profile, { spawnAppServer, timeoutMs: 500 }))
-      .rejects.toThrow("bad profile");
+      .resolves.toMatchObject({ capacity: { kind: "unknown", message: expect.stringContaining("bad profile") } });
   });
 });

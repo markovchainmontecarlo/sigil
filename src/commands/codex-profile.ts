@@ -11,6 +11,7 @@ import {
   type CodexProfileClass,
   type MeteredMode,
 } from "../codex-profiles.js";
+import { circuitIsOpen } from "../codex-router.js";
 import { primeCodexProfile } from "../agents.js";
 import { CODEX_PROVIDER, loadConfig, resolveAgentBinding } from "../config.js";
 import { readCodexAccountStatus } from "../codex-rate-limits.js";
@@ -44,6 +45,8 @@ async function addProfile(args: string[]): Promise<number> {
     "runtime-limit-ms": { type: "string" },
     "reservation-tokens": { type: "string" },
     quantum: { type: "string" },
+    "reserve-floor": { type: "string" },
+    "capacity-poll-ms": { type: "string" },
     "require-rearm": { type: "boolean" },
   });
   const name = parsed.positionals[0];
@@ -56,6 +59,9 @@ async function addProfile(args: string[]): Promise<number> {
     profileClass: parseClass(declaredClass),
     concurrencyLimit: optionalPositive(value(parsed, "concurrency")),
     percentageQuantum: optionalPositive(value(parsed, "quantum")),
+    reserveFloorPercentage: optionalPercentage(value(parsed, "reserve-floor")),
+    activeCapacityPollIntervalMs: optionalPositive(value(parsed, "capacity-poll-ms")),
+    requireRearmOnCapacityExhaustion: parsed.values["require-rearm"] === true,
   };
   const verified = await readCodexAccountStatus(candidate);
   if (declaredClass && candidate.profileClass !== verified.profileClass) {
@@ -105,16 +111,49 @@ async function listProfiles(): Promise<number> {
 async function profileStatus(): Promise<number> {
   const profiles = await readCodexProfiles();
   const state = await readCodexRoutingState();
-  printJson({ profiles: profiles.map((profile) => ({
+  printJson({ profiles: profiles.map((profile) => {
+    const reservations = Object.values(state.reservations).filter((entry) => entry.profile === profile.name);
+    const reservedHeadroomPercentage = reservations.reduce(
+      (total, entry) => total + (entry.reservedHeadroomPercentage ?? 0),
+      0,
+    );
+    const circuit = state.circuits[profile.name];
+    const observedRemaining = reservations
+      .map((entry) => entry.observedRemainingPercentage)
+      .find((entry) => entry !== undefined);
+    const remainingCapacityClass = circuitIsOpen(circuit)
+      ? "circuit-open"
+      : profile.profileClass === "metered-api"
+        ? "metered"
+        : observedRemaining === undefined
+          ? "unobserved"
+          : observedRemaining - reservedHeadroomPercentage >= (profile.reserveFloorPercentage ?? 0)
+            ? "above-floor"
+            : "at-or-below-floor";
+    return {
     name: profile.name,
     enabled: profile.enabled,
     profileClass: profile.profileClass,
     meteredMode: profile.meteredMode,
-    concurrencyLimit: profile.concurrencyLimit,
-    budget: profile.budget,
+    policy: {
+      concurrencyLimit: profile.concurrencyLimit,
+      percentageQuantum: profile.percentageQuantum,
+      reserveFloorPercentage: profile.reserveFloorPercentage,
+      activeCapacityPollIntervalMs: profile.activeCapacityPollIntervalMs,
+      requireRearmOnCapacityExhaustion: profile.requireRearmOnCapacityExhaustion,
+      budget: profile.budget,
+    },
     ledger: profileLedger(state, profile.name),
-    activeAssignments: Object.values(state.reservations).filter((entry) => entry.profile === profile.name).length,
-  })) });
+    activeAssignments: reservations.length,
+    reservedHeadroomPercentage,
+    aggregateReservedPercentage: reservedHeadroomPercentage,
+    remainingCapacityClass,
+    circuit: circuit ? {
+      reason: circuit.reason,
+      state: circuitIsOpen(circuit) ? "open" : "tracking",
+    } : { state: "closed" },
+    };
+  }) });
   return 0;
 }
 
@@ -151,10 +190,8 @@ async function rearm(args: string[]): Promise<number> {
   const name = requiredName(args);
   await updateCodexRoutingState((state) => {
     const ledger = profileLedger(state, name);
-    ledger.starts = 0;
-    ledger.runtimeMs = 0;
-    ledger.usage = { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 };
     ledger.rearmRequired = false;
+    delete state.circuits[name];
   });
   printJson({ rearmed: name });
   return 0;
@@ -198,6 +235,15 @@ function parseMode(raw: string | undefined): MeteredMode {
 
 function optionalPositive(raw: string | undefined): number | undefined {
   return raw === undefined ? undefined : positive(raw);
+}
+
+function optionalPercentage(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+    throw new UsageError(`expected an integer percentage from 0 through 100: ${raw}`);
+  }
+  return parsed;
 }
 
 function positive(raw: string): number {

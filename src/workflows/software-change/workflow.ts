@@ -14,6 +14,9 @@ export type SoftwareChangeInput = {
   taskFile?: string;
   branch?: string;
   baseBranch?: string;
+  canonicalGraphFile?: string;
+  checkpointFile?: string;
+  resume?: boolean;
 };
 
 export type SoftwareChangeStage = "planning" | "implementation";
@@ -62,6 +65,9 @@ function implementInput(input: SoftwareChangeInput, planned: PlanResult): Implem
     branch: input.branch,
     baseBranch: input.baseBranch,
     instructions: input.instructions,
+    canonicalGraphFile: input.canonicalGraphFile,
+    checkpointFile: input.checkpointFile,
+    resume: input.resume,
   };
 }
 
@@ -97,6 +103,7 @@ function completed(planned: PlanResult, implemented: ImplementResult): SoftwareC
 }
 
 export const softwareChange = sigil<SoftwareChangeInput, SoftwareChangeResult>("software-change", async (ctx, input) => {
+  if (input.resume && !input.taskFile) throw new Error("implementation resume requires an accepted taskFile");
   const planned = input.taskFile ? await planFromTaskFile(input) : await ctx.run(plan, planInput(input));
   if (!planned.valid) return stoppedAfterPlanning(planned);
 

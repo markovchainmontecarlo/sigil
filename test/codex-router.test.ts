@@ -10,7 +10,18 @@ import {
   writeCodexProfiles,
   type CodexProfile,
 } from "../src/codex-profiles.js";
-import { readCapacities, releaseCodexProfile, reserveCodexProfile, resolveUnfinishedReservations } from "../src/codex-router.js";
+import {
+  readCapacities,
+  recordActiveCapacityExhaustion,
+  releaseCodexProfile,
+  reserveCodexProfile,
+  resolveUnfinishedReservations,
+} from "../src/codex-router.js";
+
+function assignment(result: Awaited<ReturnType<typeof reserveCodexProfile>>) {
+  if (result.status !== "assigned") throw new Error(`expected assignment, received ${result.status}`);
+  return result.assignment;
+}
 
 function store() {
   const root = mkdtempSync(join(tmpdir(), "sigil-profiles-"));
@@ -38,7 +49,8 @@ describe("Codex profile routing", () => {
       remainingPercentage: entry.name === "a" ? 25 : 70,
     }), files);
 
-    expect(assignment?.profile.name).toBe("b");
+    expect(assignment.status).toBe("assigned");
+    expect(assignment.status === "assigned" && assignment.assignment.profile.name).toBe("b");
     expect((await readCodexRoutingState(files)).ledgers.b?.active).toBe(1);
   });
 
@@ -49,11 +61,11 @@ describe("Codex profile routing", () => {
 
     const first = await reserveCodexProfile(capacity, files);
     const blocked = await reserveCodexProfile(capacity, files);
-    await releaseCodexProfile(first!.reservation.id, undefined, files);
+    await releaseCodexProfile(assignment(first).reservation.id, undefined, files);
     const later = await reserveCodexProfile(capacity, files);
 
-    expect(blocked).toBeUndefined();
-    expect(later?.profile.name).toBe("only");
+    expect(blocked.status).toBe("capacity-blocked");
+    expect(assignment(later).profile.name).toBe("only");
   });
 
   test("uses bounded metered overflow only after subscriptions are unavailable", async () => {
@@ -65,11 +77,11 @@ describe("Codex profile routing", () => {
     const unavailable = async () => ({ available: false });
 
     const overflow = await reserveCodexProfile(unavailable, files);
-    await releaseCodexProfile(overflow!.reservation.id, undefined, files);
+    await releaseCodexProfile(assignment(overflow).reservation.id, undefined, files);
     const exhausted = await reserveCodexProfile(unavailable, files);
 
-    expect(overflow?.profile.name).toBe("api");
-    expect(exhausted).toBeUndefined();
+    expect(assignment(overflow).profile.name).toBe("api");
+    expect(exhausted.status).toBe("capacity-blocked");
     expect((await readCodexRoutingState(files)).ledgers.api?.usage.totalTokens).toBe(100);
   });
 
@@ -82,7 +94,7 @@ describe("Codex profile routing", () => {
       files,
     )));
 
-    expect(assignments.every((entry) => entry?.profile.name === "parallel")).toBe(true);
+    expect(assignments.every((entry) => entry.status === "assigned" && entry.assignment.profile.name === "parallel")).toBe(true);
     expect((await readCodexRoutingState(files)).ledgers.parallel?.active).toBe(12);
   });
 
@@ -99,8 +111,10 @@ describe("Codex profile routing", () => {
     });
 
     expect(calls.sort()).toEqual(["bad", "good"]);
-    expect(capacities.get("bad")).toEqual({ available: false });
-    expect(capacities.get("good")?.remainingPercentage).toBe(60);
+    expect(capacities.get("bad")?.kind).toBe("unknown");
+    const good = capacities.get("good");
+    expect(good?.kind).toBe("available");
+    expect(good?.kind === "available" && good.remainingPercentage).toBe(60);
   });
 
   test("manual next-N can select a manual metered profile", async () => {
@@ -115,12 +129,12 @@ describe("Codex profile routing", () => {
 
     const capacity = async () => ({ available: true, remainingPercentage: 90 });
     const first = await reserveCodexProfile(capacity, files);
-    await releaseCodexProfile(first!.reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
+    await releaseCodexProfile(assignment(first).reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
     const second = await reserveCodexProfile(capacity, files);
-    await releaseCodexProfile(second!.reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
+    await releaseCodexProfile(assignment(second).reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
     const automatic = await reserveCodexProfile(capacity, files);
 
-    expect([first?.profile.name, second?.profile.name, automatic?.profile.name]).toEqual(["api", "api", "subscription"]);
+    expect([assignment(first).profile.name, assignment(second).profile.name, assignment(automatic).profile.name]).toEqual(["api", "api", "subscription"]);
   });
 
   test("reserves remaining metered tokens and conservatively charges unresolved work", async () => {
@@ -136,9 +150,102 @@ describe("Codex profile routing", () => {
     await resolveUnfinishedReservations(files);
     const state = await readCodexRoutingState(files);
 
-    expect(first?.reservation.reservedTokens).toBe(100);
-    expect(blocked).toBeUndefined();
+    expect(assignment(first).reservation.reservedTokens).toBe(100);
+    expect(blocked.status).toBe("capacity-blocked");
     expect(state.ledgers.api?.usage.totalTokens).toBe(100);
     expect(state.ledgers.api?.rearmRequired).toBe(true);
+  });
+
+  test("reserves subscription headroom without crossing the reserve floor", async () => {
+    const files = store();
+    await writeCodexProfiles([{
+      ...profile("limited"),
+      concurrencyLimit: 3,
+      percentageQuantum: 20,
+      reserveFloorPercentage: 20,
+    }], files);
+    const capacity = async () => ({ available: true, remainingPercentage: 60 });
+
+    const first = await reserveCodexProfile(capacity, files);
+    const second = await reserveCodexProfile(capacity, files);
+    const blocked = await reserveCodexProfile(capacity, files);
+
+    expect(first.status).toBe("assigned");
+    expect(second.status).toBe("assigned");
+    expect(blocked.status).toBe("capacity-blocked");
+    expect(blocked.telemetry).toEqual([{
+      profile: "limited",
+      capacityClass: "above-floor",
+      configuredFloor: 20,
+      admissionOutcome: "blocked",
+      capacityTriggeredCancellation: false,
+    }]);
+  });
+
+  test("active exhaustion opens the capacity circuit and honors required rearm", async () => {
+    const files = store();
+    await writeCodexProfiles([{
+      ...profile("protected"),
+      reserveFloorPercentage: 20,
+      requireRearmOnCapacityExhaustion: true,
+    }], files);
+    const first = assignment(await reserveCodexProfile(async () => ({
+      available: true,
+      remainingPercentage: 80,
+    }), files));
+
+    const recorded = await recordActiveCapacityExhaustion(
+      first.reservation.id,
+      new Date().toISOString(),
+      files,
+    );
+    await releaseCodexProfile(first.reservation.id, undefined, files);
+
+    expect(recorded).toBe(true);
+    expect((await readCodexRoutingState(files)).circuits.protected?.reason).toBe("capacity");
+    expect((await reserveCodexProfile(async () => ({
+      available: true,
+      remainingPercentage: 80,
+    }), files)).status).toBe("capacity-blocked");
+
+    await updateCodexRoutingState((state) => {
+      state.ledgers.protected!.rearmRequired = false;
+    }, files);
+    expect((await reserveCodexProfile(async () => ({
+      available: true,
+      remainingPercentage: 80,
+    }), files)).status).toBe("assigned");
+  });
+
+  test("stale and unknown observations fail closed without consuming manual next", async () => {
+    const files = store();
+    await writeCodexProfiles([profile("only")], files);
+    await updateCodexRoutingState((state) => { state.next = { profile: "only", remaining: 1 }; }, files);
+    const stale = await reserveCodexProfile(async () => ({
+      kind: "available",
+      available: true,
+      observedAt: new Date(Date.now() - 60_000).toISOString(),
+      remainingPercentage: 90,
+    }), files);
+    const unknown = await reserveCodexProfile(async () => ({
+      kind: "unknown",
+      available: false,
+      observedAt: new Date().toISOString(),
+    }), files);
+
+    expect(stale.status).toBe("capacity-blocked");
+    expect(unknown.status).toBe("capacity-blocked");
+    expect((await readCodexRoutingState(files)).next?.remaining).toBe(1);
+  });
+
+  test("invalid configuration is distinct from capacity blocking", async () => {
+    const files = store();
+    const invalid = profile("invalid");
+    invalid.home = "";
+    await Bun.write(files.registryFile, JSON.stringify({ version: 1, profiles: [invalid] }));
+
+    const result = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 90 }), files);
+
+    expect(result.status).toBe("configuration-error");
   });
 });

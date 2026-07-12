@@ -56,6 +56,7 @@ export const plan = sigil<PlanInput, PlanResult>("plan", async (ctx, input) => {
         stage: `planning:planner:${index}`,
         limit: config.implement.repairLimit,
         timeoutMs: config.implement.operationTimeoutMs,
+        idleTimeoutMs: config.implement.idleTimeoutMs,
       },
       async (planner) => {
         await planner.prompt(planningPrompts.investigate({ INTENT: input.intent, BRIEF: input.brief ?? "", CONTEXT: contextBlock }));
@@ -84,6 +85,7 @@ export const plan = sigil<PlanInput, PlanResult>("plan", async (ctx, input) => {
       stage: "planning:synthesis",
       limit: config.implement.repairLimit,
       timeoutMs: config.implement.operationTimeoutMs,
+        idleTimeoutMs: config.implement.idleTimeoutMs,
     },
     async (synthesizer) => {
     const planText = plans.map((result, index) => `----- planner ${index + 1}: ${result.name} -----\n${result.text}`).join("\n\n");

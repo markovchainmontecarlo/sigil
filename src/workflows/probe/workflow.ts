@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -83,7 +82,7 @@ export const probePlan = sigil<ProbePlanInput, ProbePlanResult>("probe-plan", as
   const config = loadConfig(input.repo);
   const initialPaths = await readChangedPaths(input.repo, ctx.issue);
   if (initialPaths.length) ctx.issue(`target working tree is already dirty; implement requires a clean tree: ${initialPaths.join(",")}`);
-  const sandboxDir = await createSandbox(input.repo);
+  const sandboxDir = await createSandbox(ctx, input.repo);
   const contextBlock = renderContextBlock(await loadConfiguredContext(input.repo, config.context));
   const taskFile = input.outFile ?? ctx.artifacts.path("probe-task-graph.json");
   const evidenceFile = ctx.artifacts.path("probe-evidence.md");
@@ -91,7 +90,11 @@ export const probePlan = sigil<ProbePlanInput, ProbePlanResult>("probe-plan", as
 
   try {
     const probes = await collectProbeSpecs(ctx, input, config, contextBlock, sandboxDir);
-    const results = await runProbeCommands(probes.slice(0, input.maxProbes ?? DEFAULT_MAX_PROBES), sandboxDir);
+    const results = await runProbeCommands(
+      ctx,
+      probes.slice(0, input.maxProbes ?? DEFAULT_MAX_PROBES),
+      sandboxDir,
+    );
     await mkdir(dirname(evidenceFile), { recursive: true });
     await writeFile(evidenceFile, renderEvidence(input, sandboxDir, results));
 
@@ -133,17 +136,30 @@ async function collectProbeSpecs(
   return dedupeProbes(planned.flatMap((result) => (result.ok ? result.value : [])));
 }
 
-async function runProbeCommands(probes: ProbeSpec[], sandboxDir: string): Promise<ProbeCommandResult[]> {
+async function runProbeCommands(
+  ctx: SigilContext,
+  probes: ProbeSpec[],
+  sandboxDir: string,
+): Promise<ProbeCommandResult[]> {
   const results: ProbeCommandResult[] = [];
-  for (const probe of probes) results.push(await runProbeCommand(probe, sandboxDir));
+  for (const probe of probes) results.push(await runProbeCommand(ctx, probe, sandboxDir));
   return results;
 }
 
-async function runProbeCommand(probe: ProbeSpec, sandboxDir: string): Promise<ProbeCommandResult> {
+async function runProbeCommand(
+  ctx: SigilContext,
+  probe: ProbeSpec,
+  sandboxDir: string,
+): Promise<ProbeCommandResult> {
   const blocked = unsafeCommandIssue(probe.command);
   if (blocked) return baseProbeResult(probe, { skipped: true, issue: blocked });
 
-  const executed = await shell(probe.command, sandboxDir);
+  const executed = await ctx.sh({
+    command: "bash",
+    args: ["-lc", probe.command],
+    cwd: sandboxDir,
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
   return {
     ...baseProbeResult(probe, { skipped: false }),
     ok: executed.exitCode === 0,
@@ -228,10 +244,15 @@ async function synthesizeTaskGraph(
   });
 }
 
-async function createSandbox(repo: string): Promise<string> {
+async function createSandbox(ctx: SigilContext, repo: string): Promise<string> {
   const parent = await mkdtemp(join(tmpdir(), "sigil-probe-"));
   const sandbox = join(parent, "repo");
-  const cloned = await shell(`git clone --quiet --shared ${quote(resolve(repo))} ${quote(sandbox)}`, parent);
+  const cloned = await ctx.sh({
+    command: "bash",
+    args: ["-lc", `git clone --quiet --shared ${quote(resolve(repo))} ${quote(sandbox)}`],
+    cwd: parent,
+    timeoutMs: PROBE_TIMEOUT_MS,
+  });
   if (cloned.exitCode !== 0) {
     await rm(parent, { recursive: true, force: true });
     throw new Error(`probe sandbox clone failed: ${cloned.stderr || cloned.stdout}`);
@@ -306,27 +327,6 @@ function unsafeCommandIssue(command: string): string | undefined {
   if (/\bsudo\b|\bsu\b/.test(command)) return "probe command requires privilege escalation";
   if (/rm\s+-[^\n;|&]*r[^\n;|&]*f[^\n;|&]*(\/|~|\$HOME|\*)/.test(command)) return "probe command contains broad recursive deletion";
   return undefined;
-}
-
-function shell(command: string, cwd: string): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    execFile(
-      "bash",
-      ["-lc", command],
-      {
-        cwd,
-        env: { ...process.env, CI: process.env.CI ?? "1" },
-        encoding: "utf8",
-        timeout: PROBE_TIMEOUT_MS,
-        maxBuffer: 20 * 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        const code = (error as { code?: unknown } | null)?.code;
-        const exitCode = typeof code === "number" ? code : error ? 1 : 0;
-        resolve({ exitCode, stdout, stderr });
-      },
-    );
-  });
 }
 
 function quote(value: string): string {

@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 
 import {
-  promptAgentWithRecovery,
+  promptAgentTurn,
   runFreshAgentOperation,
 } from "../../agent-operation.js";
 import { loadConfig } from "../../config.js";
@@ -235,7 +235,7 @@ async function reviewMigration(
   failures: WorkflowFailure[];
 }> {
   const diff = await committedDiff(repo, baseHead);
-  const reviewer = loadConfig(repo).review.reviewer;
+  const reviewer = loadConfig(repo).review.synthesizer;
   const variables = {
     TARGET: target,
     GOAL: backlog.goal,
@@ -577,7 +577,7 @@ async function convergeMigration(
     await recordEvent(paths.eventsFile, "final-repair-started", {
       round: String(round),
     });
-    const repair = await promptAgentWithRecovery(
+    const repair = await promptAgentTurn(
       ctx,
       repairer,
       migrationPrompt("repair-final", {
@@ -589,6 +589,7 @@ async function convergeMigration(
         stage: `migration-final:repair:${round}`,
         limit: config.implement.repairLimit,
         timeoutMs: config.implement.operationTimeoutMs,
+        idleTimeoutMs: config.implement.idleTimeoutMs,
       },
     );
     if (!repair.ok) {
@@ -688,7 +689,7 @@ async function repairMigrationProtectedPaths(
     if (attempt > repairLimit) {
       return { ok: false, evidence: `final repair changed protected paths: ${changed.join(", ")}` };
     }
-    const repair = await promptAgentWithRecovery(
+    const repair = await promptAgentTurn(
       ctx,
       repairer,
       migrationPrompt("repair-protected-paths", {

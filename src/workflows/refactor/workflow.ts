@@ -4,7 +4,7 @@ import { z } from "zod";
 import { bootstrapWorkspace } from "../../workspace.js";
 
 import {
-  promptAgentWithRecovery,
+  promptAgentTurn,
   runFreshAgentOperation,
 } from "../../agent-operation.js";
 import { loadConfig } from "../../config.js";
@@ -13,6 +13,7 @@ import { changedPaths, git, isCleanTree } from "../../git.js";
 import {
   recover,
   retryOperation,
+  type OperationAttemptControls,
   type RecoveryResult,
   type WorkflowFailure,
 } from "../../recovery/index.js";
@@ -150,7 +151,7 @@ export const refactor = sigil<RefactorInput, RefactorResult>("refactor", async (
   const convergence = await convergeRefactor(
     ctx,
     config.implement.coder,
-    config.review.reviewer,
+    config.review.synthesizer,
     config.implement.repairLimit,
     config.implement.operationTimeoutMs,
     input,
@@ -222,16 +223,24 @@ async function synthesizePlan(
   input: RefactorInput,
   structureAnalysis: string,
   riskAnalysis: string,
+  controls: OperationAttemptControls,
 ): Promise<RefactorPlan> {
-  return ctx.withAgent(synthesizer, (agent) => agent.prompt(
-    refactorPrompt("synthesize-plan", {
-      INTENT: input.intent,
-      BRIEF: input.brief ?? "",
-      STRUCTURE_ANALYSIS: structureAnalysis,
-      RISK_ANALYSIS: riskAnalysis,
-    }),
-    RefactorPlanSchema,
-  ));
+  return ctx.withAgent(synthesizer, (agent) => {
+    if (!agent.promptWithOptions) throw new Error("agent does not support cancellable prompts");
+    return agent.promptWithOptions(
+      refactorPrompt("synthesize-plan", {
+        INTENT: input.intent,
+        BRIEF: input.brief ?? "",
+        STRUCTURE_ANALYSIS: structureAnalysis,
+        RISK_ANALYSIS: riskAnalysis,
+      }),
+      RefactorPlanSchema,
+      {
+        signal: controls.signal,
+        onProgress: controls.progress,
+      },
+    ) as Promise<RefactorPlan>;
+  });
 }
 
 async function synthesizePlanWithRecovery(
@@ -249,12 +258,13 @@ async function synthesizePlanWithRecovery(
     limit: repairLimit,
     timeoutMs,
     operation: "plan-synthesis",
-    run: () => synthesizePlan(
+    run: (_attempt, controls) => synthesizePlan(
       ctx,
       synthesizer,
       input,
       structureAnalysis,
       riskAnalysis,
+      controls,
     ),
     failure: (error, attempt, recoverable) => ({
       kind: "provider",
@@ -288,7 +298,7 @@ async function implementSlices(
     for (const slice of plan.slices) {
       await recordStage(eventsFile, "slice-started", { slice: slice.id });
       const sliceText = JSON.stringify(slice, null, 2);
-      const implementation = await promptAgentWithRecovery(
+      const implementation = await promptAgentTurn(
         ctx,
         agent,
         refactorPrompt("implement-slice", {
@@ -328,7 +338,7 @@ async function implementSlices(
         verify: () => runBuildAndTest(ctx),
         repair: async (failure) => {
           await recordStage(eventsFile, "slice-repairing", { slice: slice.id });
-          const repair = await promptAgentWithRecovery(
+          const repair = await promptAgentTurn(
             ctx,
             agent,
             refactorPrompt("repair-slice", {
@@ -453,7 +463,7 @@ async function convergeRefactor(
           baseline,
         ),
         repair: async (failure) => {
-          const repair = await promptAgentWithRecovery(
+          const repair = await promptAgentTurn(
             ctx,
             agent,
             refactorPrompt("repair-slice", {
@@ -536,7 +546,7 @@ async function convergeRefactor(
         recoverable: true,
       });
       await recordStage(eventsFile, "repairing-review", { round: String(round) });
-      const repair = await promptAgentWithRecovery(
+      const repair = await promptAgentTurn(
         ctx,
         agent,
         refactorPrompt("repair-review", {
@@ -661,7 +671,7 @@ async function repairScope(
       };
     },
     repair: async (failure) => {
-      const repair = await promptAgentWithRecovery(
+      const repair = await promptAgentTurn(
         ctx,
         agent,
         refactorPrompt("repair-protected-paths", {

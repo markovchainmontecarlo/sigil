@@ -23,7 +23,7 @@ function fixture(build = "true", testCommand = "true") {
       branchPrefix: "test/",
       baseBranch: "main",
     },
-    review: { reviewer: "worker" },
+    review: { reviewers: ["worker"], synthesizer: "worker" },
   }));
   return { repo, artifacts, ctx: createContext(repo, { artifactRoot: artifacts }) };
 }

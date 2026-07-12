@@ -34,22 +34,24 @@ function git(repo: string, args: string[]): string {
 function fixture(
   repairLimit = 2,
   followUpReviews = 0,
+  reviewers = ["reviewer"],
 ): { repo: string; base: string } {
   const repo = mkdtempSync(join(tmpdir(), "sigil-review-test-"));
   git(repo, ["init", "-b", "main"]);
   git(repo, ["config", "user.email", "test@example.com"]);
   git(repo, ["config", "user.name", "Test User"]);
   writeFileSync(join(repo, "sigil.config.json"), JSON.stringify({
-    agents: {
-      coder: { provider: "codex", model: "gpt-5.5" },
-      reviewer: { provider: "codex", model: "gpt-5.5" },
-    },
+    agents: Object.fromEntries([
+      ["coder", { provider: "codex", model: "gpt-5.5" }],
+      ...reviewers.map((reviewer) => [reviewer, { provider: "codex", model: "gpt-5.5" }]),
+      ["synthesizer", { provider: "codex", model: "gpt-5.5" }],
+    ]),
     evals: {},
     workspace: {},
     context: [],
-    plan: { planners: ["reviewer"], synthesizer: "reviewer" },
+    plan: { planners: [reviewers[0]], synthesizer: reviewers[0] },
     implement: { coder: "coder", batchSize: 5, repairLimit, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "reviewer", followUpReviews },
+    review: { reviewers, synthesizer: reviewers.length > 1 ? "synthesizer" : reviewers[0], followUpReviews },
   }, null, 2));
   writeFileSync(join(repo, "app.txt"), "before\n");
   git(repo, ["add", "."]);
@@ -96,6 +98,32 @@ describe("structured software-change review", () => {
     expect(result.valid).toBe(true);
     expect(result.structuredFindings).toEqual([]);
     expect(result.fixRan).toBe(false);
+  });
+
+  test("fans out independent reviewers and synthesizes distinct findings", async () => {
+    const reviewers = ["sol", "terra", "luna"];
+    const { repo, base } = fixture(2, 0, reviewers);
+    changeApp(repo);
+    const stateFinding = finding({ id: "state-loss" });
+    const retryFinding = finding({ id: "duplicate-retry", defect: "A retry duplicates the side effect." });
+    const actions: AgentAction[] = [
+      () => ({ findings: [stateFinding] }),
+      () => ({ findings: [retryFinding] }),
+      () => ({ findings: [] }),
+      () => ({ findings: [stateFinding, retryFinding] }),
+    ];
+
+    const ctx = context(repo, actions);
+    const result = await review({ repo, base, autofix: false }, ctx);
+    const operations = JSON.parse(readFileSync(ctx.artifacts.path("review/operations.json"), "utf8")) as {
+      operations: Array<{ type: string; status: string; inputArtifact: string; outputArtifact?: string }>;
+    };
+
+    expect(result.structuredFindings?.map((item) => item.id)).toEqual(["state-loss", "duplicate-retry"]);
+    expect(operations.operations.filter((operation) => operation.type === "review/panel")).toHaveLength(3);
+    expect(new Set(operations.operations.map((operation) => operation.inputArtifact)).size).toBe(4);
+    expect(operations.operations.every((operation) => operation.status === "completed")).toBe(true);
+    expect(actions).toHaveLength(0);
   });
 
   test("repairs a high finding without a follow-up review by default", async () => {

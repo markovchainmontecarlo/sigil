@@ -52,8 +52,11 @@ export {
 } from "./contracts/backlog.js";
 export {
   CONTRACT_VERSION,
+  canonicalTaskGraph,
   checkTaskGraph,
+  orderedTasks,
   planBatches,
+  taskGraphDigest,
   validateTaskGraph,
   type FileAction,
   type Task,
@@ -94,6 +97,21 @@ export {
   type PublishResult,
 } from "./git.js";
 export { createArtifactRoot } from "./paths.js";
+export {
+  OwnedProcess,
+  type OwnedProcessInfo,
+  type OwnedProcessKind,
+  type OwnedProcessOptions,
+  type OwnedProcessResult,
+  type ProcessLifecycle,
+} from "./owned-process.js";
+export {
+  classifyProviderFailure,
+  ProviderError,
+  type ProviderFailure,
+  type ProviderFailureCode,
+  type ProviderRetryDisposition,
+} from "./provider-failure.js";
 export {
   recover,
   type FailureKind,
