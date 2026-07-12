@@ -5,15 +5,15 @@
       "model": "gpt-5.6-sol",
       "effort": "low"
     },
-    "opus-low": {
-      "provider": "claude",
-      "model": "claude-opus-4-8",
-      "effort": "low"
-    },
     "luna-low": {
       "provider": "codex",
       "model": "gpt-5.6-luna",
       "effort": "low"
+    },
+    "luna-high": {
+      "provider": "codex",
+      "model": "gpt-5.6-luna",
+      "effort": "high"
     }
   },
   "evals": {
@@ -33,7 +33,7 @@
   "plan": {
     "planners": [
       "sol-low",
-      "opus-low",
+      "luna-high",
       "luna-low"
     ],
     "synthesizer": "sol-low"
@@ -47,7 +47,12 @@
     "baseBranch": "main"
   },
   "review": {
-    "reviewer": "sol-low",
+    "reviewers": [
+      "sol-low",
+      "luna-high",
+      "luna-low"
+    ],
+    "synthesizer": "sol-low",
     "followUpReviews": 0
   }
 }

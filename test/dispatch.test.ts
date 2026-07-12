@@ -31,7 +31,7 @@ function tempRepo(evals: Record<string, string> = {}): string {
     evals,
     plan: { planners: ["planner"], synthesizer: "planner" },
     implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "reviewer" },
+    review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   return dir;
 }
@@ -174,6 +174,27 @@ function makeCreatePrStub(
 }
 
 describe("dispatch", () => {
+  test("persists capacity waiting without entering deterministic repair", async () => {
+    const repo = tempRepo();
+    const context = createContext(repo, { artifactRoot: join(repo, ".sigil", "runs", "capacity-wait") });
+    let repairs = 0;
+    const result = await dispatchWithOptions({ repo, backlogFile: backlogFile(repo, backlog()), deliveryPolicy: "mergeWhenGreen" }, {
+      softwareChange: async (input) => changeResult(input, {
+        valid: false,
+        reviewBlocking: true,
+        issues: ["Codex capacity blocked: no eligible profile"],
+      }),
+      repairChange: async () => { repairs++; throw new Error("capacity must not enter repair"); },
+      wait: async () => {},
+    }, context);
+
+    const state = JSON.parse(readFileSync(context.artifacts.path("dispatch-state.json"), "utf8"));
+    expect(result).toMatchObject({ status: "waiting", retryable: true, stoppedAt: "base" });
+    expect(state.active.id).toBe("base");
+    expect(state.operation).toMatchObject({ status: "capacity-blocked", failure: { kind: "capacity" } });
+    expect(repairs).toBe(0);
+  });
+
   test("delivers items in dependency order through software-change and per-item branches", async () => {
     const repo = tempRepo();
     const changeCalls: ChangeCall[] = [];
@@ -203,15 +224,18 @@ describe("dispatch", () => {
     const repo = tempRepo();
     const input = { repo, backlogFile: backlogFile(repo, backlog()), deliveryPolicy: "mergeWhenGreen" as const };
     const context = createContext(repo, { artifactRoot: join(repo, ".sigil", "runs", "implementation-resume") });
+    let initializationCalls = 0;
     let softwareCalls = 0;
     let recoveryCalls = 0;
 
     await expect(dispatchWithOptions(input, {
+      initialize: async () => { initializationCalls++; },
       softwareChange: async () => { softwareCalls++; throw new Error("interrupted implementation"); },
       wait: async () => {},
     }, context)).rejects.toThrow("interrupted implementation");
 
     const result = await dispatchWithOptions(input, {
+      initialize: async () => { initializationCalls++; },
       softwareChange: async (changeInput) => {
         softwareCalls++;
         if (changeInput.branch === "sigil/base") throw new Error("software-change must not restart");
@@ -234,6 +258,7 @@ describe("dispatch", () => {
     }, context);
 
     expect(result.delivered).toEqual(["base", "feature", "polish"]);
+    expect(initializationCalls).toBe(1);
     expect(softwareCalls).toBe(3);
     expect(recoveryCalls).toBe(1);
   });
@@ -709,7 +734,8 @@ describe("dispatch", () => {
     expect(diagram).toContain("fork dispatch item artifact context");
     expect(diagram).toContain("call softwareChange in item context on item branch from refreshed delivery base");
     expect(diagram).toContain("create or resume integration branch");
-    expect(diagram).toContain("publish one final integration PR to main");
+    expect(diagram).toContain("journal and reconcile evidence");
+    expect(diagram).toContain("journal exact commit and configured production gate");
     expect(diagram).toContain("fetch origin delivery base and detach worktree there");
     expect(diagram).toContain("run build and test on updated delivery base after synced checkout");
     expect(diagram).toContain("change valid and issue-free");

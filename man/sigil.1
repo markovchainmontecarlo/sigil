@@ -64,14 +64,32 @@ Set the cumulative metered runtime budget.
 \fB\-\-reservation\-tokens <count>\fR
 Reserve this maximum token charge for each admitted metered agent.
 .TP
+\fB\-\-quantum <percentage>\fR
+Reserve this headroom for each admitted subscription agent.
+.TP
+\fB\-\-reserve\-floor <percentage>\fR
+Keep subscription admission above this inclusive 0\-100 capacity floor.
+.TP
+\fB\-\-capacity\-poll\-ms <milliseconds>\fR
+Set the bounded live\-capacity polling cadence for an active subscription assignment.
+.TP
+\fB\-\-mode <manual|overflow|automatic>\fR
+Explicitly authorize when a metered profile may be assigned; overflow is used only after subscriptions are ineligible.
+.TP
 \fB\-\-require\-rearm\fR
-Block later metered assignments after completion until explicit rearm.
+Require explicit rearm after metered completion or active subscription capacity exhaustion.
 .TP
 \fBnext <name> \-\-agents <count>\fR
 Route the next bounded number of new agents to a profile.
 .TP
 \fBprime [name]... [\-\-repo <dir>]\fR
 Explicitly start inactive subscription windows with the configured Codex binding; automatic priming remains disabled.
+.TP
+\fBrearm <name>\fR
+Clear authentication, capacity, transient, and metered rearm blocks without changing active reservations or usage accounting.
+.TP
+\fBstatus\fR
+Show redacted admission policy, active assignments and reserved headroom, remaining\-capacity class, and circuit reason/state; never show homes or account credentials.
 .P
 Exit codes: 0 when the requested local profile operation succeeds; 1 otherwise.
 .SS migrate
@@ -277,7 +295,7 @@ Required durable dispatch manifest, operation, and recovery directory.
 \fB\-\-resume <dir>\fR
 Resume the recorded operation after validating repository state and live process ownership.
 .P
-Exit codes: 0 when dispatch finishes without stopping; 1 when it stops at a backlog item.
+Exit codes: 0 when dispatch finishes; 1 when it stops on a deterministic failure; 75 when durable capacity waiting is retryable.
 .SS validate
 Validate a task graph file.
 .P

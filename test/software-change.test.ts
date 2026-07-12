@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
@@ -107,6 +107,33 @@ describe("softwareChange", () => {
 
     expect(calls).toEqual([{ outFile }]);
     expect(result.taskFile).toBe(outFile);
+  });
+
+  test("accepted-graph resume bypasses planning and forwards checkpoint identity", async () => {
+    const repo = process.cwd();
+    const taskFile = join(repo, "task-graph.json");
+    const canonicalGraphFile = join(repo, ".sigil", "canonical.json");
+    const checkpointFile = join(repo, ".sigil", "checkpoint.json");
+    const calls: string[] = [];
+    const graph = {
+      contractVersion: 1, project: "resume", tasks: [{
+        id: "a", title: "A", summary: "A", dependencies: [], acceptanceCriteria: ["a"], diagrams: [], files: [],
+      }],
+    };
+    await Bun.write(taskFile, JSON.stringify(graph));
+    try {
+      await softwareChange({ repo, intent: "Resume", taskFile, canonicalGraphFile, checkpointFile, resume: true }, workflowContext(repo, {
+        plan: async () => { calls.push("plan"); return resultPlan(); },
+        implement: async (input) => {
+          calls.push("implement");
+          expect(input).toMatchObject({ taskFile, canonicalGraphFile, checkpointFile, resume: true });
+          return resultImplementation();
+        },
+      }));
+    } finally {
+      rmSync(taskFile, { force: true });
+    }
+    expect(calls).toEqual(["implement"]);
   });
 
   test("marks implementation issues as invalid before delivery", async () => {

@@ -35,7 +35,7 @@ function tempRepo(): string {
     evals: {},
     plan: { planners: ["coder"], synthesizer: "coder" },
     implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "coder" },
+    review: { reviewers: ["coder"], synthesizer: "coder" },
   }, null, 2));
   return dir;
 }

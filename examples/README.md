@@ -10,5 +10,6 @@ Read these in order.
 6. [06-issue-workflow.ts](./06-issue-workflow.ts): add structured branching, artifact handoff, parallel jobs, evals, and nested workflows together.
 7. [07-triage-workflow.yaml](./07-triage-workflow.yaml): the first static YAML workflow, using stages, jobs, steps, prompt actions, artifact writes, conditions, and eval gates.
 8. [08-temporary-sigil.ts](./08-temporary-sigil.ts): a temporary TypeScript Sigil meant for `validate-sigil` and `run-sigil`, with multiple agents, independent parallel analysis, synthesis, artifacts, a gate, and a JSON result.
+9. [09-architecture-documentation.ts](./09-architecture-documentation.ts): a persistent lead agent drafts and iteratively improves root `ARCHITECTURE.md` through two repository-driven explorer fan-outs and final verification.
 
 These files are authoring patterns, not required locations. Put your own workflow file wherever it fits your repo. Most checked-in TypeScript examples import from `../src/index.js` so they typecheck against the local source tree; the temporary workflow example imports from the public `sigil` entrypoint because `run-sigil` resolves that import for one-off workflows outside the source tree.

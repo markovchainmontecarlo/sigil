@@ -6,8 +6,8 @@ import { runGateSet } from "../../verification.js";
 import { review } from "../software-change/review/index.js";
 import type { SoftwareChangeResult } from "../software-change/workflow.js";
 import { dispatchPrompts } from "./prompts.js";
-import { plan } from "../software-change/planning/index.js";
-import { access } from "node:fs/promises";
+import type { WorkflowFailure } from "../../recovery/index.js";
+import { softwareChange } from "../software-change/workflow.js";
 
 export type ExistingBranchRepairInput = {
   repo: string;
@@ -16,7 +16,10 @@ export type ExistingBranchRepairInput = {
   taskFile: string;
   item: WorkItem;
   issues: string[];
+  failures?: WorkflowFailure[];
   providerSessionId?: string;
+  canonicalGraphFile?: string;
+  checkpointFile?: string;
 };
 
 async function checkoutExistingBranch(repo: string, branch: string): Promise<void> {
@@ -65,9 +68,14 @@ export async function repairExistingChange(
   }
 
   while (issues.length) {
-    const exhausted = issues.filter((issue) => (attempts.get(issue) ?? 0) >= config.implement.repairLimit);
+    const exhausted = issues.filter((issue) => (
+      attempts.get(recoveryIdentity(issue, input.failures)) ?? 0
+    ) >= config.implement.repairLimit);
     if (exhausted.length) return repairedResult(input, exhausted.map((issue) => `recovery exhausted: ${issue}`));
-    for (const issue of issues) attempts.set(issue, (attempts.get(issue) ?? 0) + 1);
+    for (const issue of issues) {
+      const identity = recoveryIdentity(issue, input.failures);
+      attempts.set(identity, (attempts.get(identity) ?? 0) + 1);
+    }
 
     await using coder = ctx.agent(config.implement.coder, {
       resumeSessionId: input.providerSessionId,
@@ -101,62 +109,26 @@ export async function repairExistingChange(
   return repairedResult(input, []);
 }
 
+export function recoveryIdentity(issue: string, failures: WorkflowFailure[] = []): string {
+  const failure = failures.find((candidate) => candidate.evidence === issue);
+  return failure?.provider?.fingerprint ?? `issue:${issue.trim().replace(/\s+/g, " ")}`;
+}
+
 export async function recoverInterruptedSoftwareChange(
   ctx: SigilContext,
   input: ExistingBranchRepairInput,
 ): Promise<SoftwareChangeResult> {
-  await ensureTaskFile(ctx, input);
-  await ensureActiveBranch(input.repo, input.branch, input.baseBranch);
-  const reviewEvidence = await readReviewEvidence(ctx);
-  return repairExistingChange(ctx, {
-    ...input,
-    issues: [
-      ...input.issues,
-      ...reviewEvidence,
-      "Continue the interrupted implementation from the persisted task graph and current repository state.",
-    ],
+  if (!input.canonicalGraphFile || !input.checkpointFile) {
+    throw new Error("dispatch reconciliation required: precise implementation artifacts are missing");
+  }
+  return ctx.run(softwareChange, {
+    repo: input.repo,
+    intent: input.item.brief,
+    taskFile: input.taskFile,
+    branch: input.branch,
+    baseBranch: input.baseBranch,
+    canonicalGraphFile: input.canonicalGraphFile,
+    checkpointFile: input.checkpointFile,
+    resume: true,
   });
-}
-
-async function readReviewEvidence(ctx: SigilContext): Promise<string[]> {
-  const names = [
-    "review/correctness-output.json",
-    "review/test-integrity-output.json",
-    "review/synthesis-output.json",
-    "review/repair-input.json",
-    "review/post-review-verification-output.json",
-  ];
-  const evidence: string[] = [];
-  for (const name of names) {
-    try {
-      evidence.push(`${name}:\n${await ctx.artifacts.read(name)}`);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
-  return evidence;
-}
-
-async function ensureTaskFile(ctx: SigilContext, input: ExistingBranchRepairInput): Promise<void> {
-  try {
-    await access(input.taskFile);
-    return;
-  } catch {
-    const planned = await ctx.run(plan, {
-      repo: input.repo,
-      intent: input.item.brief,
-      outFile: input.taskFile,
-    });
-    if (!planned.valid) throw new Error(`could not reconstruct interrupted plan: ${planned.issues.join("; ")}`);
-  }
-}
-
-async function ensureActiveBranch(repo: string, branch: string, base: string): Promise<void> {
-  const existing = await git(repo, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
-  if (existing.code === 0) {
-    await checkoutExistingBranch(repo, branch);
-    return;
-  }
-  const created = await git(repo, ["checkout", "-b", branch, base]);
-  if (created.code !== 0) throw new Error(created.log || `failed to create interrupted item branch ${branch}`);
 }

@@ -2,6 +2,8 @@
 
 The important distinction in Sigil is not file format. It is whether the workflow shape is known before the run or chosen during the run.
 
+Readability is not determined by whether a workflow looks declarative. YAML is often clearest for fixed topology. Ordinary TypeScript branches, loops, typed values, and function calls are often clearer when runtime evidence changes the work. Both surfaces should expose the same conceptual steps without forcing dynamic behavior through configuration expressions.
+
 ## The practical test
 
 Ask: can you draw every stage, job, and step before the run starts?

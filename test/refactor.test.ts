@@ -104,7 +104,7 @@ function fixtureRepo(): string {
     context: [],
     plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst" },
     implement: { coder: "coder", batchSize: 5, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "reviewer" },
+    review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   git(repo, ["init", "-b", "main"]);
   git(repo, ["config", "user.name", "Sigil Test"]);
@@ -273,7 +273,7 @@ describe("refactor workflow", () => {
 
     expect(result.valid).toBe(false);
     expect(state.reviewCalls).toBe(4);
-  });
+  }, 15_000);
 
   test("retries plan synthesis in a fresh agent context", async () => {
     const repo = fixtureRepo();

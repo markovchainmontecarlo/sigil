@@ -24,6 +24,9 @@ export type CodexProfile = {
   profileClass: CodexProfileClass;
   concurrencyLimit?: number;
   percentageQuantum?: number;
+  reserveFloorPercentage?: number;
+  activeCapacityPollIntervalMs?: number;
+  requireRearmOnCapacityExhaustion?: boolean;
   meteredMode?: MeteredMode;
   budget?: MeteredBudget;
 };
@@ -51,8 +54,19 @@ export type ProfileReservation = {
   startedAt: string;
   startingPercentage?: number;
   percentageQuantum?: number;
+  observedAt?: string;
+  observedRemainingPercentage?: number;
+  reservedHeadroomPercentage?: number;
   reservedTokens?: number;
   unresolved: boolean;
+};
+
+export type CodexCircuitReason = "capacity" | "authentication" | "transient";
+export type CodexCircuit = {
+  reason: CodexCircuitReason;
+  openedAt: string;
+  fingerprint?: string;
+  failures?: number;
 };
 
 export type CodexRoutingState = {
@@ -60,10 +74,12 @@ export type CodexRoutingState = {
   next?: { profile: string; remaining: number };
   reservations: Record<string, ProfileReservation>;
   ledgers: Record<string, ProfileLedger>;
+  circuits: Record<string, CodexCircuit>;
+  unavailableProfiles: Record<string, string>;
 };
 
 type RegistryFile = { version: 1; profiles: CodexProfile[] };
-type StateFile = { version: 1; state: CodexRoutingState };
+type StateFile = { version: 2; state: CodexRoutingState };
 
 export type CodexProfileStore = {
   registryFile: string;
@@ -115,11 +131,12 @@ export async function updateCodexProfiles<T>(
 export async function readCodexRoutingState(
   store = codexProfileStore(),
 ): Promise<CodexRoutingState> {
-  const empty: StateFile = {
-    version: 1,
-    state: { roundRobin: 0, reservations: {}, ledgers: {} },
-  };
-  return (await readJson(store.stateFile, empty)).state;
+  const empty = emptyRoutingState();
+  const file = await readJson<{ version?: number; state?: Partial<CodexRoutingState> }>(
+    store.stateFile,
+    { version: 2, state: empty },
+  );
+  return migrateRoutingState(file.state, file.version);
 }
 
 export async function updateCodexRoutingState<T>(
@@ -129,7 +146,7 @@ export async function updateCodexRoutingState<T>(
   return withProfileLock(store, async () => {
     const state = await readCodexRoutingState(store);
     const result = await update(state);
-    await atomicOwnerWrite(store.stateFile, { version: 1, state });
+    await atomicOwnerWrite(store.stateFile, { version: 2, state });
     return result;
   });
 }
@@ -151,6 +168,9 @@ export function newReservation(profile: string, options: {
   startingPercentage?: number;
   percentageQuantum?: number;
   reservedTokens?: number;
+  observedAt?: string;
+  observedRemainingPercentage?: number;
+  reservedHeadroomPercentage?: number;
 } = {}): ProfileReservation {
   return {
     id: randomUUID(),
@@ -158,9 +178,43 @@ export function newReservation(profile: string, options: {
     startedAt: new Date().toISOString(),
     startingPercentage: options.startingPercentage,
     percentageQuantum: options.percentageQuantum,
+    observedAt: options.observedAt,
+    observedRemainingPercentage: options.observedRemainingPercentage,
+    reservedHeadroomPercentage: options.reservedHeadroomPercentage,
     reservedTokens: options.reservedTokens,
     unresolved: true,
   };
+}
+
+function emptyRoutingState(): CodexRoutingState {
+  return {
+    roundRobin: 0,
+    reservations: {},
+    ledgers: {},
+    circuits: {},
+    unavailableProfiles: {},
+  };
+}
+
+function migrateRoutingState(
+  state: Partial<CodexRoutingState> | undefined,
+  version: number | undefined,
+): CodexRoutingState {
+  const migrated: CodexRoutingState = {
+    ...emptyRoutingState(),
+    ...state,
+    reservations: state?.reservations ?? {},
+    ledgers: state?.ledgers ?? {},
+    circuits: state?.circuits ?? {},
+    unavailableProfiles: state?.unavailableProfiles ?? {},
+  };
+  if (version !== 2) {
+    for (const reservation of Object.values(migrated.reservations)) {
+      if (reservation.observedAt || reservation.reservedTokens !== undefined) continue;
+      migrated.unavailableProfiles[reservation.profile] = "legacy active reservation lacks admission evidence";
+    }
+  }
+  return migrated;
 }
 
 async function withProfileLock<T>(store: CodexProfileStore, body: () => Promise<T>): Promise<T> {
@@ -190,7 +244,18 @@ function validateProfiles(profiles: CodexProfile[]): void {
   for (const profile of profiles) {
     if (!/^[a-zA-Z0-9._-]+$/.test(profile.name)) throw new Error(`invalid profile name: ${profile.name}`);
     if (names.has(profile.name)) throw new Error(`duplicate profile name: ${profile.name}`);
-    if (!resolve(profile.home)) throw new Error(`invalid profile home: ${profile.name}`);
+    if (!profile.home?.trim()) throw new Error(`invalid profile home: ${profile.name}`);
+    if (profile.percentageQuantum !== undefined && profile.percentageQuantum <= 0) {
+      throw new Error(`invalid percentage quantum: ${profile.name}`);
+    }
+    if (profile.reserveFloorPercentage !== undefined
+      && (profile.reserveFloorPercentage < 0 || profile.reserveFloorPercentage > 100)) {
+      throw new Error(`invalid reserve floor: ${profile.name}`);
+    }
+    if (profile.activeCapacityPollIntervalMs !== undefined
+      && profile.activeCapacityPollIntervalMs <= 0) {
+      throw new Error(`invalid active capacity poll interval: ${profile.name}`);
+    }
     names.add(profile.name);
   }
 }

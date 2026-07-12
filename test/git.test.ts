@@ -46,6 +46,41 @@ describe("git helpers", () => {
     expect(calls[0]?.slice(0, 2)).toEqual(["pr", "list"]);
   });
 
+  test("createPr returns typed matching remote evidence and refuses conflicting identity", async () => {
+    const matching = await createPr("/repo", { title: "Title", body: "Body", base: "main", head: "change" }, {
+      gh: async () => ({ code: 0, stdout: JSON.stringify([{
+        number: 12, headRefName: "change", baseRefName: "main", state: "OPEN",
+        headRefOid: "abc", mergeCommit: null, url: "https://example.test/pr/12",
+      }]), stderr: "", log: "" }),
+    });
+    const conflicting = await createPr("/repo", { title: "Title", body: "Body", base: "main", head: "change" }, {
+      gh: async () => ({ code: 0, stdout: JSON.stringify([{
+        number: 13, headRefName: "other", baseRefName: "main", state: "OPEN",
+      }]), stderr: "", log: "" }),
+    });
+
+    expect(matching.evidence).toEqual({ number: 12, head: "change", base: "main", state: "OPEN",
+      headCommit: "abc", mergedCommit: undefined, url: "https://example.test/pr/12" });
+    expect(conflicting.ok).toBe(false);
+    expect(conflicting.log).toContain("identity conflict");
+  });
+
+  test("mergePr reuses matching merged evidence without another merge request", async () => {
+    const ghCalls: string[][] = [];
+    const result = await mergePr("/repo", { branch: "change", base: "main" }, {
+      gh: async (_repo, args) => {
+        ghCalls.push(args);
+        return { code: 0, stdout: JSON.stringify({ number: 4, headRefName: "change", baseRefName: "main",
+          state: "MERGED", headRefOid: "head", mergeCommit: { oid: "merged" } }), stderr: "", log: "" };
+      },
+      git: async (_repo, args) => ({ code: 0, stdout: "", stderr: "", log: args.join(" ") }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.evidence?.mergedCommit).toBe("merged");
+    expect(ghCalls.some((args) => args[1] === "merge")).toBe(false);
+  });
+
   test("commitAll commits changes and reports nothing on a clean tree", async () => {
     const dir = repo();
     writeFileSync(join(dir, "tracked.txt"), "two\n");
@@ -262,7 +297,7 @@ describe("git helpers", () => {
       gh: async (_repo, args) => {
         ghCalls.push(args);
         return args[1] === "view"
-          ? { code: 0, stdout: "MERGED\n", stderr: "", log: "" }
+          ? { code: 0, stdout: ghCalls.length === 1 ? "OPEN\n" : "MERGED\n", stderr: "", log: "" }
           : { code: 0, stdout: "", stderr: "", log: "merged" };
       },
       git: async (_repo, args) => {
@@ -273,8 +308,10 @@ describe("git helpers", () => {
 
     expect(result.ok).toBe(true);
     expect(ghCalls).toEqual([
+      ["pr", "view", "sigil/change", "--json", "number,headRefName,baseRefName,state,headRefOid,mergeCommit,url"],
       ["pr", "merge", "sigil/change", "--merge", "--auto"],
-      ["pr", "view", "sigil/change", "--json", "state", "--jq", ".state"],
+      ["pr", "view", "sigil/change", "--json", "number,headRefName,baseRefName,state,headRefOid,mergeCommit,url"],
+      ["pr", "view", "sigil/change", "--json", "number,headRefName,baseRefName,state,headRefOid,mergeCommit,url"],
     ]);
     expect(ghCalls[0]).not.toContain("--delete-branch");
     expect(gitCalls).toEqual([

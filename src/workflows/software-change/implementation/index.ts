@@ -1,9 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { promptAgentWithRecovery, runFreshAgentOperation } from "../../../agent-operation.js";
+import { promptAgentTurn, runFreshAgentOperation } from "../../../agent-operation.js";
 import { loadConfig, type SigilConfig } from "../../../config.js";
-import { planBatches, validateTaskGraph, type Task, type TaskGraph } from "../../../contracts/task-graph.js";
+import { taskGraphDigest, validateTaskGraph, type Task, type TaskGraph } from "../../../contracts/task-graph.js";
 import { changedPaths, checkoutFreshBranch, commitAll, git, isCleanTree, type CommitResult } from "../../../git.js";
 import { loadConfiguredContext, renderContextBlock, sigil, type RichSigilAgent, type SigilContext } from "../../../context.js";
 import { implementationPrompts } from "./prompts.js";
@@ -17,6 +17,19 @@ import {
 } from "../../../verification.js";
 import { review } from "../review/index.js";
 import { bootstrapWorkspace } from "../../../workspace.js";
+import type { WorkflowFailure } from "../../../recovery/index.js";
+import {
+  captureRecoveryBundle,
+  discardTaskWork,
+  newCheckpoint,
+  nextRunnable,
+  readCheckpoint,
+  reevaluateBlocked,
+  restoreRecoveryBundle,
+  verifyCompletedTasks,
+  writeAtomicJson,
+  type ImplementationCheckpoint,
+} from "./checkpoint.js";
 
 export type ImplementInput = {
   taskFile: string;
@@ -24,6 +37,9 @@ export type ImplementInput = {
   branch?: string;
   baseBranch?: string;
   instructions?: string;
+  canonicalGraphFile?: string;
+  checkpointFile?: string;
+  resume?: boolean;
 };
 export type ImplementResult = { branch: string; prBody: string; reviewBlocking: boolean; issues: string[]; failedTasks: string[]; noopTasks: string[] };
 
@@ -78,13 +94,27 @@ async function promptWithRecovery(
   stage: string,
   prompt: string,
 ): Promise<string> {
-  const result = await promptAgentWithRecovery(ctx, agent, prompt, {
+  const result = await promptAgentTurn(ctx, agent, prompt, {
     stage,
     limit: config.implement.repairLimit,
     timeoutMs: config.implement.operationTimeoutMs,
+        idleTimeoutMs: config.implement.idleTimeoutMs,
   });
-  if (!result.ok) throw new Error(result.failure.evidence);
+  if (!result.ok) throw new AgentOperationFailure(result.failure);
   return result.value;
+}
+
+class AgentOperationFailure extends Error {
+  constructor(readonly failure: WorkflowFailure) {
+    super(failure.evidence);
+    this.name = "AgentOperationFailure";
+  }
+}
+
+function providerInterrupted(error: unknown): error is AgentOperationFailure {
+  return error instanceof AgentOperationFailure
+    && error.failure.provider !== undefined
+    && error.failure.provider.disposition !== "terminal";
 }
 
 async function repair(
@@ -173,6 +203,7 @@ async function recoverNoop(
         stage: `task:${task.id}:noop-check`,
         limit: config.implement.repairLimit,
         timeoutMs: config.implement.operationTimeoutMs,
+        idleTimeoutMs: config.implement.idleTimeoutMs,
       },
       (checker) => checker.prompt(implementationPrompts.noopCheck({
         TASK_ID: task.id,
@@ -217,55 +248,87 @@ async function recoverNoop(
 
 export const implement = sigil<ImplementInput, ImplementResult>("implement", async (ctx, input) => {
   const config = loadConfig(input.repo);
-  const graph = validateTaskGraph(await readJson(input.taskFile), { repoRoot: input.repo });
-  const { batches, byId } = planBatches(graph.tasks, config.implement.batchSize);
-  if (!(await isCleanTree(input.repo))) throw new Error("working tree is not clean");
-
   const baseBranch = input.baseBranch ?? config.implement.baseBranch;
-  const branch = branchName(config, input, graph);
-  await checkoutFreshBranch(input.repo, branch, baseBranch);
-  await bootstrapWorkspace(ctx, input.repo, config);
+  const canonicalGraphFile = input.canonicalGraphFile ?? ctx.artifacts.path("implementation/task-graph.json");
+  const checkpointFile = input.checkpointFile ?? ctx.artifacts.path("implementation/checkpoint.json");
+  let graph: TaskGraph;
+  let checkpoint: ImplementationCheckpoint;
+  let baseline: Baseline;
+  let branch: string;
+
+  if (input.resume) {
+    graph = validateTaskGraph(await readJson(canonicalGraphFile), { repoRoot: input.repo });
+    checkpoint = await readCheckpoint(checkpointFile);
+    const digest = taskGraphDigest(graph);
+    if (checkpoint.graphDigest !== digest) throw new Error("canonical task graph digest does not match implementation checkpoint");
+    branch = checkpoint.branch;
+    if (checkpoint.baseBranch !== baseBranch) throw new Error("implementation checkpoint base branch does not match resume input");
+    const currentBranch = (await git(input.repo, ["branch", "--show-current"])).stdout.trim();
+    if (currentBranch !== branch) throw new Error(`implementation checkpoint branch mismatch: expected ${branch}, found ${currentBranch}`);
+    await verifyCompletedTasks(input.repo, checkpoint);
+    const resumedBaseline = await establishBaseline(ctx, input.repo, config);
+    if ("kind" in resumedBaseline) throw new Error(`resume baseline could not be established: ${resumedBaseline.evidence}`);
+    baseline = resumedBaseline;
+    const running = Object.entries(checkpoint.tasks).find(([, state]) => state.recoveryBundle !== undefined);
+    if (running) {
+      const [taskId, state] = running;
+      if (!state.recoveryBundle || !state.taskBase) throw new Error(`running task ${taskId} has no recovery bundle`);
+      try {
+        await restoreRecoveryBundle(input.repo, state.recoveryBundle, {
+          graphDigest: checkpoint.graphDigest, branch, baseBranch, baselineCommit: checkpoint.baselineCommit,
+          taskId, taskBase: state.taskBase,
+        });
+      } catch (error) {
+        throw new Error(`implementation recovery reconciliation failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      state.status = "pending";
+      await writeAtomicJson(checkpointFile, checkpoint);
+    } else if (!(await isCleanTree(input.repo))) {
+      throw new Error("resume worktree is dirty without a matching recovery bundle");
+    }
+  } else {
+    graph = validateTaskGraph(await readJson(input.taskFile), { repoRoot: input.repo });
+    await writeAtomicJson(canonicalGraphFile, graph);
+    if (!(await isCleanTree(input.repo))) throw new Error("working tree is not clean");
+    branch = branchName(config, input, graph);
+    await checkoutFreshBranch(input.repo, branch, baseBranch);
+    await bootstrapWorkspace(ctx, input.repo, config);
+    const baselineSha = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
+    if (!baselineSha) throw new Error("failed to record baseline sha");
+    const baselineResult = await establishBaseline(ctx, input.repo, config);
+    if ("kind" in baselineResult) {
+      const issues = [`baseline could not be established: ${baselineResult.evidence}`];
+      return { branch, prBody: prBody(issues, true), reviewBlocking: true, issues, failedTasks: graph.tasks.map((task) => task.id), noopTasks: [] };
+    }
+    baseline = baselineResult;
+    checkpoint = newCheckpoint(graph, taskGraphDigest(graph), branch, baseBranch, baselineSha);
+    await writeAtomicJson(checkpointFile, checkpoint);
+  }
+
+  const byId = Object.fromEntries(graph.tasks.map((task) => [task.id, task]));
   const loadedContext = await loadConfiguredContext(input.repo, config.context);
   const contextBlock = implementationContextBlock(renderContextBlock(loadedContext), input.instructions);
-  const baselineSha = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
-  if (!baselineSha) throw new Error("failed to record baseline sha");
-  const baselineResult = await establishBaseline(ctx, input.repo, config);
-
   const issues: string[] = [];
-  const failed = new Set<string>();
   const noopTasks: string[] = [];
+  let interrupted = false;
 
-  if ("kind" in baselineResult) {
-    const failedTasks = graph.tasks.map((task) => task.id);
-    issues.push(`baseline could not be established: ${baselineResult.evidence}`);
-    return {
-      branch,
-      prBody: prBody(issues, true),
-      reviewBlocking: true,
-      issues,
-      failedTasks,
-      noopTasks,
-    };
-  }
-  const baseline = baselineResult;
-
-  for (const batch of batches) {
-    {
-      await using coder = ctx.agent(config.implement.coder);
-      for (const id of batch) {
-        const task = byId[id];
-        await ctx.observe("task-started", { task: id });
-        if (task.dependencies.some((dep) => failed.has(dep))) {
-          failed.add(id);
-          issues.push(`task ${id} skipped because a dependency failed`);
-          await ctx.observe("task-skipped", { task: id, reason: "dependency-failed" });
-          continue;
-        }
-
-        const checkpoint = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
-        let reply = "";
-        let noopVerdict: string | undefined;
-        try {
+  for (;;) {
+    const id = nextRunnable(graph, checkpoint);
+    if (!id) break;
+    const task = byId[id];
+    const state = checkpoint.tasks[id];
+    const taskBase = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
+    state.status = "running";
+    state.attempts++;
+    state.taskBase = taskBase;
+    state.evidence = undefined;
+    state.recoveryBundle = undefined;
+    await writeAtomicJson(checkpointFile, checkpoint);
+    await ctx.observe("task-started", { task: id });
+    let reply = "";
+    let noopVerdict: string | undefined;
+    await using coder = ctx.agent(config.implement.coder);
+    try {
           reply = await promptWithRecovery(ctx, coder, config, `task:${id}:implement`, taskPrompt(task, contextBlock));
           let gate = await runBuildAndTest(ctx);
           for (let attempt = 0; !gate.ok && attempt < config.implement.repairLimit; attempt++) {
@@ -273,9 +336,11 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
             gate = await runBuildAndTest(ctx);
           }
           if (!gate.ok) {
-            failed.add(id);
+            state.status = "failed";
+            state.evidence = gate.evidence;
             issues.push(`task ${id} failed gates: ${gate.evidence}`);
-            await preserveAndRestoreTaskFailure(ctx, input.repo, task, checkpoint, "build-test", gate.evidence);
+            await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "build-test", gate.evidence);
+            await writeAtomicJson(checkpointFile, checkpoint);
             await ctx.observe("task-failed", { task: id, stage: "build-test" });
             continue;
           }
@@ -292,8 +357,10 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
           }
 
           if (commit.status === "failed") {
-            failed.add(id);
-            await preserveAndRestoreTaskFailure(ctx, input.repo, task, checkpoint, "commit", commit.log);
+            state.status = "failed";
+            state.evidence = commit.log;
+            await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "commit", commit.log);
+            await writeAtomicJson(checkpointFile, checkpoint);
             await ctx.observe("task-failed", { task: id, stage: "commit" });
             continue;
           }
@@ -304,30 +371,70 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
             noopVerdict = recovered.verdict;
             if (recovered.status === "satisfied") noopTasks.push(id);
             if (recovered.status === "failed") {
-              failed.add(id);
+              state.status = "failed";
+              state.evidence = recovered.evidence;
               issues.push(recovered.evidence);
-              await preserveAndRestoreTaskFailure(ctx, input.repo, task, checkpoint, "noop-recovery", recovered.evidence);
+              await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "noop-recovery", recovered.evidence);
               await ctx.observe("task-failed", { task: id, stage: "noop-recovery" });
             }
           }
-          if (!failed.has(id)) await ctx.observe("task-completed", { task: id });
+          if (state.status !== "failed") {
+            state.status = "completed";
+            state.verifiedCommit = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
+            await writeAtomicJson(checkpointFile, checkpoint);
+            await ctx.observe("task-completed", { task: id });
+          }
         } catch (error) {
           const evidence = error instanceof Error ? error.message : String(error);
-          failed.add(id);
-          issues.push(`task ${id} operation failed: ${evidence}`);
-          await preserveAndRestoreTaskFailure(ctx, input.repo, task, checkpoint, "operation", evidence);
-          await ctx.observe("task-failed", { task: id, stage: "operation" });
+          if (providerInterrupted(error)) {
+            try {
+              state.recoveryBundle = await captureRecoveryBundle(input.repo, ctx.artifacts.path(`implementation/recovery/${encodeURIComponent(id)}`), {
+                graphDigest: checkpoint.graphDigest, branch, baseBranch, baselineCommit: checkpoint.baselineCommit, taskId: id, taskBase,
+              });
+              state.status = "pending";
+              if (error.failure.provider?.code === "capacity_exhausted") {
+                state.attempts = Math.max(0, state.attempts - 1);
+              }
+              state.evidence = evidence;
+              await discardTaskWork(input.repo, taskBase);
+              await writeAtomicJson(checkpointFile, checkpoint);
+              interrupted = true;
+              await ctx.observe("task-interrupted", { task: id, stage: "provider" });
+            } catch (bundleError) {
+              state.status = "failed";
+              state.evidence = `provider interruption recovery capture failed: ${bundleError instanceof Error ? bundleError.message : String(bundleError)}`;
+              issues.push(`task ${id} ${state.evidence}`);
+              await writeAtomicJson(checkpointFile, checkpoint);
+            }
+          } else {
+            state.status = "failed";
+            state.evidence = evidence;
+            issues.push(`task ${id} operation failed: ${evidence}`);
+            await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "operation", evidence);
+            await writeAtomicJson(checkpointFile, checkpoint);
+            await ctx.observe("task-failed", { task: id, stage: "operation" });
+          }
         } finally {
           await persistTaskReply(ctx.artifacts.path, task, reply, noopVerdict, issues);
         }
-      }
-    }
+    if (interrupted) break;
+  }
+
+  reevaluateBlocked(graph, checkpoint);
+  await writeAtomicJson(checkpointFile, checkpoint);
+  const incomplete = Object.values(checkpoint.tasks).some((state) => state.status !== "completed");
+  const failedTasks = Object.entries(checkpoint.tasks).filter(([, state]) => state.status === "failed").map(([id]) => id);
+  if (incomplete) {
+    const blocked = Object.entries(checkpoint.tasks).filter(([, state]) => state.status === "blocked").map(([id]) => id);
+    if (blocked.length) issues.push(`blocked tasks awaiting completed dependencies: ${blocked.join(", ")}`);
+    if (interrupted) issues.push("implementation stopped after provider interruption; resume with the implementation checkpoint");
+    return { branch, prBody: prBody(issues, true), reviewBlocking: true, issues, failedTasks, noopTasks };
   }
 
   const finalVerification = await verifyFinalWithRepair(ctx, input.repo, config, baseline, "final-verification");
   if (!finalVerification.ok) {
     issues.push(finalVerification.evidence);
-    return { branch, prBody: prBody(issues, true), reviewBlocking: true, issues, failedTasks: [...failed], noopTasks };
+    return { branch, prBody: prBody(issues, true), reviewBlocking: true, issues, failedTasks, noopTasks };
   }
 
   let reviewBlocking = false;
@@ -350,7 +457,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
     issues.push(`review failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  return { branch, prBody: prBody(issues, reviewBlocking), reviewBlocking, issues, failedTasks: [...failed], noopTasks };
+  return { branch, prBody: prBody(issues, reviewBlocking), reviewBlocking, issues, failedTasks, noopTasks };
 });
 
 async function runFinalVerification(
@@ -418,8 +525,21 @@ async function preserveAndRestoreTaskFailure(
   evidence: string,
 ): Promise<void> {
   const diff = await git(repo, ["diff", "--binary", checkpoint, "--"]);
+  const untracked = (await git(repo, ["ls-files", "--others", "--exclude-standard", "-z"])).stdout.split("\0").filter(Boolean).sort();
+  const archive: Array<{ path: string; data: string }> = [];
+  let archiveBytes = 0;
+  for (const path of untracked) {
+    const data = await readFile(join(repo, path));
+    archiveBytes += data.byteLength;
+    if (archiveBytes > 10 * 1024 * 1024) {
+      await ctx.artifacts.write(`failed-tasks/${encodeURIComponent(task.id)}/${stage}-untracked.txt`, "untracked evidence exceeded 10 MiB and was not deleted");
+      throw new Error(`task ${task.id} untracked failure evidence exceeds 10 MiB; worktree preserved for reconciliation`);
+    }
+    archive.push({ path, data: data.toString("base64") });
+  }
   const name = encodeURIComponent(task.id);
   await ctx.artifacts.write(`failed-tasks/${name}/${stage}.patch`, diff.stdout);
+  await ctx.artifacts.write(`failed-tasks/${name}/${stage}-untracked.json`, JSON.stringify(archive));
   await ctx.artifacts.write(`failed-tasks/${name}/${stage}.txt`, evidence);
   await git(repo, ["reset", "--hard", checkpoint]);
   await git(repo, ["clean", "-fd"]);

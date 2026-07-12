@@ -1,11 +1,22 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
-import { acquireRunLock, assertNoLiveChild, writeProcessLease } from "../src/recovery/process-lease.js";
-import { readProcessIdentity } from "../src/process-identity.js";
+import {
+  acquireRunLock,
+  assertNoLiveChild,
+  reconcileProcessLeases,
+  writeProcessLease,
+} from "../src/recovery/process-lease.js";
+import {
+  processGroupHasLiveMembers,
+  processIdentityIsAlive,
+  processIdentityStatus,
+  readProcessIdentity,
+  signalProcessGroup,
+} from "../src/process-identity.js";
 import { readRepositoryState, reconcileRepository } from "../src/recovery/git-snapshot.js";
 import {
   loadDispatchCheckpoint,
@@ -54,7 +65,9 @@ describe("dispatch durable recovery state", () => {
     const identity = await readProcessIdentity();
     await writeProcessLease(childPath, {
       ...identity,
-      heartbeat: new Date().toISOString(),
+      ownerIdentity: identity,
+      childKind: "acp",
+      processGroupId: identity.pid,
     });
     await expect(assertNoLiveChild(childPath)).rejects.toThrow("may still own");
   });
@@ -64,10 +77,109 @@ describe("dispatch durable recovery state", () => {
     await writeProcessLease(childPath, {
       pid: process.pid,
       startIdentity: "stale-process-instance",
-      heartbeat: new Date().toISOString(),
+      ownerIdentity: await readProcessIdentity(),
+      childKind: "acp",
+      processGroupId: process.pid,
     });
 
     await expect(assertNoLiveChild(childPath)).resolves.toBeUndefined();
+  });
+
+  test("reconciles surviving descendants after their group leader exits", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sigil-descendant-lease-"));
+    const leasePath = join(directory, "child.json");
+    const leader = spawn(process.execPath, ["-e", `
+      const { spawn } = require("node:child_process");
+      spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      setTimeout(() => process.exit(0), 100);
+    `], { detached: true, stdio: "ignore" });
+    if (!leader.pid) throw new Error("leader did not start");
+    const identity = await readProcessIdentity(leader.pid);
+    await writeProcessLease(leasePath, {
+      ...identity,
+      ownerIdentity: { pid: 999_999, startIdentity: "gone" },
+      childKind: "acp",
+      processGroupId: leader.pid,
+    });
+
+    try {
+      await waitForIdentity(identity, "missing");
+      expect(await processGroupHasLiveMembers(leader.pid)).toBe(true);
+
+      await reconcileProcessLeases(directory);
+
+      expect(await processGroupHasLiveMembers(leader.pid)).toBe(false);
+      expect(existsSync(leasePath)).toBe(false);
+      await expect(reconcileProcessLeases(directory)).resolves.toBeUndefined();
+    } finally {
+      signalProcessGroup(leader.pid, "SIGKILL");
+    }
+  });
+
+  test("escalates a TERM-resistant abandoned group before removing its lease", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sigil-resistant-lease-"));
+    const leasePath = join(directory, "child.json");
+    const leader = spawn(process.execPath, ["-e", `
+      process.on("SIGTERM", () => {});
+      setInterval(() => {}, 1000);
+    `], { detached: true, stdio: "ignore" });
+    if (!leader.pid) throw new Error("leader did not start");
+    const identity = await readProcessIdentity(leader.pid);
+    await writeProcessLease(leasePath, {
+      ...identity,
+      ownerIdentity: { pid: 999_999, startIdentity: "gone" },
+      childKind: "acp",
+      processGroupId: leader.pid,
+    });
+    const started = Date.now();
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await reconcileProcessLeases(directory);
+
+      expect(Date.now() - started).toBeGreaterThanOrEqual(450);
+      expect(await processGroupHasLiveMembers(leader.pid)).toBe(false);
+      expect(existsSync(leasePath)).toBe(false);
+    } finally {
+      signalProcessGroup(leader.pid, "SIGKILL");
+    }
+  });
+
+  test("does not signal a reused leader PID or a live dispatcher owner", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sigil-identity-lease-"));
+    const reusedPath = join(directory, "reused.json");
+    const ownedPath = join(directory, "owned.json");
+    const identity = await readProcessIdentity();
+    const reusedLeader = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    if (!reusedLeader.pid) throw new Error("reused leader did not start");
+    const reusedIdentity = await readProcessIdentity(reusedLeader.pid);
+    await writeProcessLease(reusedPath, {
+      ...reusedIdentity,
+      startIdentity: "different-process-instance",
+      ownerIdentity: { pid: 999_999, startIdentity: "gone" },
+      childKind: "acp",
+      processGroupId: reusedIdentity.pid,
+    });
+
+    try {
+      await expect(reconcileProcessLeases(directory)).rejects.toThrow("cannot be signalled safely");
+      expect(existsSync(reusedPath)).toBe(true);
+      expect(await processIdentityIsAlive(reusedIdentity)).toBe(true);
+    } finally {
+      signalProcessGroup(reusedIdentity.pid, "SIGKILL");
+    }
+
+    await writeProcessLease(ownedPath, {
+      ...identity,
+      ownerIdentity: identity,
+      childKind: "acp",
+      processGroupId: identity.pid,
+    });
+    await expect(reconcileProcessLeases(directory)).rejects.toThrow("dispatcher owner");
+    expect(existsSync(ownedPath)).toBe(true);
   });
 
   test("snapshots expected dirty active work and blocks unexpected dirty state", async () => {
@@ -80,21 +192,33 @@ describe("dispatch durable recovery state", () => {
     execFileSync("git", ["commit", "-m", "base"], { cwd: repo });
     const expected = await readRepositoryState(repo);
     writeFileSync(join(repo, "file.txt"), "in progress\n");
+    const dirtyExpected = await readRepositoryState(repo);
 
     await expect(reconcileRepository(repo, {
       branch: expected.branch,
       expectedHead: expected.head,
       tree: "clean",
-      diffDigest: expected.diffDigest,
+      diffDigest: dirtyExpected.diffDigest,
     }, "unexpected")).rejects.toThrow("unexpected dirty");
     const recovered = await reconcileRepository(repo, {
       branch: expected.branch,
       expectedHead: expected.head,
       tree: "clean",
-      diffDigest: expected.diffDigest,
+      diffDigest: dirtyExpected.diffDigest,
     }, "expected", { activeBranch: expected.branch, allowDirty: true });
 
     expect(recovered.recoveryRef).toBe("refs/sigil/recovery/expected");
     expect(execFileSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf8" })).toContain("file.txt");
   });
 });
+
+async function waitForIdentity(
+  identity: Awaited<ReturnType<typeof readProcessIdentity>>,
+  status: Awaited<ReturnType<typeof processIdentityStatus>>,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (await processIdentityStatus(identity) !== status && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  expect(await processIdentityStatus(identity)).toBe(status);
+}

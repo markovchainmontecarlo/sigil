@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import type { SigilAgent } from "../src/agents.js";
+import { ProviderError } from "../src/provider-failure.js";
 import { createContext, type SigilContext } from "../src/context.js";
 import type { EvalGateResult } from "../src/gate.js";
 import { review, type ReviewInput, type ReviewResult } from "../src/workflows/software-change/review/index.js";
@@ -56,7 +57,7 @@ function fixture(tasks: Task[], opts: { batchSize?: number; baseBranch?: string;
     context: opts.context ?? [],
     plan: { planners: ["coder"], synthesizer: "coder" },
     implement: { coder: "coder", batchSize: opts.batchSize ?? 2, repairLimit: 2, branchPrefix: "impl/", baseBranch: opts.baseBranch ?? "master" },
-    review: { reviewer: "reviewer" },
+    review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   const graph: TaskGraph = { contractVersion: CONTRACT_VERSION, project: "fixture", goal: "test goal", tasks: repoTasks };
   const taskFile = join(repo, "task-graph.json");
@@ -97,6 +98,45 @@ function testArtifactDir(repo: string): string {
 }
 
 describe("implement", () => {
+  test("resumes provider-interrupted task work without replaying completed tasks", async () => {
+    const initial = fixture([]).repo;
+    const tasks = [task(initial, "a"), task(initial, "b", ["a"])];
+    const { repo, taskFile } = fixture(tasks);
+    const canonicalGraphFile = join(testArtifactDir(repo), "implementation", "task-graph.json");
+    const checkpointFile = join(testArtifactDir(repo), "implementation", "checkpoint.json");
+    const prompted: string[] = [];
+    let interruptB = true;
+    const context = () => stubContext(repo, {
+      evalGate: okEval,
+      createAgent: () => new StubAgent((_call, prompt) => {
+        const id = prompt.match(/## Your task: (\w+)/)?.[1];
+        if (!id) return "";
+        prompted.push(id);
+        writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+        if (id === "b" && interruptB) {
+          writeFileSync(join(repo, "b-untracked.txt"), "preserved\n");
+          throw new ProviderError("temporary provider interruption", { code: "transient" });
+        }
+        return "done";
+      }),
+      review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
+    });
+
+    const stopped = await implement({ repo, taskFile, branch: "impl/resume", canonicalGraphFile, checkpointFile }, context());
+    expect(stopped.reviewBlocking).toBe(true);
+    expect(JSON.parse(readFileSync(checkpointFile, "utf8")).tasks).toMatchObject({
+      a: { status: "completed" }, b: { status: "pending" },
+    });
+    expect(existsSync(join(repo, "b-untracked.txt"))).toBe(false);
+
+    interruptB = false;
+    const resumed = await implement({ repo, taskFile, branch: "impl/resume", canonicalGraphFile, checkpointFile, resume: true }, context());
+    expect(resumed.failedTasks).toEqual([]);
+    expect(prompted.filter((id) => id === "a")).toHaveLength(1);
+    expect(readFileSync(join(repo, "b-untracked.txt"), "utf8")).toBe("preserved\n");
+    expect(JSON.parse(readFileSync(checkpointFile, "utf8")).tasks.b.status).toBe("completed");
+  });
+
   test("bootstraps the workspace before establishing the baseline", async () => {
     const initial = fixture([]).repo;
     const tasks = [task(initial, "a")];
@@ -214,7 +254,7 @@ describe("implement", () => {
     expect(readFileSync(join(repo, "a.txt"), "utf8")).toBe("a after\n");
   });
 
-  test("red gates trigger repair in the same coder window and dependency failures are skipped", async () => {
+  test("red gates trigger repair in the same coder window while dependents remain blocked", async () => {
     const base = fixture([]).repo;
     const tasks = [task(base, "a"), task(base, "b", ["a"]), task(base, "c")];
     const { repo, taskFile } = fixture(tasks, { batchSize: 3 });
@@ -232,8 +272,9 @@ describe("implement", () => {
 
     expect(coder.calls.some((call) => call.includes("failed build/test"))).toBe(true);
     expect(result.failedTasks).toContain("a");
-    expect(result.failedTasks).toContain("b");
-    expect(result.issues.join("\n")).toContain("skipped because a dependency failed");
+    expect(result.failedTasks).not.toContain("b");
+    expect(result.issues.join("\n")).toContain("blocked tasks awaiting completed dependencies: b");
+    expect(run(repo, ["log", "--oneline"])).toContain("c: Task c");
   });
 
   test("no-op self-heal uses a fresh checker and satisfied verdict resets the tripwire", async () => {

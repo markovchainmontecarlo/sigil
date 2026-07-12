@@ -1,7 +1,8 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
-import { loadConfig } from "../../config.js";
+import { loadConfig, type SigilConfig } from "../../config.js";
 import { sigil, type SigilContext } from "../../context.js";
 import { orderItems, validateBacklog, type WorkItem } from "../../contracts/backlog.js";
 import { evalGate } from "../../gate.js";
@@ -30,9 +31,12 @@ import {
   type DispatchCheckpoint,
   type DispatchActiveItem,
   type DispatchOperationType,
-  type DispatchOperation,
+    type DispatchOperation,
+  type DispatchStageEvidence,
   readDispatchRuntime,
 } from "./state.js";
+import { initializeDispatchProfiles } from "./initialization.js";
+import { validateTaskGraph, taskGraphDigest } from "../../contracts/task-graph.js";
 
 export type DeliveryPolicy = "mergeWhenGreen" | "integrationBranch";
 type DispatchBaseInput = { backlogFile: string; repo: string };
@@ -62,6 +66,8 @@ export type FinalPullRequestResult = {
   issues: string[];
 };
 export type DispatchResult = {
+  status?: "completed" | "stopped" | "waiting";
+  retryable?: boolean;
   delivered: string[];
   stoppedAt?: string;
   results: DispatchItemResult[];
@@ -70,6 +76,7 @@ export type DispatchResult = {
 export type VerifyBaseResult = { ok: boolean; log: string };
 
 export type DispatchOptions = {
+  initialize?: (ctx: SigilContext, config: SigilConfig) => Promise<void>;
   softwareChange?: typeof softwareChange;
   publish?: typeof publish;
   merge?: typeof mergePr;
@@ -104,6 +111,10 @@ async function beginOperation(
     repairBudget: number;
   },
 ): Promise<void> {
+  if (state.operation && state.operation.status === "completed") {
+    state.operations ??= [];
+    if (!state.operations.some((operation) => operation.id === state.operation!.id)) state.operations.push(state.operation);
+  }
   const inputArtifact = await ctx.artifacts.write(
     `${input.name}-input.json`,
     `${JSON.stringify(input.value, null, 2)}\n`,
@@ -123,7 +134,12 @@ async function completeOperation(
   checkpointFile: string,
   state: DispatchCheckpoint,
   ctx: SigilContext,
-  input: { name: string; value: unknown; repo: string; failed?: boolean },
+  input: {
+    name: string; value: unknown; repo: string; failed?: boolean;
+    status?: DispatchOperation["status"];
+    failure?: DispatchOperation["failure"];
+    evidence?: DispatchStageEvidence;
+  },
 ): Promise<void> {
   if (!state.operation) throw new Error("dispatch operation is missing");
   const outputArtifact = await ctx.artifacts.write(
@@ -149,8 +165,34 @@ async function completeOperation(
       startIdentity: runtime.childStartIdentity,
     };
   }
-  state.operation.status = input.failed ? "failed" : "completed";
+  state.operation.status = input.status ?? (input.failed ? "failed" : "completed");
+  state.operation.failure = input.failure;
+  state.operation.evidence = input.evidence;
   await writeDispatchCheckpoint(checkpointFile, state);
+}
+
+function completedOperation(state: DispatchCheckpoint, type: DispatchOperationType, value: unknown): DispatchOperation | undefined {
+  const digest = dispatchValueDigest(value);
+  return [state.operation, ...(state.operations ?? [])].find(
+    (operation) => operation?.type === type && operation.status === "completed" && operation.inputDigest === digest,
+  );
+}
+
+function archiveOperation(state: DispatchCheckpoint): void {
+  if (!state.operation) return;
+  state.operations ??= [];
+  if (!state.operations.some((operation) => operation.id === state.operation!.id)) state.operations.push(state.operation);
+}
+
+function prEvidence(result: AttemptResult | null | undefined): DispatchStageEvidence | undefined {
+  const evidence = result?.evidence;
+  return evidence ? { kind: "remote-pr", number: evidence.number, head: evidence.head, base: evidence.base,
+    headCommit: evidence.headCommit, state: evidence.state, mergedCommit: evidence.mergedCommit, url: evidence.url } : undefined;
+}
+
+function mergeEvidence(result: AttemptResult, head: string, base: string): DispatchStageEvidence | undefined {
+  return result.evidence ? { kind: "merge", head, base, headCommit: result.evidence.headCommit,
+    mergedCommit: result.evidence.mergedCommit } : undefined;
 }
 
 async function collectGateResults(
@@ -252,6 +294,9 @@ function changeInput(
   branch: string,
   baseBranch: string,
   taskGraphFile: string,
+  canonicalGraphFile: string,
+  checkpointFile: string,
+  resume = false,
 ): SoftwareChangeInput {
   return {
     branch,
@@ -260,7 +305,34 @@ function changeInput(
     outFile: item.taskFile ? undefined : taskGraphFile,
     repo: input.repo,
     taskFile: item.taskFile,
+    canonicalGraphFile,
+    checkpointFile,
+    resume,
   };
+}
+
+function interruption(changed: DispatchChangeResult): DispatchOperation["failure"] | undefined {
+  const evidence = changed.issues.join("\n");
+  if (/capacity (?:blocked|exhausted)|no eligible profile/i.test(evidence)) return { kind: "capacity", code: "capacity_exhausted", evidence };
+  if (/provider interruption|resume with the implementation checkpoint/i.test(evidence)) return { kind: "provider-interruption", evidence };
+  return undefined;
+}
+
+async function linkImplementationArtifacts(state: DispatchCheckpoint, repo: string): Promise<void> {
+  const active = state.active;
+  if (!active?.canonicalGraphFile || !active.implementationCheckpointFile || !state.operation) return;
+  try {
+    const graph = validateTaskGraph(JSON.parse(await readFile(active.canonicalGraphFile, "utf8")), { repoRoot: repo });
+    const digest = taskGraphDigest(graph);
+    active.graphDigest = digest;
+    state.operation.implementation = {
+      canonicalGraphFile: active.canonicalGraphFile,
+      graphDigest: digest,
+      checkpointFile: active.implementationCheckpointFile,
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
 }
 
 function resultForWorkflowFailure(
@@ -426,6 +498,7 @@ async function runDispatch(
   const baseBranch = deliveryBase(input, mainBranch);
   const implementationBase = deliveryBaseRef(baseBranch);
   const checkpointFile = ctx.artifacts.path("dispatch-state.json");
+  const starting = !existsSync(checkpointFile);
   const state = await loadDispatchCheckpoint(checkpointFile, {
     repository: resolve(input.repo),
     backlogFile: resolve(input.backlogFile),
@@ -433,6 +506,10 @@ async function runDispatch(
     deliveryPolicy: input.deliveryPolicy,
     deliveryBase: baseBranch,
   });
+  if (starting) {
+    await writeDispatchCheckpoint(checkpointFile, state);
+    await options.initialize?.(ctx, config);
+  }
   const delivered = state.delivered.map((item) => item.id);
   const deliveredSet = new Set(delivered);
 
@@ -463,10 +540,17 @@ async function runDispatch(
     const taskFile = state.active?.id === item.id
       ? state.active.taskFile
       : itemContext.artifacts.path("task-graph.json");
+    const canonicalGraphFile = state.active?.id === item.id && state.active.canonicalGraphFile
+      ? state.active.canonicalGraphFile
+      : itemContext.artifacts.path("implementation/task-graph.json");
+    const implementationCheckpointFile = state.active?.id === item.id && state.active.implementationCheckpointFile
+      ? state.active.implementationCheckpointFile
+      : itemContext.artifacts.path("implementation/checkpoint.json");
     const currentBaseCommit = await currentCommit(input.repo, deliveryBaseRef(baseBranch));
     const completedVerificationValid = state.operation?.inputDigest === dispatchValueDigest({
       base: baseBranch,
       commit: currentBaseCommit,
+      gateInput: "build,test",
     });
     if (state.active?.id === item.id
       && state.active.stage === "verify-base"
@@ -480,6 +564,7 @@ async function runDispatch(
         commit: await currentCommit(input.repo, deliveryBaseRef(baseBranch)),
       });
       state.active = undefined;
+      archiveOperation(state);
       state.operation = undefined;
       await writeDispatchCheckpoint(checkpointFile, state);
       continue;
@@ -493,7 +578,7 @@ async function runDispatch(
     }
     let changed: SoftwareChangeResult;
     const activeStage = state.active?.id === item.id ? state.active.stage : undefined;
-    const resumedStage = completedDeliveryStage(activeStage, state);
+    let resumedStage = completedDeliveryStage(activeStage, state);
 
     if ((activeStage === "software-change" || activeStage === "repair")
       && state.operation?.status === "completed"
@@ -526,16 +611,24 @@ async function runDispatch(
         item,
         issues: state.active?.issues ?? [],
         providerSessionId: state.operation?.agent?.providerSessionId,
+        canonicalGraphFile,
+        checkpointFile: implementationCheckpointFile,
       });
+      const failure = interruption(changed);
       await completeOperation(checkpointFile, state, itemContext, {
         name: "implementation-task",
         value: changed,
         repo: input.repo,
         failed: !workflowDeliverable(changed),
+        status: failure?.kind === "capacity" ? "capacity-blocked" : failure ? "interrupted" : undefined,
+        failure,
       });
     } else {
-      state.active = { id: item.id, branch, taskFile, stage: "software-change", issues: [] };
-      const operationInput = changeInput(input, item, branch, implementationBase, taskFile);
+      state.active = {
+        id: item.id, branch, taskFile, stage: "software-change", issues: [],
+        canonicalGraphFile, implementationCheckpointFile,
+      };
+      const operationInput = changeInput(input, item, branch, implementationBase, taskFile, canonicalGraphFile, implementationCheckpointFile);
       await beginOperation(checkpointFile, state, itemContext, {
         type: "implementation/task",
         name: "implementation-task",
@@ -547,12 +640,28 @@ async function runDispatch(
         runSoftwareChange,
         operationInput,
       );
+      await linkImplementationArtifacts(state, input.repo);
+      const failure = interruption(changed);
       await completeOperation(checkpointFile, state, itemContext, {
         name: "implementation-task",
         value: changed,
         repo: input.repo,
         failed: !workflowDeliverable(changed),
+        status: failure?.kind === "capacity" ? "capacity-blocked" : failure ? "interrupted" : undefined,
+        failure,
       });
+    }
+
+    const operationFailure = interruption(changed);
+    if (operationFailure?.kind === "capacity") {
+      if (state.active) state.active.issues = changed.issues;
+      await writeDispatchCheckpoint(checkpointFile, state);
+      return { status: "waiting", retryable: true, delivered, stoppedAt: item.id, results };
+    }
+    if (operationFailure?.kind === "provider-interruption") {
+      if (state.active) state.active.issues = changed.issues;
+      await writeDispatchCheckpoint(checkpointFile, state);
+      return { status: "stopped", delivered, stoppedAt: item.id, results };
     }
 
     if (!changed.branch || !changed.prBody) {
@@ -598,13 +707,23 @@ async function runDispatch(
       }
     }
 
+    const deliveryCommit = changed.branch ? await currentCommit(input.repo, changed.branch) : undefined;
+    const expectedPublishInput = { branch: changed.branch, base: baseBranch, body: changed.prBody, commit: deliveryCommit };
+    if (activeStage === "publish" && state.operation?.type === "publish"
+      && state.operation.status === "completed"
+      && state.operation.inputDigest !== dispatchValueDigest(expectedPublishInput)) resumedStage = "publish";
+    const expectedMergeInput = { branch: changed.branch, base: baseBranch, commit: deliveryCommit };
+    if (activeStage === "merge" && state.operation?.type === "merge"
+      && state.operation.status === "completed"
+      && state.operation.inputDigest !== dispatchValueDigest(expectedMergeInput)) resumedStage = "merge";
+
     let published: PublishResult = { push: { ok: true, log: "resumed" }, pr: { ok: true, log: "resumed" } };
     if (resumedStage !== "merge" && resumedStage !== "verify-base") {
       state.active = { id: item.id, branch, taskFile, stage: "publish", issues: [], prBody: changed.prBody };
       await beginOperation(checkpointFile, state, itemContext, {
         type: "publish",
         name: "publish",
-        value: { branch: changed.branch, base: baseBranch, body: changed.prBody },
+        value: expectedPublishInput,
         repo: input.repo,
         repairBudget: config.implement.repairLimit,
       });
@@ -624,6 +743,7 @@ async function runDispatch(
         value: published,
         repo: input.repo,
         failed: !(published.push.ok && published.pr?.ok === true),
+        evidence: prEvidence(published.pr),
       });
     }
     const result = resultForDelivery(item, changed, published);
@@ -640,7 +760,7 @@ async function runDispatch(
       await beginOperation(checkpointFile, state, itemContext, {
         type: "merge",
         name: "merge",
-        value: { branch: changed.branch, base: baseBranch },
+        value: expectedMergeInput,
         repo: input.repo,
         repairBudget: config.implement.repairLimit,
       });
@@ -655,6 +775,7 @@ async function runDispatch(
         value: merged,
         repo: input.repo,
         failed: !merged.ok,
+        evidence: mergeEvidence(merged, changed.branch!, baseBranch),
       });
     }
     if (!merged.ok) {
@@ -665,13 +786,15 @@ async function runDispatch(
     }
 
     if (state.active) state.active.stage = "verify-base";
+    const verificationInput = {
+      base: baseBranch,
+      commit: await currentCommit(input.repo, deliveryBaseRef(baseBranch)),
+      gateInput: "build,test",
+    };
     await beginOperation(checkpointFile, state, itemContext, {
       type: "verify-base",
       name: "verify-base",
-      value: {
-        base: baseBranch,
-        commit: await currentCommit(input.repo, deliveryBaseRef(baseBranch)),
-      },
+      value: verificationInput,
       repo: input.repo,
       repairBudget: config.implement.repairLimit,
     });
@@ -693,6 +816,8 @@ async function runDispatch(
       value: verified,
       repo: input.repo,
       failed: !verified.ok,
+      evidence: verificationInput.commit ? { kind: "verification", commit: verificationInput.commit,
+        gateInput: verificationInput.gateInput, log: verified.log } : undefined,
     });
     if (!verified.ok) {
       result.issues.push(`base verification failed: ${verified.log}`);
@@ -705,39 +830,85 @@ async function runDispatch(
     deliveredSet.add(item.id);
     state.delivered.push({ id: item.id, commit: await currentCommit(input.repo, deliveryBaseRef(baseBranch)) });
     state.active = undefined;
+    archiveOperation(state);
     state.operation = undefined;
     await writeDispatchCheckpoint(checkpointFile, state);
   }
 
   if (input.deliveryPolicy === "integrationBranch") {
-    const created = await retryResult(
-      () => runCreatePullRequest(input.repo, {
-        title: backlog.mission,
-        body: finalPullRequestBody(results),
-        base: mainBranch,
-        head: input.integrationBranch,
-      }),
-      (value) => value.ok,
-      config.implement.repairLimit,
-      wait,
-    );
+    const finalBody = finalPullRequestBody(results);
+    const integrationCommit = await currentCommit(input.repo, input.integrationBranch)
+      ?? await currentCommit(input.repo, `origin/${input.integrationBranch}`);
+    const finalPrInput = { title: backlog.mission, body: finalBody, base: mainBranch,
+      head: input.integrationBranch, headCommit: integrationCommit };
+    let created: AttemptResult;
+    const priorPr = completedOperation(state, "final-pull-request", finalPrInput);
+    if (priorPr?.evidence?.kind === "remote-pr" && priorPr.evidence.head === input.integrationBranch
+      && priorPr.evidence.base === mainBranch && (!integrationCommit || !priorPr.evidence.headCommit || priorPr.evidence.headCommit === integrationCommit)) {
+      created = { ok: true, log: "resumed final pull request", evidence: {
+        number: priorPr.evidence.number ?? 0, head: priorPr.evidence.head, base: priorPr.evidence.base,
+        state: priorPr.evidence.state, headCommit: priorPr.evidence.headCommit,
+        mergedCommit: priorPr.evidence.mergedCommit, url: priorPr.evidence.url,
+      } };
+    } else {
+      await beginOperation(checkpointFile, state, ctx, { type: "final-pull-request", name: "final-pull-request",
+        value: finalPrInput, repo: input.repo, repairBudget: config.implement.repairLimit });
+      created = await retryResult(
+        () => runCreatePullRequest(input.repo, finalPrInput),
+        (value) => value.ok,
+        config.implement.repairLimit,
+        wait,
+      );
+      await completeOperation(checkpointFile, state, ctx, { name: "final-pull-request", value: created,
+        repo: input.repo, failed: !created.ok, evidence: prEvidence(created) });
+    }
     const finalPullRequest = finalPullRequestResult(
       input.integrationBranch,
       mainBranch,
       created,
     );
     if (finalPullRequest.created && input.finalAction === "mergeWhenGreen") {
-      const merged = await retryResult(
-        () => runMerge(input.repo, { branch: input.integrationBranch, base: mainBranch }),
-        (value) => value.ok,
-        config.implement.repairLimit,
-        wait,
-      );
+      const finalMergeInput = { branch: input.integrationBranch, base: mainBranch, headCommit: integrationCommit };
+      let merged: AttemptResult;
+      const priorMerge = completedOperation(state, "final-merge", finalMergeInput);
+      if (priorMerge?.evidence?.kind === "merge") {
+        merged = { ok: true, log: "resumed final merge", evidence: {
+          number: created.evidence?.number ?? 0, head: priorMerge.evidence.head, base: priorMerge.evidence.base,
+          state: "MERGED", headCommit: priorMerge.evidence.headCommit,
+          mergedCommit: priorMerge.evidence.mergedCommit,
+        } };
+      } else {
+        await beginOperation(checkpointFile, state, ctx, { type: "final-merge", name: "final-merge",
+          value: finalMergeInput, repo: input.repo, repairBudget: config.implement.repairLimit });
+        merged = await retryResult(
+          () => runMerge(input.repo, { branch: input.integrationBranch, base: mainBranch }),
+          (value) => value.ok,
+          config.implement.repairLimit,
+          wait,
+        );
+        await completeOperation(checkpointFile, state, ctx, { name: "final-merge", value: merged,
+          repo: input.repo, failed: !merged.ok, evidence: mergeEvidence(merged, input.integrationBranch, mainBranch) });
+      }
       finalPullRequest.merged = merged.ok;
       if (!merged.ok) finalPullRequest.issues.push(`final merge failed: ${merged.log}`);
 
       if (merged.ok && input.productionGate) {
-        const production = await ctx.evals(input.productionGate);
+        const productionCommit = merged.evidence?.mergedCommit
+          ?? await currentCommit(input.repo, deliveryBaseRef(mainBranch));
+        const productionInput = { commit: productionCommit, gate: input.productionGate };
+        const priorProduction = completedOperation(state, "production-verification", productionInput);
+        let production: Awaited<ReturnType<SigilContext["evals"]>>;
+        if (priorProduction?.evidence?.kind === "verification") {
+          production = { ok: true, skipped: false, log: priorProduction.evidence.log };
+        } else {
+          await beginOperation(checkpointFile, state, ctx, { type: "production-verification", name: "production-verification",
+            value: productionInput, repo: input.repo, repairBudget: config.implement.repairLimit });
+          production = await ctx.evals(input.productionGate);
+          await completeOperation(checkpointFile, state, ctx, { name: "production-verification", value: production,
+            repo: input.repo, failed: production.skipped || !production.ok,
+            evidence: productionCommit ? { kind: "verification", commit: productionCommit,
+              gateInput: input.productionGate, log: production.log ?? "" } : undefined });
+        }
         finalPullRequest.productionVerified = !production.skipped && production.ok;
         if (production.skipped) finalPullRequest.issues.push(`production gate ${input.productionGate} is not configured`);
         else if (!production.ok) finalPullRequest.issues.push(`production verification failed: ${production.log}`);
@@ -769,7 +940,7 @@ export function createDispatch(options: DispatchOptions = {}) {
     runDispatch(ctx, input, options));
 }
 
-export const dispatch = createDispatch();
+export const dispatch = createDispatch({ initialize: initializeDispatchProfiles });
 
 export function dispatchWithOptions(
   input: DispatchInput,

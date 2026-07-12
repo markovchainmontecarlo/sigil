@@ -293,7 +293,13 @@ describe("cli", () => {
     expect(result.exitCode).toBe(0);
     expect(handle.state).toBe("started");
     expect(handle.pid).toBeGreaterThan(0);
-    for (let attempt = 0; attempt < 100 && !existsSync(outFile); attempt++) await Bun.sleep(20);
+    for (
+      let attempt = 0;
+      attempt < 100 && JSON.parse(readFileSync(handle.statusFile, "utf8")).state !== "succeeded";
+      attempt++
+    ) {
+      await Bun.sleep(20);
+    }
     expect(JSON.parse(readFileSync(outFile, "utf8"))).toEqual({ repo: dir, value: "ok" });
     expect(JSON.parse(readFileSync(handle.statusFile, "utf8")).state).toBe("succeeded");
   });
@@ -404,7 +410,7 @@ describe("cli", () => {
       context: [],
       plan: { planners: ["codexPlanner"], synthesizer: "claudeReviewer" },
       implement: { coder: "codexPlanner", batchSize: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
-      review: { reviewer: "claudeReviewer" },
+      review: { reviewers: ["claudeReviewer"], synthesizer: "claudeReviewer" },
     }, null, 2));
 
     const result = run(["discover-env", "--repo", dir], { ANTHROPIC_API_KEY: "fixture-key" });

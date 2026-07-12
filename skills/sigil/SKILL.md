@@ -32,11 +32,12 @@ Do not repeat planning, implementation, review, or delivery work merely because 
 ## Route the unfinished transition
 
 - **One ordinary software change with no accepted task graph**: use `software-change`.
+- **One ordinary software change requiring detached execution or a custom authority boundary**: use a temporary TypeScript Sigil that composes `softwareChange`; do not promote it to dispatch unless delivery policy is required.
 - **Planning is the requested output**: use `plan`.
 - **The correct change requires safe behavioral experiments**: use `probe`, then reuse its task graph through `software-change --task-file` or `implement` according to the requested boundary.
 - **Accepted task graph**: skip planning. Prefer `software-change --task-file`; use `implement` when the implementation stage itself is the requested boundary.
 - **Existing diff or branch change**: use `review` without replanning or reimplementation.
-- **Mission requiring several dependent deliverables**: use the `sigil-dispatch` skill.
+- **Backlog delivery requiring publication, merge, delivery-base verification, or resumable delivery state**: use the `sigil-dispatch` skill. A one-item backlog is appropriate only when those dispatch-owned effects are required.
 - **One bounded behavior-preserving structural change**: use the `sigil-refactor` skill.
 - **Repository-wide structural migration**: use the `sigil-migration` skill.
 - **Fixed custom topology**: use a YAML workflow with `validate-workflow` and `run-workflow`.

@@ -1,7 +1,13 @@
 flowchart TD
   Input["dispatch input"] --> ReadBacklog["read and validate backlog"]
-  ReadBacklog --> State["load and reconcile durable dispatch checkpoint"]
-  State --> Order["order items by dependency"]
+  ReadBacklog --> Lock["acquire exclusive run lock before inspection"]
+  Lock --> Owner["prove dispatcher owner and reconcile identity-matched child groups"]
+  Owner --> State["load, migrate, and reconcile durable dispatch operation"]
+  State --> Starting{"new dispatch?"}
+  Starting -->|yes| ResolveProfiles["reconcile unfinished subscription profile reservations"]
+  ResolveProfiles --> PrimeProfiles["prime enabled subscription profiles with dormant windows"]
+  PrimeProfiles --> Order["order items by dependency"]
+  Starting -->|resume| Order
   Order --> Policy{"delivery policy"}
   Policy -->|mergeWhenGreen| DeliveryBase["select main delivery base"]
   Policy -->|integrationBranch| PrepareIntegration["create or resume integration branch"]
@@ -14,19 +20,26 @@ flowchart TD
     Resume{"checkpoint stage?"}
     ItemContext["fork dispatch item artifact context"]
     SoftwareChange["call softwareChange in item context on item branch from refreshed delivery base"]
+    Capacity{"capacity available?"}
+    Wait["persist capacity-blocked operation and retryable waiting result"]
+    PreciseResume["validate canonical graph and implementation checkpoint; resume exact pending task"]
     Ready{"change valid and issue-free?"}
     Repair["repair existing branch from exact gate, review, or weakened-test evidence"]
     VerifyRepair["run all gates and configured follow-up reviews"]
-    Publish["idempotently publish item PR to delivery base"]
+    Publish["journal input and reconcile item branch / PR evidence"]
     Merge["enable auto-merge and poll until green and merged"]
     VerifyBase["fetch origin delivery base and detach worktree there; run build and test on updated delivery base after synced checkout"]
     Persist["atomically mark item delivered with base commit"]
     Stop["persist active stage and exhausted evidence; stop safely"]
 
     NextItem -->|item| Resume
-    Resume -->|software-change| ItemContext
+    Resume -->|new software-change| ItemContext
+    Resume -->|interrupted, capacity-blocked, recovering| PreciseResume
+    PreciseResume --> ItemContext
     ItemContext --> SoftwareChange
-    SoftwareChange --> Ready
+    SoftwareChange --> Capacity
+    Capacity -->|blocked| Wait
+    Capacity -->|available| Ready
     Resume -->|repair| Repair
     Ready -->|no| Repair
     Repair --> VerifyRepair
@@ -48,9 +61,12 @@ flowchart TD
 
   NextItem -->|none| FinalPolicy{"integration delivery?"}
   FinalPolicy -->|no| Result["DispatchResult"]
-  FinalPolicy -->|yes| FinalPublish["publish one final integration PR to main"]
+  FinalPolicy -->|yes| FinalPublish["publish one final integration PR to main; journal and reconcile evidence"]
   FinalPublish --> FinalAction{"final action"}
   FinalAction -->|openPullRequest| Result
-  FinalAction -->|mergeWhenGreen| FinalMerge["wait for green, merge, and run configured production gate"]
+  FinalAction -->|mergeWhenGreen| FinalMerge["journal and reconcile final merge"]
+  FinalMerge --> Production["journal exact commit and configured production gate"]
+  Production --> Result
   FinalMerge --> Result
   Stop --> Result
+  Wait --> Result

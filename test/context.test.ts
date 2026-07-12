@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { SigilAgent } from "../src/agents.js";
 import { createContext, loadConfiguredContext, renderContextBlock, sigil, type SigilContext } from "../src/context.js";
+import { processIdentityIsAlive, readProcessIdentity } from "../src/process-identity.js";
 
 function tempRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "sigil-context-test-"));
@@ -14,7 +15,7 @@ function tempRepo(): string {
     context: [],
     plan: { planners: ["coder"], synthesizer: "reviewer" },
     implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: "reviewer" },
+    review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   return dir;
 }
@@ -94,6 +95,34 @@ describe("createContext", () => {
     expect(result.exitCode).toBe(7);
     expect(result.stderr).toContain("bad");
     expect(result.message).toContain("exit code 7");
+  });
+
+  test("sh cancellation removes descendants before returning", async () => {
+    const repo = tempRepo();
+    const pidFile = join(repo, "descendant.pid");
+    const script = join(repo, "process-tree.mjs");
+    writeFileSync(script, `
+      import { spawn } from "node:child_process";
+      import { writeFileSync } from "node:fs";
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      writeFileSync(process.env.PID_FILE, String(child.pid));
+      setInterval(() => {}, 1000);
+    `);
+    const abort = new AbortController();
+    const ctx = createContext(repo, { signal: abort.signal });
+    const running = ctx.sh({
+      command: process.execPath,
+      args: [script],
+      env: { PID_FILE: pidFile },
+    });
+    while (!existsSync(pidFile)) await new Promise((resolve) => setTimeout(resolve, 10));
+    const descendant = await readProcessIdentity(Number(readFileSync(pidFile, "utf8")));
+
+    abort.abort();
+    const result = await running;
+
+    expect(result.ok).toBe(false);
+    expect(await processIdentityIsAlive(descendant)).toBe(false);
   });
 
   test("parallel invokes jobs and preserves Promise.all result order", async () => {
@@ -237,7 +266,7 @@ describe("createContext", () => {
       ],
       plan: { planners: ["coder"], synthesizer: "reviewer" },
       implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-      review: { reviewer: "reviewer" },
+      review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
     }, null, 2));
     writeFileSync(join(repo, "a.md"), "Configured context\n");
     const ctx = createContext(repo);

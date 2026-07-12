@@ -36,7 +36,7 @@ function tempRepo(planners = ["planner-a"], synthesizer = "synthesizer", context
     context,
     plan: { planners, synthesizer },
     implement: { coder: planners[0], batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
-    review: { reviewer: synthesizer },
+    review: { reviewers: [synthesizer], synthesizer: synthesizer },
   }, null, 2));
   return dir;
 }

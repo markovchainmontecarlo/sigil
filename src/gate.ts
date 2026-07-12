@@ -1,10 +1,10 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { loadConfig, resolveEvalCommand } from "./config.js";
 import type { SigilAgent } from "./agents.js";
 import { extractFailureLog } from "./reports/failure-log.js";
+import { OwnedProcess, type ProcessLifecycle } from "./owned-process.js";
 
 export type EmitResult = { ok: true; contents: string[] } | { ok: false; contents: string[]; issue: string };
 export type EmitOptions = { minBytes?: number; attempts?: number; mustChange?: boolean };
@@ -100,18 +100,33 @@ async function checkFiles(files: string[], before: Map<string, string>, minBytes
   return { ok: true, contents };
 }
 
-export type EvalGateOptions = { cwd?: string };
+export type EvalGateOptions = {
+  cwd?: string;
+  signal?: AbortSignal;
+  processLifecycle?: ProcessLifecycle;
+};
 
 export async function evalGate(name: string, opts: EvalGateOptions = {}): Promise<EvalGateResult> {
   const cwd = opts.cwd ?? process.cwd();
   const command = resolveEvalCommand(name, loadConfig(cwd));
   if (!command) return { ok: true, skipped: true };
 
-  return new Promise((resolve) => {
-    execFile("bash", ["-lc", command], { cwd, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
-      const code = typeof (error as { code?: unknown } | null)?.code === "number" ? (error as { code: number }).code : error ? 1 : 0;
-      const combined = [stdout, stderr].filter(Boolean).join("\n");
-      resolve({ ok: code === 0, log: extractFailureLog(combined), command, cwd, exitCode: code });
-    });
+  await using owned = await OwnedProcess.spawn({
+    command: "bash",
+    args: ["-lc", command],
+    cwd,
+    kind: "gate",
+    signal: opts.signal,
+    lifecycle: opts.processLifecycle,
   });
+  const result = await owned.wait();
+  const code = result.exitCode ?? 1;
+  const combined = [result.stdout, result.stderr].filter(Boolean).join("\n");
+  return {
+    ok: code === 0,
+    log: extractFailureLog(combined),
+    command,
+    cwd,
+    exitCode: code,
+  };
 }

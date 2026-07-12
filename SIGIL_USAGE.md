@@ -4,11 +4,17 @@ This is the single usage guide for Sigil. Use `README.md` for the product overvi
 
 ## What Sigil is
 
+**Agent workflows you can read, reason about, and verify.**
+
+Build composable agent workflows in ordinary TypeScript, with explicit control flow, typed state, and deterministic verification.
+
 Sigil is a workflow runtime over tool-using agent runtimes. An LLM supplies reasoning and generation. An agent runtime supplies tools and session continuity. A configured agent role resolves to a provider/runtime, model, and reasoning-effort binding. `ctx.agent(...)` creates a live agent session from that binding.
 
 A workflow owns control flow and a state transition. Agents supply bounded judgment inside workflow operations. Users, callers, or configured policy grant authority; deterministic code enforces authority boundaries and owns persistence, gates, checkpoints, and effect execution.
 
 A TypeScript Sigil is a workflow implemented with the `sigil()` API. TypeScript supplies ordinary control flow. Sigil supplies the context object, agent creation, artifact helpers, eval gates, shell helpers, parallel execution, and nested workflow calls. A YAML workflow is the declarative surface for a fixed topology. See [LLMs, agent runtimes, agents, and workflows](./docs/explanation/llms-agents-and-workflows.md) for the complete glossary.
+
+TypeScript workflows are intended to read as the process they execute, not to imitate YAML. Use ordinary branches and loops for dynamic behavior, one named statement per conceptual step, and typed returns between steps. Use agents for judgment; use deterministic code for control, verification, persistence, and external effects.
 
 ## Choose the right surface
 
@@ -151,6 +157,48 @@ env -u CLAUDECODE sigil software-change \
 
 Use `--brief <file>` when planning needs longer context. Use `--instructions <file>` for implementation-only guidance. Use `--task-file <file>` to skip planning and run the same unified workflow from an existing typed task graph.
 
+### Single changes, detached execution, and dispatch
+
+Workflow selection and execution mode are separate decisions. `software-change`
+owns one code change. `dispatch` owns backlog delivery policy. `run-sigil` launches
+a composed workflow as a detached durable run; it does not turn that workflow into
+a dispatch.
+
+| Starting point and desired result | Surface |
+|---|---|
+| Intent or Markdown plan for one verified local change | `software-change --brief` |
+| Accepted task graph for one verified local change | `software-change --task-file` |
+| One change requiring detached execution or a custom authority boundary | A temporary TypeScript Sigil that calls `ctx.run(softwareChange, ...)`, launched with `run-sigil` |
+| One backlog item requiring dispatch-owned publication, merge, delivery-base verification, or delivery recovery | A one-item backlog passed to `dispatch` |
+| Several dependent deliverables | `breakdown`, then `dispatch` |
+
+A Markdown implementation plan is planning context, not the task graph contract.
+Pass it through `--brief`; `software-change` still translates it into a validated
+task graph. A validated task graph is accepted implementation state. Pass it
+through `--task-file` to skip planning.
+
+Dispatch accepts a one-item backlog, but use that shape only when dispatch must own
+publication, merging, delivery-base verification, or resumable delivery state. Do
+not create a one-item backlog merely to combine planning and implementation;
+`software-change` already owns that transition.
+
+When one change needs detached execution without dispatch delivery, compose the
+built-in workflow in a temporary TypeScript Sigil:
+
+```ts
+import { sigil, softwareChange } from "sigil";
+
+export default sigil("detached-software-change", (ctx, input: {
+  repo: string;
+  intent: string;
+  brief?: string;
+}) => ctx.run(softwareChange, input));
+```
+
+Launch that wrapper with `run-sigil` and a durable run directory. The wrapper adds
+detached execution, logs, artifacts, and a caller-owned authority boundary while
+preserving `software-change` semantics.
+
 Use the stage commands when the stage boundary is the object you need to inspect or compose. `plan` writes a task graph. `implement` consumes a task graph, requires a clean target working tree, owns one local implementation branch, runs configured gates and review, returns a PR body, and the CLI command publishes that branch. `review` can also be run by itself against an existing diff.
 
 ```sh
@@ -167,9 +215,11 @@ env -u CLAUDECODE sigil probe --repo /path/to/repo --intent "<usage or product i
 env -u CLAUDECODE sigil software-change --repo /path/to/repo --intent "<same intent>" --task-file /path/to/repo/.sigil/runs/task-graph.json
 ```
 
-For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. Start dispatch with a durable `--run-dir`, then use `--resume` after interruption. Resume validates the repository, backlog, policy, delivery base, active branch, and process ownership before allowing mutation. Completed items are not replayed, and expected in-progress repair edits are preserved rather than reset. Use `integrationBranch` to accumulate item pull requests away from main. The default final action opens one final pull request. `--final-action mergeWhenGreen` also merges that pull request, and `--production-gate <name>` verifies the configured deployment gate afterward.
+For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. Start dispatch with a durable `--run-dir`, then use `--resume` after interruption. Resume validates the repository, backlog, policy, delivery base, active branch, and process ownership before allowing mutation. A live dispatcher blocks resume. For an abandoned child, resume terminates the recorded process group, escalates from `SIGTERM` to `SIGKILL` when required, confirms that its descendants are gone, and then removes the lease. Completed items are not replayed, and expected in-progress repair edits are preserved rather than reset. Use `integrationBranch` to accumulate item pull requests away from main. The default final action opens one final pull request. `--final-action mergeWhenGreen` also merges that pull request, and `--production-gate <name>` verifies the configured deployment gate afterward.
 
-Codex profiles are user-local routing configuration. Sigil asks Codex for account class and subscription capacity without reading authentication contents. Subscription profiles are selected by remaining percentage at new-agent boundaries. `codex-profile next` can route a bounded number of new agents to a selected subscription or manual metered profile. Metered profiles support token, start, concurrency, runtime, per-reservation, and explicit-rearm admission limits. Active agents retain their original profile until close, and status output omits profile paths.
+Codex profiles are user-local routing configuration. Sigil asks Codex for account class and subscription capacity without reading authentication contents. At new-agent boundaries, subscription admission subtracts active reserved headroom and the new assignment quantum from a fresh remaining-capacity observation, then refuses assignments that would cross `--reserve-floor`. Active subscription assignments retain their original profile and poll capacity on the `--capacity-poll-ms` cadence. Reaching the floor records capacity exhaustion, opens the capacity circuit, requests cancellation once, and releases the reservation during cleanup before failover. A fresh above-floor observation permits automatic re-entry unless `--require-rearm` requires `codex-profile rearm <name>`. `codex-profile next` can route a bounded number of new agents to a selected subscription or manual metered profile, but it does not bypass capacity policy. Metered profiles support token, start, concurrency, runtime, per-reservation, and explicit-rearm admission limits. Status and capacity telemetry omit profile paths, credentials, and account identity.
+
+Agent attempts have total, idle, and cancellation-settlement bounds. When a total or idle deadline expires, Sigil requests provider cancellation and waits through the configured cancellation grace. Cleanup must settle before a retry starts. If a provider ignores cancellation, Sigil returns the classified timeout without starting overlapping work; a later provider rejection remains observed rather than becoming an unhandled rejection.
 
 ```sh
 env -u CLAUDECODE sigil breakdown --repo /path/to/repo --mission "<mission>" --out /path/to/repo/.sigil/runs/backlog.json

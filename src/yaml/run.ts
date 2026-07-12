@@ -1,4 +1,3 @@
-import { execFile } from "node:child_process";
 import { z } from "zod";
 
 import { createContext, type SigilContext } from "../context.js";
@@ -68,19 +67,6 @@ function shouldRun(condition: string | undefined, state: WorkflowState): boolean
   return match[2] === "==" ? left === right : left !== right;
 }
 
-function runShell(script: string, cwd: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile("bash", ["-lc", script], { cwd, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) {
-        const combined = [stdout, stderr].filter(Boolean).join("\n");
-        reject(new Error(combined || String(error)));
-        return;
-      }
-      resolve(stdout.trimEnd());
-    });
-  });
-}
-
 function buildOutputSchema(step: Extract<YamlStep, { prompt: string }>) {
   if (!step.output?.enum?.length) return undefined;
   const values = step.output.enum;
@@ -134,7 +120,12 @@ async function runStep(
   }
 
   const script = interpolateString((step as { script?: string; sh?: string }).script ?? (step as { sh?: string }).sh ?? "", state);
-  const output = await runShell(script, repo);
+  const executed = await ctx.sh(script);
+  if (!executed.ok) {
+    const combined = [executed.stdout, executed.stderr].filter(Boolean).join("\n");
+    throw new Error(combined || executed.message);
+  }
+  const output = executed.stdout.trimEnd();
   state.outputs.set(`${jobId}.${step.id}`, output);
   return { id: step.id, kind, skipped: false, output };
 }

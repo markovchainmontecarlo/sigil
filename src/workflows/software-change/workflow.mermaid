@@ -52,13 +52,18 @@ flowchart TD
   PlanValid -->|yes| LoadGraph
 
   subgraph Implementation["implementation stage"]
-    LoadGraph["load and batch typed task graph"]
+    LoadGraph["load and canonically persist typed task graph"]
+    ImplementationCheckpoint["atomic implementation checkpoint bound to graph, branch, base, and baseline commit"]
+    ResumeGate{"new run or verified resume?"}
     CleanGate{"target tree clean?"}
     CleanFailure["terminal workflow error: dirty target tree"]
     Branch["checkout fresh implementation branch"]
     BaselineGate{"establish configured baseline gates"}
-    TaskLoop{"next task in dependency-ordered batches"}
-    DependencyGate{"dependencies passed?"}
+    TaskLoop{"next pending task in deterministic runnable frontier"}
+    DependencyGate{"dependencies completed?"}
+    Running["checkpoint task running before prompt"]
+    ProviderInterruption{"provider interrupted?"}
+    RecoveryBundle["preserve tracked and untracked recovery bundle"]
     Coder["configured coder role implements task"]
     TaskGate{"configured build/test gates pass?"}
     TaskRepair["same coder repairs task"]
@@ -74,6 +79,9 @@ flowchart TD
     ConsecutiveNoop{"two consecutive unsatisfied noop checks?"}
     StopWork["stop future task work"]
     ReplyArtifact["persist task reply artifact outside target tree"]
+    Completed["checkpoint verified task commit as completed"]
+    AllCompleted{"all checkpoint tasks completed?"}
+    IncompleteResult["return incomplete result without final verification or review"]
     FinalGates{"baseline regression, e2e, verify gates"}
     FinalRepair["configured coder role repairs final gate failure"]
     ReviewStage["implementation-owned review stage"]
@@ -84,16 +92,23 @@ flowchart TD
     FinalRepairCommitIssue["record final repair commit failure issue"]
     ImplementResult["ImplementResult"]
 
-    LoadGraph --> CleanGate
+    LoadGraph --> ResumeGate
+    ResumeGate -->|new| CleanGate
+    ResumeGate -->|matching checkpoint| ImplementationCheckpoint
     CleanGate -->|clean| Branch
     CleanGate -->|dirty| CleanFailure
     Branch --> BaselineGate
     BaselineGate -->|red| ImplementResult
-    BaselineGate -->|green| TaskLoop
+    BaselineGate -->|green| ImplementationCheckpoint
+    ImplementationCheckpoint --> TaskLoop
     TaskLoop -->|task| DependencyGate
-    DependencyGate -->|failed dependency| TaskLoop
-    DependencyGate -->|ready| Coder
-    Coder --> TaskGate
+    DependencyGate -->|incomplete dependency: blocked| TaskLoop
+    DependencyGate -->|ready| Running
+    Running --> Coder
+    Coder --> ProviderInterruption
+    ProviderInterruption -->|yes| RecoveryBundle
+    RecoveryBundle --> IncompleteResult
+    ProviderInterruption -->|no| TaskGate
     TaskGate -->|red, attempts remain| TaskRepair
     TaskRepair --> TaskGate
     TaskGate -->|red, exhausted| ReplyArtifact
@@ -115,8 +130,11 @@ flowchart TD
     ConsecutiveNoop -->|no| ReplyArtifact
     ConsecutiveNoop -->|yes| StopWork
     StopWork --> ReplyArtifact
-    ReplyArtifact --> TaskLoop
-    TaskLoop -->|done or stopped| FinalGates
+    ReplyArtifact --> Completed
+    Completed --> TaskLoop
+    TaskLoop -->|no runnable task| AllCompleted
+    AllCompleted -->|no| IncompleteResult
+    AllCompleted -->|yes| FinalGates
     FinalGates -->|red, attempts remain| FinalRepair
     FinalRepair --> FinalRepairCommit
     FinalRepairCommit --> FinalRepairCommitResult
@@ -138,7 +156,7 @@ flowchart TD
   classDef boundary fill:#f3e8ff,stroke:#7c3aed,color:#3b0764;
   classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
   class Planners,Synthesizer,Coder,TaskRepair,NoChangeRepair,NoopVerdict,FinalRepair,ReviewStage agent;
-  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,PlanValid,CleanGate,BaselineGate,DependencyGate,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,FinalGates,FinalRepairCommitResult,StrongestGate gate;
-  class PlannerArtifacts,BuildGraph,ReplyArtifact,TaskCommitIssue,RetryCommitIssue,FinalRepairCommit,FinalRepairCommitIssue artifact;
+  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,PlanValid,ResumeGate,CleanGate,BaselineGate,DependencyGate,ProviderInterruption,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,AllCompleted,FinalGates,FinalRepairCommitResult,StrongestGate gate;
+  class PlannerArtifacts,BuildGraph,ImplementationCheckpoint,RecoveryBundle,ReplyArtifact,TaskCommitIssue,RetryCommitIssue,FinalRepairCommit,FinalRepairCommitIssue artifact;
   class Delivery boundary;
   class SuppliedGraphFailure,CleanFailure failure;

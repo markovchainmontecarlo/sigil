@@ -15,7 +15,15 @@ export type DispatchOperationType =
   | "post-review-verification"
   | "publish"
   | "merge"
-  | "verify-base";
+  | "verify-base"
+  | "final-pull-request"
+  | "final-merge"
+  | "production-verification";
+
+export type DispatchStageEvidence =
+  | { kind: "remote-pr"; number?: number; head: string; base: string; headCommit?: string; state: "OPEN" | "CLOSED" | "MERGED"; mergedCommit?: string; url?: string }
+  | { kind: "merge"; head: string; base: string; headCommit?: string; mergedCommit?: string }
+  | { kind: "verification"; commit: string; gateInput: string; log: string };
 
 export type RepositoryExpectation = {
   branch: string;
@@ -29,7 +37,7 @@ export type RepositoryExpectation = {
 export type DispatchOperation = {
   id: string;
   type: DispatchOperationType;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "interrupted" | "capacity-blocked" | "recovering";
   attempt: number;
   repairBudget: number;
   inputArtifact: string;
@@ -41,19 +49,30 @@ export type DispatchOperation = {
   child?: { pid: number; startIdentity: string };
   lease?: { owner: string; heartbeat: string };
   gates: Record<string, { status: "passed" | "failed" | "skipped"; inputDigest: string; evidence?: string }>;
+  failure?: {
+    kind: "capacity" | "provider-interruption" | "reconciliation" | "deterministic";
+    code?: string;
+    fingerprint?: string;
+    evidence: string;
+  };
+  implementation?: { canonicalGraphFile: string; graphDigest?: string; checkpointFile: string };
+  evidence?: DispatchStageEvidence;
 };
 
 export type DispatchActiveItem = {
   id: string;
   branch: string;
   taskFile: string;
+  canonicalGraphFile?: string;
+  graphDigest?: string;
+  implementationCheckpointFile?: string;
   stage: "software-change" | "repair" | "publish" | "merge" | "verify-base";
   issues: string[];
   prBody?: string;
 };
 
 export type DispatchCheckpoint = {
-  version: 2;
+  version: 3;
   repository: string;
   backlogFile: string;
   backlogDigest: string;
@@ -62,6 +81,7 @@ export type DispatchCheckpoint = {
   delivered: Array<{ id: string; commit?: string }>;
   active?: DispatchActiveItem;
   operation?: DispatchOperation;
+  operations?: DispatchOperation[];
 };
 
 export type DispatchIdentity = Pick<
@@ -119,9 +139,24 @@ export async function loadDispatchCheckpoint(
   expected: DispatchIdentity,
 ): Promise<DispatchCheckpoint> {
   const existing = await readCheckpoint(path);
-  if (!existing) return { version: 2, ...expected, delivered: [] };
+  if (!existing) return { version: 3, ...expected, delivered: [] };
+  migrateDispatchCheckpoint(existing);
   assertDispatchIdentity(existing, expected);
   return existing;
+}
+
+export function migrateDispatchCheckpoint(existing: DispatchCheckpoint): void {
+  existing.operations ??= [];
+  if ((existing as { version: number }).version === 3) return;
+  (existing as { version: number }).version = 3;
+  if (!existing.active || !existing.operation || existing.operation.status === "completed") return;
+  if (existing.operation.type === "implementation/task" && !existing.active.implementationCheckpointFile) {
+    existing.operation.status = "interrupted";
+    existing.operation.failure = {
+      kind: "reconciliation",
+      evidence: "active legacy implementation lacks canonical graph and task checkpoint identity",
+    };
+  }
 }
 
 export function assertDispatchIdentity(existing: DispatchCheckpoint, expected: DispatchIdentity): void {
@@ -139,6 +174,7 @@ export async function writeDispatchCheckpoint(path: string, state: DispatchCheck
 export async function readDispatchCheckpoint(path: string): Promise<DispatchCheckpoint> {
   const state = await readCheckpoint(path);
   if (!state) throw new Error(`dispatch run manifest not found: ${path}`);
+  migrateDispatchCheckpoint(state);
   return state;
 }
 

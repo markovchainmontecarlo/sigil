@@ -6,20 +6,21 @@ import {
   type NewSessionResponse,
   type SessionUpdate,
 } from "@agentclientprotocol/sdk";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
 
-import { readProcessIdentity, type ProcessIdentity } from "./process-identity.js";
+import { OwnedProcess, type ProcessLifecycle } from "./owned-process.js";
+import type { ProcessIdentity } from "./process-identity.js";
 
 export type OwnedAcpOptions = {
   command: string;
   args: string[];
   cwd: string;
   env: Record<string, string>;
-  model?: string;
   resumeSessionId?: string;
   onProcessStarted?: (identity: ProcessIdentity) => void | Promise<void>;
+  onProcessStopped?: (identity: ProcessIdentity) => void | Promise<void>;
+  processLifecycle?: ProcessLifecycle;
 };
 
 export type OwnedAcpEvent =
@@ -32,13 +33,12 @@ type PromptState = {
 };
 
 export class OwnedCodexAcpConnection implements AsyncDisposable {
-  private child?: ChildProcessWithoutNullStreams;
+  private process?: OwnedProcess;
   private connection?: ClientSideConnection;
   private session?: NewSessionResponse;
   private initialization?: Promise<void>;
   private promptState?: PromptState;
   private stderr = "";
-  private identity?: ProcessIdentity;
 
   constructor(private readonly options: OwnedAcpOptions) {}
 
@@ -47,7 +47,7 @@ export class OwnedCodexAcpConnection implements AsyncDisposable {
   }
 
   get childIdentity(): ProcessIdentity | undefined {
-    return this.identity;
+    return this.process?.identity;
   }
 
   async *promptStream(text: string, signal?: AbortSignal): AsyncGenerator<OwnedAcpEvent> {
@@ -56,7 +56,14 @@ export class OwnedCodexAcpConnection implements AsyncDisposable {
     const sessionId = this.requireSessionId();
     const queue = createAsyncQueue<OwnedAcpEvent>();
     const state = { sessionId, onEvent: (event: OwnedAcpEvent) => queue.push(event) };
-    const abort = () => queue.fail(signal?.reason ?? new Error("ACP prompt aborted"));
+    let aborting = false;
+    const abort = () => {
+      aborting = true;
+      void this.disconnect().then(
+        () => queue.fail(signal?.reason ?? new Error("ACP prompt aborted")),
+        (error) => queue.fail(error),
+      );
+    };
 
     this.promptState = state;
     signal?.addEventListener("abort", abort, { once: true });
@@ -67,7 +74,9 @@ export class OwnedCodexAcpConnection implements AsyncDisposable {
       (result) => result.stopReason === "end_turn"
         ? queue.close()
         : queue.fail(new Error(`ACP prompt stopped before completing: ${result.stopReason}`)),
-      (error) => queue.fail(this.withStderr(error)),
+      (error) => {
+        if (!aborting) queue.fail(this.withStderr(error));
+      },
     );
 
     try {
@@ -88,9 +97,8 @@ export class OwnedCodexAcpConnection implements AsyncDisposable {
     this.session = undefined;
     this.initialization = undefined;
     this.promptState = undefined;
-    if (this.child && !this.child.killed) await terminateOwnedProcess(this.child);
-    this.child = undefined;
-    this.identity = undefined;
+    await this.process?.dispose();
+    this.process = undefined;
   }
 
   private async ensureConnected(): Promise<void> {
@@ -100,15 +108,20 @@ export class OwnedCodexAcpConnection implements AsyncDisposable {
 
   private async initialize(): Promise<void> {
     this.stderr = "";
-    const child = spawnOwnedProcess(this.options);
-    this.child = child;
-    child.stderr.on("data", (chunk) => { this.stderr += String(chunk); });
-    this.identity = await readProcessIdentity(child.pid);
-    await this.options.onProcessStarted?.(this.identity);
+    const owned = await OwnedProcess.spawn({
+      command: this.options.command,
+      args: this.options.args,
+      cwd: this.options.cwd,
+      env: { ...process.env, ...this.options.env },
+      kind: "acp",
+      lifecycle: combineLifecycle(this.options),
+    });
+    this.process = owned;
+    owned.child.stderr.on("data", (chunk) => { this.stderr += String(chunk); });
 
     const stream = ndJsonStream(
-      Writable.toWeb(child.stdin),
-      Readable.toWeb(child.stdout),
+      Writable.toWeb(owned.child.stdin),
+      Readable.toWeb(owned.child.stdout),
     );
     const connection = new ClientSideConnection(
       () => createAcpClient(() => this.promptState),
@@ -119,10 +132,6 @@ export class OwnedCodexAcpConnection implements AsyncDisposable {
     try {
       await connection.initialize(initializeRequest());
       this.session = await createOrResumeSession(connection, this.options);
-      if (this.options.model) await connection.unstable_setSessionModel({
-        sessionId: this.session.sessionId,
-        modelId: this.options.model,
-      });
     } catch (error) {
       await this.disconnect();
       throw this.withStderr(error);
@@ -146,17 +155,17 @@ export class OwnedCodexAcpConnection implements AsyncDisposable {
   }
 }
 
-function spawnOwnedProcess(options: OwnedAcpOptions): ChildProcessWithoutNullStreams {
-  return spawn(
-    options.command,
-    options.args,
-    {
-      cwd: options.cwd,
-      env: { ...process.env, ...options.env },
-      detached: process.platform !== "win32",
-      stdio: ["pipe", "pipe", "pipe"],
+function combineLifecycle(options: OwnedAcpOptions): ProcessLifecycle {
+  return {
+    async started(process) {
+      await options.processLifecycle?.started?.(process);
+      await options.onProcessStarted?.(process.identity);
     },
-  );
+    async stopped(process) {
+      await options.processLifecycle?.stopped?.(process);
+      await options.onProcessStopped?.(process.identity);
+    },
+  };
 }
 
 function initializeRequest() {
@@ -210,36 +219,6 @@ function createAcpClient(getState: () => PromptState | undefined): Client {
       return {};
     },
   };
-}
-
-async function terminateOwnedProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
-  const pid = child.pid;
-  if (!pid || child.exitCode !== null) return;
-  const exited = waitForExit(child);
-  terminateProcessGroup(pid, "SIGTERM");
-  if (await settledWithin(exited, 1_000)) return;
-  terminateProcessGroup(pid, "SIGKILL");
-  await settledWithin(exited, 1_000);
-}
-
-function terminateProcessGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(process.platform === "win32" ? pid : -pid, signal);
-  } catch {
-    return;
-  }
-}
-
-function waitForExit(child: ChildProcessWithoutNullStreams): Promise<void> {
-  if (child.exitCode !== null) return Promise.resolve();
-  return new Promise((resolve) => child.once("exit", () => resolve()));
-}
-
-async function settledWithin(promise: Promise<void>, milliseconds: number): Promise<boolean> {
-  return Promise.race([
-    promise.then(() => true),
-    new Promise<false>((resolve) => setTimeout(() => resolve(false), milliseconds)),
-  ]);
 }
 
 function createAsyncQueue<T>(): AsyncIterable<T> & {
