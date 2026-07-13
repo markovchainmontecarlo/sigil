@@ -14,7 +14,7 @@ function tempRepo(): string {
     evals: {},
     context: [],
     plan: { planners: ["coder"], synthesizer: "reviewer" },
-    implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+    implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   return dir;
@@ -265,7 +265,7 @@ describe("createContext", () => {
         { path: "missing.md", update: false },
       ],
       plan: { planners: ["coder"], synthesizer: "reviewer" },
-      implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+      implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
       review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
     }, null, 2));
     writeFileSync(join(repo, "a.md"), "Configured context\n");

@@ -83,7 +83,7 @@ A representative config shape is:
   },
   "implement": {
     "coder": "implementer",
-    "batchSize": 5,
+    "sessionTaskLimit": 5,
     "repairLimit": 3,
     "branchPrefix": "sigil/",
     "baseBranch": "main"
@@ -102,7 +102,7 @@ Config sections:
 - `workspace.bootstrap`: optional deterministic preparation command run before implementation or refactor baseline gates. It must leave tracked files unchanged.
 - `context`: repo-relative files loaded at run start. Paths cannot escape the repo.
 - `plan`: planner agent names and one synthesizer agent name.
-- `implement`: coder agent, batch size, repair limit, branch prefix, base branch, and optional test report settings.
+- `implement`: coder agent, live-session task limit, repair limit, branch prefix, base branch, and optional test report settings. Consecutive tasks reuse one coder session until the limit rotates it with a checkpoint-backed handoff; pull-request completion closes the session.
 - `review`: reviewer agent and the number of fresh reviews allowed after repair. `followUpReviews` defaults to `0`; repairs still run configured verification gates.
 
 Configured context is orientation, not proof. Verify important claims against source or observed behavior before relying on them. `update: true` marks a drift-controlled write-back target. `update: false` marks read-only context unless the task explicitly declares that file as an output. Missing configured context files are skipped and reported in the rendered context block.

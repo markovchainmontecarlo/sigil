@@ -65,6 +65,7 @@ ${taskGraphRepair}`).not.toMatch(/\{\{\w+\}\}/);
       TASK_TITLE: "Task A",
       TASK_SUMMARY: "summary",
       DIAGRAMS: "",
+      HANDOFF: "",
       CONTEXT: "context block",
       ACCEPTANCE: "- works",
       FILES: "- modify /tmp/a.txt",

@@ -18,7 +18,7 @@ function fixture(build = "true", testCommand = "true") {
     plan: { planners: ["worker"], synthesizer: "worker" },
     implement: {
       coder: "worker",
-      batchSize: 1,
+      sessionTaskLimit: 1,
       repairLimit: 2,
       branchPrefix: "test/",
       baseBranch: "main",

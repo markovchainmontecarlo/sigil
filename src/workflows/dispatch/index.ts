@@ -37,6 +37,7 @@ import {
 } from "./state.js";
 import { initializeDispatchProfiles } from "./initialization.js";
 import { validateTaskGraph, taskGraphDigest } from "../../contracts/task-graph.js";
+import { readCheckpoint as readImplementationCheckpoint } from "../software-change/implementation/checkpoint.js";
 
 export type DeliveryPolicy = "mergeWhenGreen" | "integrationBranch";
 type DispatchBaseInput = { backlogFile: string; repo: string };
@@ -582,7 +583,7 @@ async function runDispatch(
     }
     let changed: SoftwareChangeResult;
     const activeStage = state.active?.id === item.id ? state.active.stage : undefined;
-    let resumedStage = completedDeliveryStage(activeStage, state);
+    let resumedStage = await resumedDeliveryStage(activeStage, state);
 
     if ((activeStage === "software-change" || activeStage === "repair")
       && state.operation?.status === "completed"
@@ -929,14 +930,39 @@ async function runDispatch(
   return { delivered, results };
 }
 
-function completedDeliveryStage(
+async function resumedDeliveryStage(
   active: DispatchActiveItem["stage"] | undefined,
   state: DispatchCheckpoint,
-): DispatchActiveItem["stage"] | undefined {
+): Promise<DispatchActiveItem["stage"] | undefined> {
+  if (await completedImplementationNeedsRepair(active, state)) return "repair";
   if (state.operation?.status !== "completed") return active;
   if (active === "publish" && state.operation.type === "publish") return "merge";
   if (active === "merge" && state.operation.type === "merge") return "verify-base";
   return active;
+}
+
+async function completedImplementationNeedsRepair(
+  active: DispatchActiveItem["stage"] | undefined,
+  state: DispatchCheckpoint,
+): Promise<boolean> {
+  if (active !== "software-change") return false;
+  if (state.operation?.type !== "implementation/task") return false;
+  if (state.operation.status === "completed") return false;
+  if (!state.active?.implementationCheckpointFile) return false;
+
+  let checkpoint: Awaited<ReturnType<typeof readImplementationCheckpoint>>;
+  try {
+    checkpoint = await readImplementationCheckpoint(
+      state.active.implementationCheckpointFile,
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+
+  return Object.values(checkpoint.tasks).every(
+    (task) => task.status === "completed",
+  );
 }
 
 export function createDispatch(options: DispatchOptions = {}) {

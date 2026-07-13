@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CONTRACT_VERSION, checkTaskGraph, planBatches, validateTaskGraph, type Task, type TaskGraph } from "../src/contracts/task-graph.js";
+import { CONTRACT_VERSION, checkTaskGraph, validateTaskGraph, type Task, type TaskGraph } from "../src/contracts/task-graph.js";
 
 const file = (path = "/repo/src/file.ts") => ({ path, action: "modify" as const, details: ["update file"] });
 const task = (id: string, dependencies: string[] = []): Task => ({
@@ -72,20 +72,5 @@ describe("task graph contract", () => {
     expect(() => validateTaskGraph(outsideGraph, { repoRoot })).toThrow(/file path escapes repo root: \/outside\/file\.ts/);
   });
 
-  test("planBatches respects dependency order and task-count cap", () => {
-    const tasks = [task("a"), task("b"), task("c", ["a"]), task("d", ["b"]), task("e", ["c", "d"])];
-    const { batches, byId } = planBatches(tasks, 2);
-    const order = batches.flat();
 
-    expect(batches.every((batch) => batch.length <= 2)).toBe(true);
-    expect(order.indexOf("a")).toBeLessThan(order.indexOf("c"));
-    expect(order.indexOf("b")).toBeLessThan(order.indexOf("d"));
-    expect(order.indexOf("c")).toBeLessThan(order.indexOf("e"));
-    expect(order.indexOf("d")).toBeLessThan(order.indexOf("e"));
-    expect(byId.e.id).toBe("e");
-  });
-
-  test("planBatches throws on dependency cycles", () => {
-    expect(() => planBatches([task("a", ["b"]), task("b", ["a"])], 2)).toThrow("cycle in task graph");
-  });
 });

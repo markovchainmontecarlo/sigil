@@ -20,7 +20,7 @@ const validConfig = {
   },
   evals: { build: "bun run typecheck", test: "bun test" },
   plan: { planners: ["explorer", "implementer"], synthesizer: "explorer" },
-  implement: { coder: "implementer", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+  implement: { coder: "implementer", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
   review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };
 
@@ -40,6 +40,18 @@ describe("loadConfig", () => {
     expect(config.plan.planners).toEqual(["explorer", "implementer"]);
     expect(config.review.followUpReviews).toBe(0);
     expect(config.implement.idleTimeoutMs).toBePositive();
+  });
+
+  test("session task limit must be a positive integer", () => {
+    for (const sessionTaskLimit of [0, -1, 1.5]) {
+      const root = tempRepo();
+      writeConfig(root, {
+        ...validConfig,
+        implement: { ...validConfig.implement, sessionTaskLimit },
+      });
+
+      expect(() => loadConfig(root)).toThrow();
+    }
   });
 
   test.each(["operationTimeoutMs", "idleTimeoutMs"])("%s must be positive", (field) => {

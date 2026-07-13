@@ -13,7 +13,7 @@ function repo(): string {
     agents: { coder: { provider: "codex", model: "test" } },
     evals: {},
     plan: { planners: ["coder"], synthesizer: "coder" },
-    implement: { coder: "coder", batchSize: 1, repairLimit: 1, branchPrefix: "x/", baseBranch: "main" },
+    implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "x/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }));
   return directory;

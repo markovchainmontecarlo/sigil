@@ -84,7 +84,6 @@ export {
   canonicalTaskGraph,
   checkTaskGraph,
   orderedTasks,
-  planBatches,
   taskGraphDigest,
   validateTaskGraph,
   type FileAction,

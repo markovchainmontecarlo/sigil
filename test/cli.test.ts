@@ -447,7 +447,7 @@ describe("cli", () => {
       agents: { claudeReviewer: { provider: "claude", model: "private-model" } },
       evals: {}, context: [],
       plan: { planners: ["claudeReviewer"], synthesizer: "claudeReviewer" },
-      implement: { coder: "claudeReviewer", batchSize: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
+      implement: { coder: "claudeReviewer", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
       review: { reviewers: ["claudeReviewer"], synthesizer: "claudeReviewer" },
     }));
     const home = mkdtempSync(join(tmpdir(), "sigil-cli-home-"));
