@@ -19,6 +19,7 @@ Answer or edit directly when the request is a quick factual check, short explana
 
 Before choosing a workflow, inspect the state the user already accepts:
 
+- active or explicitly referenced Markdown plan;
 - task graph;
 - probe result;
 - existing diff or branch change;
@@ -29,9 +30,19 @@ Before choosing a workflow, inspect the state the user already accepts:
 
 Do not repeat planning, implementation, review, or delivery work merely because a higher-level workflow normally includes it.
 
+When the user asks to run `software-change` after developing or approving a
+Markdown plan, verify that plan file exists and pass its complete contents
+through `--brief`. Resolve an omitted filename against the active or most
+recently accepted plan artifact in the conversation. The command's concise
+`--intent` labels the change; it does not replace the plan. Ask which plan to
+use only when more than one artifact remains genuinely plausible. A validated
+task graph is different accepted state and uses `--task-file` instead.
+
 ## Route the unfinished transition
 
-- **One ordinary software change with no accepted task graph**: use `software-change`.
+- **One ordinary software change with no accepted task graph**: use
+  `software-change`; pass an accepted Markdown plan through `--brief` when one
+  exists.
 - **One ordinary software change requiring detached execution or a custom authority boundary**: use a temporary TypeScript Sigil that composes `softwareChange`; do not promote it to dispatch unless delivery policy is required.
 - **Planning is the requested output**: use `plan`.
 - **The correct change requires safe behavioral experiments**: use `probe`, then reuse its task graph through `software-change --task-file` or `implement` according to the requested boundary.

@@ -5,52 +5,60 @@ import { describe, expect, test } from "bun:test";
 
 import { DEFAULT_SIGIL_CONFIG } from "../src/config.js";
 import { createContext } from "../src/context.js";
-import type { CodexProfile } from "../src/codex-profiles.js";
-import { initializeDispatchProfiles } from "../src/workflows/dispatch/initialization.js";
+import { DispatchProfileReconciliationError, initializeDispatchProfiles } from "../src/workflows/dispatch/initialization.js";
+import type { ReservationReconciliation } from "../src/codex-router.js";
 
-function profile(name: string, profileClass: CodexProfile["profileClass"]): CodexProfile {
-  return {
-    name,
-    home: join(tmpdir(), name),
-    enabled: true,
-    profileClass,
-  };
-}
+const context = () => createContext(mkdtempSync(join(tmpdir(), "sigil-dispatch-initialization-")));
 
 describe("dispatch initialization", () => {
-  test("reconciles assignments and primes enabled subscription profiles", async () => {
-    const repo = mkdtempSync(join(tmpdir(), "sigil-dispatch-initialization-"));
-    const ctx = createContext(repo);
-    const primed: string[] = [];
-    let reconciled = false;
+  test("records safe provider-neutral reconciliation without starting a provider", async () => {
+    const ctx = context();
+    let reconciliations = 0;
+    const result: ReservationReconciliation = {
+      outcomes: [{ profile: "codex:pro", outcome: "settled" }],
+      blocked: false,
+    };
 
     await initializeDispatchProfiles(ctx, DEFAULT_SIGIL_CONFIG, {
-      resolveReservations: async () => { reconciled = true; },
-      readProfiles: async () => [
-        profile("active", "subscription"),
-        profile("dormant", "subscription"),
-        profile("api", "metered-api"),
-      ],
-      primeProfile: async (candidate) => {
-        primed.push(candidate.name);
-        return {
-          before: { profileClass: "subscription", capacity: { kind: "unavailable", available: false, observedAt: new Date().toISOString() } },
-          after: { profileClass: "subscription", capacity: { kind: "unavailable", available: false, observedAt: new Date().toISOString() } },
-          windowStarted: candidate.name === "dormant",
-        };
+      reconcileReservations: async () => {
+        reconciliations++;
+        return result;
       },
     });
 
-    const artifact = JSON.parse(readFileSync(
-      ctx.artifacts.path("dispatch-initialization/codex-profile-priming.json"),
-      "utf8",
-    )) as { results: Array<{ profile: string; outcome: string }> };
+    const artifact = JSON.parse(readFileSync(ctx.artifacts.path("dispatch-initialization/profile-reconciliation.json"), "utf8"));
+    expect(reconciliations).toBe(1);
+    expect(artifact).toEqual(result);
+    expect(JSON.stringify(artifact)).not.toContain("home");
+    expect(JSON.stringify(artifact)).not.toContain("prime");
+  });
 
-    expect(reconciled).toBe(true);
-    expect(primed).toEqual(["active", "dormant"]);
-    expect(artifact.results).toEqual([
-      { profile: "active", outcome: "active" },
-      { profile: "dormant", outcome: "primed" },
-    ]);
+  test.each(["retained-live", "retained-unverifiable"] as const)("blocks %s ownership", async (outcome) => {
+    const ctx = context();
+    await expect(initializeDispatchProfiles(ctx, DEFAULT_SIGIL_CONFIG, {
+      reconcileReservations: async () => ({
+        outcomes: [{ profile: "claude:pro", outcome }],
+        blocked: true,
+      }),
+    })).rejects.toBeInstanceOf(DispatchProfileReconciliationError);
+    const artifact = JSON.parse(readFileSync(ctx.artifacts.path("dispatch-initialization/profile-reconciliation.json"), "utf8"));
+    expect(artifact.outcomes).toEqual([{ profile: "claude:pro", outcome }]);
+  });
+
+  test("reuses completed reconciliation on resume", async () => {
+    const ctx = context();
+    let reconciliations = 0;
+    const reconcileReservations = async (): Promise<ReservationReconciliation> => {
+      reconciliations++;
+      return { outcomes: [], blocked: false };
+    };
+
+    await initializeDispatchProfiles(ctx, DEFAULT_SIGIL_CONFIG, { reconcileReservations });
+    const artifactPath = ctx.artifacts.path("dispatch-initialization/profile-reconciliation.json");
+    const first = readFileSync(artifactPath, "utf8");
+    await initializeDispatchProfiles(ctx, DEFAULT_SIGIL_CONFIG, { reconcileReservations });
+
+    expect(reconciliations).toBe(1);
+    expect(readFileSync(artifactPath, "utf8")).toBe(first);
   });
 });

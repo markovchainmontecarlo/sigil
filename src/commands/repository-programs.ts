@@ -193,7 +193,14 @@ export async function dispatchCommand(args: string[]): Promise<number> {
   const result = await dispatch(input, createContext(input.repo, {
     artifactRoot: join(runDir, "artifacts"),
     onAgentRuntime: async (runtime) => {
-      await writeDispatchRuntime(runtimeFile, runtime);
+      await writeDispatchRuntime(runtimeFile, {
+        version: 1,
+        binding: runtime.binding,
+        providerSessionId: runtime.providerSessionId,
+        childProcessId: runtime.childProcessId,
+        childStartIdentity: runtime.childStartIdentity,
+        active: runtime.active ?? false,
+      });
     },
     processLifecycle: dispatchProcessLifecycle(childLeaseDir),
   }));

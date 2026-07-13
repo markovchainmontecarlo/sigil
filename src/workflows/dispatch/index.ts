@@ -208,10 +208,11 @@ async function collectGateResults(
   }
   const gates: DispatchOperation["gates"] = {};
   for (const line of contents.split("\n").filter(Boolean)) {
-    const event = JSON.parse(line) as { stage?: string; gate?: string; outcome?: string; command?: string };
-    if (event.stage !== "gate-completed" || !event.gate) continue;
-    const status = event.outcome === "passed" || event.outcome === "failed" ? event.outcome : "skipped";
-    gates[event.gate] = { status, inputDigest, evidence: event.command };
+    const event = JSON.parse(line) as { stage?: string; details?: { gate?: string; outcome?: string; command?: string } };
+    const details = event.details ?? {};
+    if (event.stage !== "gate-completed" || !details.gate) continue;
+    const status = details.outcome === "passed" || details.outcome === "failed" ? details.outcome : "skipped";
+    gates[details.gate] = { status, inputDigest, evidence: details.command };
   }
   return gates;
 }
@@ -507,13 +508,16 @@ async function runDispatch(
     deliveryBase: baseBranch,
   });
   if (starting) {
-    await writeDispatchCheckpoint(checkpointFile, state);
     await options.initialize?.(ctx, config);
+    await writeDispatchCheckpoint(checkpointFile, state);
   }
   const delivered = state.delivered.map((item) => item.id);
   const deliveredSet = new Set(delivered);
 
-  if (input.deliveryPolicy === "integrationBranch") {
+  const recoveringImplementation = state.operation?.status === "recovering"
+    && state.operation.type === "implementation/task"
+    && state.active?.stage === "software-change";
+  if (input.deliveryPolicy === "integrationBranch" && !recoveringImplementation) {
     await prepareIntegrationBranch(
       input.repo,
       input.integrationBranch,

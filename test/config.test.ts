@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
-import { loadConfig } from "../src/config.js";
+import { AgentBindingSchema, loadConfig } from "../src/config.js";
 
 function tempRepo(): string {
   return mkdtempSync(join(tmpdir(), "sigil-config-test-"));
@@ -96,6 +96,39 @@ describe("loadConfig", () => {
     });
 
     expect(loadConfig(root).agents.reviewer).toEqual({ provider: "copilot", model: "gpt-5", effort: "medium" });
+  });
+
+  test("claude agent provider parses and defaults effort", () => {
+    const root = tempRepo();
+    writeConfig(root, {
+      ...validConfig,
+      agents: {
+        ...validConfig.agents,
+        reviewer: { provider: "claude", model: "claude-sonnet-4-5" },
+      },
+    });
+
+    expect(loadConfig(root).agents.reviewer).toEqual({
+      provider: "claude",
+      model: "claude-sonnet-4-5",
+      effort: "medium",
+    });
+  });
+
+  test("claude inline bindings preserve explicit effort", () => {
+    expect(AgentBindingSchema.parse({
+      provider: "claude",
+      model: "claude-sonnet-4-5",
+      effort: "low",
+    })).toEqual({ provider: "claude", model: "claude-sonnet-4-5", effort: "low" });
+  });
+
+  test("agent bindings reject empty models and unknown providers", () => {
+    expect(() => AgentBindingSchema.parse({ provider: "claude", model: "" })).toThrow();
+    expect(() => AgentBindingSchema.parse({ provider: "other", model: "model" })).toThrow();
+    expect(() => AgentBindingSchema.parse({ provider: "claude-pty", model: "model" }))
+      .toThrow('provider \\"claude\\" with local profile selection');
+    expect(() => AgentBindingSchema.parse({ provider: "codex", model: "model", effort: "high" })).toThrow();
   });
 
   test("context entries must be objects with non-empty paths", () => {

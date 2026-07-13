@@ -12,6 +12,7 @@ export type FileLockOptions = {
   timeoutMs?: number;
   staleAfterMs?: number;
   pollMs?: number;
+  recovery?: "default" | "strict";
 };
 
 type LockOwner = ProcessIdentity & { acquiredAt: string; token: string };
@@ -29,7 +30,11 @@ export async function acquireFileLock(
 
   await mkdir(dirname(lockDir), { recursive: true, mode: 0o700 });
   while (!(await tryAcquire(lockDir, owner))) {
-    await recoverStaleLock(lockDir, options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS);
+    await recoverStaleLock(
+      lockDir,
+      options.staleAfterMs ?? DEFAULT_STALE_AFTER_MS,
+      options.recovery ?? "default",
+    );
     if (Date.now() >= deadline) throw new Error(`timed out acquiring lock: ${lockDir}`);
     await sleep(options.pollMs ?? DEFAULT_POLL_MS);
   }
@@ -63,16 +68,27 @@ async function tryAcquire(lockDir: string, owner: LockOwner): Promise<boolean> {
   }
 }
 
-async function recoverStaleLock(lockDir: string, staleAfterMs: number): Promise<void> {
+async function recoverStaleLock(
+  lockDir: string,
+  staleAfterMs: number,
+  recovery: "default" | "strict",
+): Promise<void> {
   const owner = await readLockOwner(lockDir);
   if (!owner) {
     const age = await lockAge(lockDir);
+    if (recovery === "strict" && age >= staleAfterMs) {
+      throw new Error(`lock owner is unverifiable: ${lockDir}`);
+    }
     if (age >= staleAfterMs) await rm(lockDir, { recursive: true, force: true });
     return;
   }
 
-  const alive = await processIdentityIsAlive(owner);
-  if (!alive) await rm(lockDir, { recursive: true, force: true });
+  try {
+    const alive = await processIdentityIsAlive(owner);
+    if (!alive) await rm(lockDir, { recursive: true, force: true });
+  } catch (error) {
+    if (recovery === "strict") throw new Error(`lock owner is unverifiable: ${lockDir}`, { cause: error });
+  }
 }
 
 async function lockAge(lockDir: string): Promise<number> {

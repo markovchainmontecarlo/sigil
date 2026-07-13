@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
@@ -91,5 +91,47 @@ describe("dispatch resume reconciliation", () => {
     await reconcileProcessLeases(directory);
     expect(existsSync(lease)).toBe(false);
     expect(() => process.kill(child.pid!, 0)).toThrow();
+  });
+
+  test("removes dead and reused legacy leases without signalling a process", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sigil-dispatch-legacy-leases-"));
+    const deadLease = join(directory, "dead.json");
+    const reusedLease = join(directory, "reused.json");
+    writeFileSync(deadLease, JSON.stringify({
+      pid: 999_999,
+      startIdentity: "gone",
+      heartbeat: "recorded",
+    }));
+    writeFileSync(reusedLease, JSON.stringify({
+      pid: process.pid,
+      startIdentity: "different-process-instance",
+      heartbeat: "recorded",
+    }));
+
+    await reconcileProcessLeases(directory);
+
+    expect(existsSync(deadLease)).toBe(false);
+    expect(existsSync(reusedLease)).toBe(false);
+  });
+
+  test("preserves a live legacy lease whose ownership cannot be established", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sigil-dispatch-live-legacy-"));
+    const lease = join(directory, "live.json");
+    const identity = await readProcessIdentity();
+    writeFileSync(lease, JSON.stringify({ ...identity, heartbeat: "recorded" }));
+
+    await expect(reconcileProcessLeases(directory)).rejects.toThrow(
+      "still alive and its ownership cannot be established",
+    );
+    expect(existsSync(lease)).toBe(true);
+  });
+
+  test("reports a malformed lease without deleting it", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "sigil-dispatch-malformed-lease-"));
+    const lease = join(directory, "malformed.json");
+    writeFileSync(lease, JSON.stringify({ pid: "invalid" }));
+
+    await expect(reconcileProcessLeases(directory)).rejects.toThrow("invalid process lease");
+    expect(existsSync(lease)).toBe(true);
   });
 });

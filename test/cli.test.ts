@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -119,6 +119,7 @@ describe("cli", () => {
     expect(result.exitCode).toBe(2);
     for (const command of [
       "migrate",
+      "dashboard",
       "probe",
       "plan",
       "software-change",
@@ -133,9 +134,20 @@ describe("cli", () => {
       "run-sigil",
       "setup",
       "discover-env",
+      "config",
+      "profile",
     ]) {
       expect(stderr).toContain(command);
     }
+  });
+
+  test("dashboard help describes its read-only loopback boundary", () => {
+    const result = run(["dashboard", "--help"]);
+    const stdout = text(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(stdout).toContain("read-only live dashboard");
+    expect(stdout).toContain("--host <loopback>");
   });
 
   test("global help exits 0 and names only public CLI commands", () => {
@@ -159,9 +171,33 @@ describe("cli", () => {
       "run-sigil",
       "setup",
       "discover-env",
+      "config",
+      "profile",
     ]) {
       expect(stdout).toContain(`sigil ${command}`);
     }
+  });
+
+  test("config show prints effective configuration in JSON and human modes", () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-config-"));
+    writeFileSync(join(repo, "sigil.config.json"), JSON.stringify(DEFAULT_SIGIL_CONFIG));
+
+    const json = run(["config", "show", "--effective", "--repo", repo, "--json"]);
+    const human = run(["config", "show", "--effective", "--repo", repo]);
+
+    expect(json.exitCode).toBe(0);
+    expect(JSON.parse(text(json.stdout))).toMatchObject({ version: 1, kind: "effective-config" });
+    expect(human.exitCode).toBe(0);
+    expect(text(human.stdout)).toContain("no assignment predicted");
+  });
+
+  test("config rejects incomplete usage and missing configuration", () => {
+    const usage = run(["config", "show"]);
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-config-missing-"));
+    const missing = run(["config", "show", "--effective", "--repo", repo]);
+
+    expect(usage.exitCode).toBe(2);
+    expect(missing.exitCode).toBe(1);
   });
 
   test("per-command help exits 0 and names each command's flags", () => {
@@ -175,6 +211,12 @@ describe("cli", () => {
       expect(stdout).toContain("Exit codes:");
     }
   }, 15000);
+
+  test("codex-profile is not a command or compatibility alias", () => {
+    const result = run(["codex-profile", "list"]);
+    expect(result.exitCode).toBe(2);
+    expect(text(result.stderr)).not.toContain("sigil codex-profile");
+  });
 
 
 
@@ -399,38 +441,35 @@ describe("cli", () => {
     expect(text(result.stderr)).toContain("Usage:");
   });
 
-  test("discover-env reports configured agents and local auth state", () => {
+  test("discover-env reports safe role and transport prerequisites in human and JSON modes", () => {
     const dir = mkdtempSync(join(tmpdir(), "sigil-cli-discover-"));
     writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
-      agents: {
-        codexPlanner: { provider: "codex", model: "gpt-5.5", effort: "medium" },
-        claudeReviewer: { provider: "claude", model: "claude-sonnet-4-5" },
-      },
-      evals: {},
-      context: [],
-      plan: { planners: ["codexPlanner"], synthesizer: "claudeReviewer" },
-      implement: { coder: "codexPlanner", batchSize: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
+      agents: { claudeReviewer: { provider: "claude", model: "private-model" } },
+      evals: {}, context: [],
+      plan: { planners: ["claudeReviewer"], synthesizer: "claudeReviewer" },
+      implement: { coder: "claudeReviewer", batchSize: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
       review: { reviewers: ["claudeReviewer"], synthesizer: "claudeReviewer" },
-    }, null, 2));
+    }));
+    const home = mkdtempSync(join(tmpdir(), "sigil-cli-home-"));
+    const registry = join(home, "claude-profiles/registry.json");
+    mkdirSync(join(registry, ".."), { recursive: true });
+    writeFileSync(registry, JSON.stringify({ version: 1, profiles: [
+      { provider: "claude", name: "private-name", enabled: true, accessClass: "subscription", details: { configurationDirectory: "/private/missing" } },
+      { provider: "claude", name: "api", enabled: true, accessClass: "metered-api", mode: "manual", admission: { startLimit: 1 }, operation: { usdLimit: 1 }, details: { credentialSource: "SECRET_ENV" } },
+    ] }));
+    chmodSync(registry, 0o600);
 
-    const result = run(["discover-env", "--repo", dir], { ANTHROPIC_API_KEY: "fixture-key" });
-    const stdout = text(result.stdout);
-    const claudeLine = stdout.split("\n").find((line) => line.startsWith("agent claudeReviewer:")) ?? "";
+    const human = run(["discover-env", "--repo", dir], { SIGIL_HOME: home, SECRET_ENV: "secret-value" });
+    const json = run(["discover-env", "--repo", dir, "--json"], { SIGIL_HOME: home, SECRET_ENV: "secret-value" });
+    const output = text(human.stdout) + text(json.stdout);
 
-    expect(result.exitCode).toBe(0);
-    expect(stdout.trim().startsWith("{")).toBe(false);
-    expect(stdout).toContain("agent codexPlanner:");
-    expect(stdout).toContain("provider=codex");
-    expect(stdout).toContain("model=gpt-5.5");
-    expect(stdout).toContain("effort=medium");
-    expect(stdout).toContain("agent claudeReviewer:");
-    expect(stdout).toContain("provider=claude");
-    expect(stdout).toContain("model=claude-sonnet-4-5");
-    expect(claudeLine).toContain("effort=medium");
-    expect(stdout).toContain("codex acp available:");
-    expect(stdout).toContain("claude auth source: api billing");
-    expect(stdout).toContain("copilot cli available:");
-    expect(stdout).toContain("copilot sdk available:");
+    expect(human.exitCode).toBe(0);
+    expect(json.exitCode).toBe(0);
+    expect(text(human.stdout)).toContain("prerequisite check only");
+    expect(JSON.parse(text(json.stdout))).toMatchObject({ version: 1, kind: "environment-prerequisites" });
+    expect(output).toContain("claude-cli-pty");
+    expect(output).toContain("claude-agent-sdk");
+    for (const secret of ["private-model", "private-name", "/private/missing", "SECRET_ENV", "secret-value"]) expect(output).not.toContain(secret);
   });
 
   test("discover-env reports missing config without a stack trace", () => {

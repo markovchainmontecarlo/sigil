@@ -89,4 +89,27 @@ describe("owned process groups", () => {
     await owned.wait();
     expect(active.has(owned.identity.pid)).toBe(false);
   });
+
+  test("waits for descendants after the group leader exits", async () => {
+    const fixture = childScript(`
+      import { spawn } from "node:child_process";
+      import { writeFileSync } from "node:fs";
+      const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
+      writeFileSync(process.env.DESCENDANT_FILE, String(descendant.pid));
+      process.exit(0);
+    `);
+    const descendantFile = join(fixture.directory, "descendant.pid");
+    await using owned = await OwnedProcess.spawn({
+      command: process.execPath,
+      args: [fixture.script],
+      env: { ...process.env, DESCENDANT_FILE: descendantFile },
+      kind: "shell",
+      terminationTimeoutMs: 100,
+    });
+    const descendant = await waitForIdentity(descendantFile);
+
+    await owned.wait();
+
+    expect(await processIdentityIsAlive(descendant)).toBe(false);
+  });
 });

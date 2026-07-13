@@ -4,8 +4,9 @@ export {
   copilotSdkAvailable,
   createCopilotAgentFromClient,
   createCopilotAgentFromGenerate,
+  createTextAgentFromGenerate,
   codexAcpAvailable,
-  promptCodexWithSchema,
+  promptTextWithSchema,
   withAgent,
   type AgentOptions,
   type SigilAgent,
@@ -34,13 +35,41 @@ export {
   CONFIG_FILE,
   DEFAULT_SIGIL_CONFIG,
   loadConfig,
+  resolveConfig,
+  parseAgentBinding,
   resolveAgentBinding,
   resolveEvalCommand,
   type AgentBinding,
   type AgentProvider,
+  type AgentEffort,
+  type ExecutionPolicy,
   type ContextEntry,
   type SigilConfig,
+  type ConfigOverlay,
+  type ConfigSource,
+  type ResolvedConfig,
 } from "./config.js";
+export {
+  EFFECTIVE_CONFIG_VERSION,
+  projectEffectiveConfig,
+  renderEffectiveConfig,
+  type AttributedValue,
+  type EffectiveCapability,
+  type EffectiveConfig,
+  type EffectiveConfigOptions,
+  type RedactedValue,
+  type SafeConfigLocation,
+} from "./effective-config.js";
+export {
+  providerCapabilities,
+  providerTransports,
+  resolveExecutionPolicy,
+  type CapabilitySupport,
+  type EffectiveExecutionPolicy,
+  type ExecutionResolution,
+  type ProviderCapabilities,
+  type RequestedExecutionPolicy,
+} from "./provider-capabilities.js";
 export {
   BACKLOG_CONTRACT_VERSION,
   checkBacklog,
@@ -99,12 +128,23 @@ export {
 export { createArtifactRoot } from "./paths.js";
 export {
   OwnedProcess,
-  type OwnedProcessInfo,
-  type OwnedProcessKind,
   type OwnedProcessOptions,
   type OwnedProcessResult,
-  type ProcessLifecycle,
 } from "./owned-process.js";
+export {
+  OwnedPtyProcess,
+  type OwnedPtyProcessDependencies,
+  type OwnedPtyProcessOptions,
+  type PtySubprocess,
+  type PtyTerminal,
+  type SpawnPty,
+  type SpawnPtyOptions,
+} from "./owned-pty-process.js";
+export type {
+  OwnedProcessInfo,
+  OwnedProcessKind,
+  ProcessLifecycle,
+} from "./process-lifecycle.js";
 export {
   classifyProviderFailure,
   ProviderError,

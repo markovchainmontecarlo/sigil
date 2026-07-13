@@ -5,27 +5,20 @@ import {
 } from "node:child_process";
 
 import {
-  processGroupIsAlive,
   processIdentityIsAlive,
   readProcessGroupId,
   readProcessIdentity,
   signalProcessGroup,
   type ProcessIdentity,
 } from "./process-identity.js";
+import { terminateProcessGroup } from "./process-group.js";
+import type {
+  OwnedProcessInfo,
+  OwnedProcessKind,
+  ProcessLifecycle,
+} from "./process-lifecycle.js";
 
-export type OwnedProcessKind = "acp" | "codex-app-server" | "shell" | "gate";
-
-export type OwnedProcessInfo = {
-  identity: ProcessIdentity;
-  ownerIdentity: ProcessIdentity;
-  kind: OwnedProcessKind;
-  processGroupId: number;
-};
-
-export type ProcessLifecycle = {
-  started?(process: OwnedProcessInfo): void | Promise<void>;
-  stopped?(process: OwnedProcessInfo): void | Promise<void>;
-};
+export type { OwnedProcessInfo, OwnedProcessKind, ProcessLifecycle } from "./process-lifecycle.js";
 
 export type OwnedProcessOptions = {
   command: string;
@@ -158,6 +151,11 @@ export class OwnedProcess implements AsyncDisposable {
 
   private async stop(): Promise<void> {
     this.options.signal?.removeEventListener("abort", this.abort);
+    if (this.ownsProcessGroup) {
+      await this.terminateGroup();
+      await this.publishStopped();
+      return;
+    }
     if (await processIdentityIsAlive(this.identity)) this.signal("SIGTERM");
     if (!(await this.groupGoneWithin(this.timeoutMs))) this.signal("SIGKILL");
     await this.confirmGone();
@@ -171,6 +169,11 @@ export class OwnedProcess implements AsyncDisposable {
 
   private async cleanDescendantsAfterExit(): Promise<void> {
     this.options.signal?.removeEventListener("abort", this.abort);
+    if (this.ownsProcessGroup) {
+      await this.terminateGroup();
+      await this.publishStopped();
+      return;
+    }
     if (this.groupIsAlive()) this.signal("SIGTERM");
     if (!(await this.groupGoneWithin(this.timeoutMs))) this.signal("SIGKILL");
     await this.confirmGone();
@@ -187,9 +190,16 @@ export class OwnedProcess implements AsyncDisposable {
   }
 
   private groupIsAlive(): boolean {
-    return this.ownsProcessGroup
-      ? processGroupIsAlive(this.info.processGroupId)
-      : this.child.exitCode === null && this.child.signalCode === null;
+    return this.child.exitCode === null && this.child.signalCode === null;
+  }
+
+  private async terminateGroup(): Promise<void> {
+    await terminateProcessGroup({
+      identity: this.identity,
+      processGroupId: this.info.processGroupId,
+      terminationGraceMs: this.timeoutMs,
+      killGraceMs: this.timeoutMs,
+    });
   }
 
   private async groupGoneWithin(milliseconds: number): Promise<boolean> {
@@ -234,9 +244,5 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 async function injectedProcessGroupId(pid: number): Promise<number> {
-  try {
-    return await readProcessGroupId(pid);
-  } catch {
-    return pid;
-  }
+  return readProcessGroupId(pid);
 }

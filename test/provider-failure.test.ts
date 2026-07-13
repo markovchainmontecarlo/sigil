@@ -66,6 +66,29 @@ describe("provider failure classification", () => {
     expect(first.fingerprint).not.toBe(different.fingerprint);
   });
 
+  test("classifies observed Claude CLI startup failures", () => {
+    expect(classifyProviderFailure(new Error("Please run /login to authenticate")).code)
+      .toBe("authentication_failed");
+    expect(classifyProviderFailure(new Error("error: unknown option: --bad-option")).code)
+      .toBe("invalid_request");
+    expect(classifyProviderFailure(new Error("invalid value for --model: imaginary")).code)
+      .toBe("invalid_request");
+  });
+
+  test("explicit transport codes take precedence over startup wording", () => {
+    const failure = classifyProviderFailure(new ProviderError("Please run /login", {
+      code: "transient",
+    }));
+
+    expect(failure.code).toBe("transient");
+  });
+
+  test("does not classify ordinary assistant prose as a Claude startup failure", () => {
+    expect(classifyProviderFailure(new Error(
+      "The documentation says users can run /login when changing accounts.",
+    )).code).toBe("unknown");
+  });
+
   test("dispatch accounting prefers provider fingerprints and retains issue fallback", () => {
     const provider = classifyProviderFailure(new Error("service temporarily unavailable"));
     const failure: WorkflowFailure = {

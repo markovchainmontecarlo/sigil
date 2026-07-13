@@ -34,7 +34,9 @@ Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` comm
 
 ## CLI
 
-The CLI verbs are `migrate`, `refactor`, `probe`, `plan`, `software-change`, `implement`, `review`, `breakdown`, `dispatch`, `codex-profile`, `validate`, `validate-workflow`, `validate-sigil`, `run-workflow`, `run-sigil`, `setup`, and `discover-env`. Run `sigil <verb> --help` for flags and exit codes. Use [SIGIL_USAGE.md](./SIGIL_USAGE.md) as the canonical operator reference.
+The CLI verbs are `migrate`, `refactor`, `probe`, `plan`, `software-change`, `implement`, `review`, `breakdown`, `dispatch`, `profile`, `config`, `validate`, `validate-workflow`, `validate-sigil`, `run-workflow`, `run-sigil`, `setup`, and `discover-env`. Run `sigil <verb> --help` for flags and exit codes. Use [SIGIL_USAGE.md](./SIGIL_USAGE.md) as the canonical operator reference.
+
+Provider configuration and billing authorization are separate. See the [configuration reference](./docs/reference/configuration.md) and [provider profile setup](./docs/how-to/configure-provider-profiles.md).
 
 ## Build agent workflows
 
@@ -355,7 +357,7 @@ The public TypeScript entrypoint exports these async functions and their input/r
 - `probePlan`: runs sandboxed probes and produces a typed task graph for implementation.
 - `breakdown`: turns a mission into an ordered backlog file.
 - `dispatch`: calls `softwareChange` for backlog items and records write-ahead operation inputs, outputs, repository state, gates, provider sessions, and child ownership so interrupted work can resume without resetting an active branch or replaying completed delivery work.
-- `codex-profile`: manages user-local Codex subscription and metered profiles. Account class and subscription capacity come from Codex protocols, credentials remain Codex-owned, status redacts profile paths, and assignments remain fixed for each ACP process.
+- `profile`: manages user-local Codex and Claude subscription and metered profiles through qualified selectors. Registry listing, stored-state inspection, and live status are distinct safe contracts; credentials and provider-local paths remain provider-owned and omitted from output.
 - `refactor`: applies one bounded structural change with protected-path checks and independent reviews.
 - `migrate`: runs checkpointed repository migration items through `refactor` from an external run directory.
 
@@ -461,7 +463,7 @@ Use **YAML** when the workflow topology is fixed ahead of time and readability a
 
 Each target repo needs a [`sigil.config.json`](./sigil.config.json). `loadConfig()` searches upward from the target repo path and validates these sections against `SigilConfig` in [src/config.ts](./src/config.ts):
 
-- `agents` (`codex`, `claude`, or `copilot` provider/model bindings)
+- `agents` (`codex`, `claude`, or `copilot` provider/model/effort bindings; local profiles select subscription or explicitly budgeted metered access)
 - `evals`
 - `workspace`
 - `plan`

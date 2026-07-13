@@ -3,7 +3,7 @@ import type { z } from "zod";
 import { loadConfig, type AgentBinding } from "./config.js";
 import type { RichSigilAgent, SigilContext } from "./context.js";
 import type { AgentPromptOptions } from "./agents.js";
-import { classifyProviderFailure, ProviderError } from "./provider-failure.js";
+import { classifyProviderFailure, ProviderError, publicProviderFailure } from "./provider-failure.js";
 import {
   retryOperation,
   type RecoveryResult,
@@ -198,11 +198,13 @@ async function recordAgentFailure(ctx: SigilContext, failure: WorkflowFailure): 
   });
   await ctx.observe("agent-operation-failed", {
     stage: failure.stage,
-    attempt: String(failure.attempts),
-    recoverable: String(failure.recoverable),
-    error: failure.evidence,
-    providerCode: failure.provider?.code ?? "unknown",
-    providerFingerprint: failure.provider?.fingerprint ?? "unknown",
+    attempt: failure.attempts,
+    recoverable: failure.recoverable,
+    failure: failure.provider ? publicProviderFailure(failure.provider) : {
+      code: "unknown",
+      disposition: "terminal",
+      fingerprint: "unknown",
+    },
   });
 }
 

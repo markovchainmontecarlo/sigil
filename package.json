@@ -1,6 +1,6 @@
 {
   "name": "sigil",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "CLI and TypeScript toolkit for repository workflows, static YAML workflows, and TypeScript sigils over configured agents",
@@ -15,6 +15,7 @@
     "package.json",
     "docs/explanation",
     "docs/how-to",
+    "docs/reference",
     "examples",
     "src",
     "skills",
@@ -45,6 +46,7 @@
     "preview:readme": "node scripts/preview-readme.mjs --serve",
     "smoke:distribution": "bash scripts/distribution-smoke.sh",
     "smoke:agents": "node scripts/smoke-agents.mjs",
+    "smoke:claude-subscription": "bun scripts/smoke-claude-subscription.mjs",
     "demo:review": "node test/demo-review.mjs"
   },
   "devDependencies": {

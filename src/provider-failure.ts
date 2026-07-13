@@ -8,7 +8,11 @@ export type ProviderFailureCode =
   | "transient"
   | "invalid_request"
   | "cancelled"
-  | "unknown";
+  | "unknown"
+  | "profile_unavailable"
+  | "credential_unresolved"
+  | "budget_exhausted"
+  | "prompt_not_accepted";
 
 export type ProviderRetryDisposition = "retry" | "reroute" | "terminal";
 
@@ -28,6 +32,21 @@ export type ProviderFailure = {
   fingerprint: string;
   evidence: ProviderFailureEvidence;
 };
+
+export type PublicProviderFailure = Pick<ProviderFailure, "code" | "disposition" | "fingerprint"> & {
+  operation?: string;
+  rpcCode?: number;
+};
+
+export function publicProviderFailure(failure: ProviderFailure): PublicProviderFailure {
+  return {
+    code: failure.code,
+    disposition: failure.disposition,
+    fingerprint: failure.fingerprint,
+    ...(failure.evidence.operation ? { operation: failure.evidence.operation } : {}),
+    ...(failure.evidence.rpcCode !== undefined ? { rpcCode: failure.evidence.rpcCode } : {}),
+  };
+}
 
 export type ProviderErrorDetails = {
   operation?: string;
@@ -60,6 +79,10 @@ const DISPOSITIONS: Record<ProviderFailureCode, ProviderRetryDisposition> = {
   invalid_request: "terminal",
   cancelled: "terminal",
   unknown: "retry",
+  profile_unavailable: "reroute",
+  credential_unresolved: "terminal",
+  budget_exhausted: "terminal",
+  prompt_not_accepted: "retry",
 };
 
 const RULES: Array<{ code: ProviderFailureCode; pattern: RegExp }> = [
@@ -69,7 +92,7 @@ const RULES: Array<{ code: ProviderFailureCode; pattern: RegExp }> = [
   },
   {
     code: "authentication_failed",
-    pattern: /(?:unauthori[sz]ed|authentication|not logged in|invalid api key|expired token|missing credentials|access token)/i,
+    pattern: /(?:unauthori[sz]ed|authentication failed|not logged in|invalid api key|expired token|missing credentials|access token|^please run \/login(?:\s|$)|^claude code requires authentication(?:\s|$))/i,
   },
   {
     code: "idle_timeout",
@@ -78,7 +101,7 @@ const RULES: Array<{ code: ProviderFailureCode; pattern: RegExp }> = [
   { code: "operation_timeout", pattern: /(?:timed out|timeout|deadline exceeded)/i },
   {
     code: "invalid_request",
-    pattern: /(?:invalid request|invalid argument|bad request|malformed|unknown account type|unsupported model)/i,
+    pattern: /(?:invalid request|invalid argument|bad request|malformed|unknown account type|unsupported model|unknown option:|invalid value for --(?:model|effort|permission-mode))/i,
   },
   { code: "cancelled", pattern: /(?:cancelled|canceled|aborted|aborterror)/i },
   {

@@ -1,12 +1,12 @@
 import { approveAll, CopilotClient, type CopilotSession, type SessionConfig } from "@github/copilot-sdk";
-import { ClaudeSDKAgent } from "@mastra/claude";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { z } from "zod";
 
-import { type AgentBinding, loadConfig, resolveAgentBinding } from "./config.js";
+import { type AgentBinding, loadConfig, parseAgentBinding, resolveAgentBinding } from "./config.js";
+import { resolveExecutionPolicy } from "./provider-capabilities.js";
 import { retryPromptLoop } from "./gate.js";
 import { readCodexAccountStatus } from "./codex-rate-limits.js";
 import {
@@ -15,13 +15,17 @@ import {
   reserveCodexProfile,
   type CodexCapacityTelemetry,
 } from "./codex-router.js";
-import type { CodexAssignment, CapacityReader } from "./codex-router.js";
+import type { CodexAdmission, CodexAssignment, CapacityReader } from "./codex-router.js";
 import type { CodexProfileStore, CodexUsage } from "./codex-profiles.js";
+import { ProfileStoreError } from "./provider-profiles.js";
 import type { CodexProfile } from "./codex-profiles.js";
 import { OwnedCodexAcpConnection, type OwnedAcpEvent } from "./codex-acp.js";
 import type { ProcessIdentity } from "./process-identity.js";
 import type { ProcessLifecycle } from "./owned-process.js";
 import { classifyProviderFailure, ProviderError, type ProviderFailure } from "./provider-failure.js";
+import { createRoutedClaudeAgent } from "./claude-router.js";
+import type { ClaudeProfileStore } from "./claude-profiles.js";
+import type { ClaudePtyDependencies } from "./claude-pty.js";
 
 export interface SigilAgent {
   prompt(text: string): Promise<string>;
@@ -48,7 +52,11 @@ export type AgentRuntimeMetadata = {
   providerSessionId?: string;
   childProcessId?: number;
   childStartIdentity?: string;
-  usage?: CodexUsage;
+  provider?: "codex" | "claude" | "copilot";
+  accessClass?: "subscription" | "metered-api";
+  transport?: "codex-acp" | "claude-cli-pty" | "claude-agent-sdk" | "copilot-sdk";
+  routingReason?: string;
+  usage?: CodexUsage | import("./claude-sdk.js").ClaudeObservedUsage;
   active?: boolean;
 };
 
@@ -56,10 +64,13 @@ export type AgentOptions = {
   cwd?: string;
   capacityReader?: CapacityReader;
   profileStore?: CodexProfileStore;
+  claudeProfileStore?: ClaudeProfileStore;
+  claudePtyDependencies?: Partial<ClaudePtyDependencies>;
   resumeSessionId?: string;
   onRuntimeUpdate?: (runtime: AgentRuntimeMetadata) => void | Promise<void>;
   processLifecycle?: ProcessLifecycle;
   onCapacityTelemetry?: (telemetry: CodexCapacityTelemetry) => void | Promise<void>;
+  onProviderEvent?: (event: { type: string; details: Record<string, string | number | boolean> }) => void | Promise<void>;
 };
 export const SCHEMA_PROMPT_RETRY_ATTEMPTS = 2;
 const DEFAULT_ACTIVE_CAPACITY_POLL_INTERVAL_MS = 30_000;
@@ -78,21 +89,22 @@ export function isSchemaPromptError(error: unknown): error is SchemaPromptError 
 
 type GenerateResult<T = unknown> = { text: string; object?: T };
 type ClaudeGenerate = <T>(text: string, options?: Record<string, unknown>) => Promise<GenerateResult<T>>;
-type CodexGenerate = (text: string, options?: AgentPromptOptions) => Promise<string>;
+type TextGenerate = (text: string, options?: AgentPromptOptions) => Promise<string>;
 type CopilotSessionLike = Pick<CopilotSession, "sendAndWait" | "abort" | "disconnect" | "on">;
 type CopilotClientLike = {
   createSession(config: SessionConfig): Promise<CopilotSessionLike>;
   stop(): Promise<Error[]>;
 };
-type ClaudeReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 type CopilotReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export function agent(name: string, opts?: AgentOptions): SigilAgent;
 export function agent(binding: AgentBinding, opts?: AgentOptions): SigilAgent;
 export function agent(nameOrBinding: string | AgentBinding, opts: AgentOptions = {}): SigilAgent {
   const cwd = opts.cwd ?? process.cwd();
-  const binding = typeof nameOrBinding === "string" ? resolveAgentBinding(nameOrBinding, loadConfig(cwd)) : nameOrBinding;
-  if (binding.provider === "claude") return createClaude(binding, cwd);
+  const binding = typeof nameOrBinding === "string"
+    ? resolveAgentBinding(nameOrBinding, loadConfig(cwd))
+    : parseAgentBinding(nameOrBinding);
+  if (binding.provider === "claude") return createRoutedClaudeAgent(binding, cwd, opts);
   if (binding.provider === "codex") return createCodex(binding, cwd, opts);
   if (binding.provider === "copilot") return createCopilot(binding, cwd);
   throw new Error(`Unsupported agent provider "${String((binding as { provider?: unknown }).provider)}"`);
@@ -139,24 +151,6 @@ function resolveCodexAcpBin(): { command: string; baseArgs: string[] } {
   throw new Error("Codex ACP adapter is not installed");
 }
 
-function createClaude(binding: AgentBinding, cwd: string): SigilAgent {
-  const claude = new ClaudeSDKAgent({
-    id: "sigil-claude-agent",
-    name: "sigil-claude-agent",
-    description: "Sigil Claude SDK agent",
-    // bypassPermissions: pipeline turns run headless with no approver, and artifact
-    // gates require the agent to write files (often outside cwd, e.g. the artifact dir).
-    // This mirrors the codex binding's approval_policy=never + workspace-write below.
-    sdkOptions: {
-      cwd,
-      model: binding.model,
-      effort: claudeEffort(agentEffort(binding)),
-      permissionMode: "bypassPermissions",
-    },
-  });
-  return createClaudeAgentFromGenerate(<T>(text: string, options?: Record<string, unknown>) => claude.generate<T>(text, options));
-}
-
 function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions): SigilAgent {
   let assignment: CodexAssignment | undefined;
   let acp: OwnedCodexAcpConnection | undefined;
@@ -165,6 +159,8 @@ function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions):
   let runtimeHeartbeat: ReturnType<typeof setInterval> | undefined;
   const runtime: AgentRuntimeMetadata = {
     binding: `${binding.provider}:${binding.model}`,
+    provider: "codex",
+    transport: "codex-acp",
   };
   const readCapacity = options.capacityReader ?? (async (profile: CodexProfile) => (
     await readCodexAccountStatus(profile, { processLifecycle: options.processLifecycle })
@@ -172,7 +168,7 @@ function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions):
 
   const connection = async (): Promise<OwnedCodexAcpConnection> => {
     if (acp) return acp;
-    const admission = await reserveCodexProfile(
+    const admission = await reserveCodexAdmission(
       readCapacity,
       options.profileStore,
     );
@@ -187,9 +183,12 @@ function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions):
         code: "invalid_request",
       });
     }
-    assignment = admission.assignment;
-    runtime.profile = assignment.profile.name;
-    acp = createCodexAcp(binding, cwd, assignment.profile.home, {
+    const reserved = admission.assignment;
+    assignment = reserved;
+    runtime.profile = reserved.profile.name;
+    runtime.accessClass = reserved.profile.profileClass === "subscription" ? "subscription" : "metered-api";
+    runtime.routingReason = "subscription-preferred";
+    acp = createCodexAcp(binding, cwd, reserved.profile.home, {
       resumeSessionId: options.resumeSessionId,
       onProcessStarted: async (identity) => {
         assignChildRuntime(runtime, identity);
@@ -256,13 +255,28 @@ function createCodex(binding: AgentBinding, cwd: string, options: AgentOptions):
     return chunks.join("");
   };
 
-  return createCodexAgentFromGenerate(generate, async () => {
+  return createTextAgentFromGenerate(generate, async () => {
     if (runtimeHeartbeat) clearInterval(runtimeHeartbeat);
     await acp?.disconnect();
     if (assignment) await releaseCodexProfile(assignment.reservation.id, usage, failure, options.profileStore);
     runtime.active = false;
     await options.onRuntimeUpdate?.(runtime);
   }, runtime);
+}
+
+async function reserveCodexAdmission(
+  readCapacity: CapacityReader,
+  store: CodexProfileStore | undefined,
+): Promise<CodexAdmission> {
+  try {
+    return await reserveCodexProfile(readCapacity, store);
+  } catch (error) {
+    if (!(error instanceof ProfileStoreError)) throw error;
+    throw new ProviderError(`Codex profile configuration error: ${error.message}`, {
+      code: "invalid_request",
+      cause: error,
+    });
+  }
 }
 
 type ActiveCapacityGuard = {
@@ -354,12 +368,7 @@ function createCodexAcp(
   const { command, baseArgs } = resolveCodexAcpBin();
   const args = [
     ...baseArgs,
-    "-c",
-    "approval_policy=never",
-    "-c",
-    "sandbox_mode=workspace-write",
-    "-c",
-    "sandbox_workspace_write.network_access=true",
+    ...resolveExecutionPolicy("codex-acp", binding.execution).adapter.args.flatMap((flag) => ["-c", flag]),
     "-c",
     `model=${binding.model}`,
     "-c",
@@ -438,8 +447,8 @@ export function createClaudeAgentFromGenerate(generate: ClaudeGenerate, close: (
   };
 }
 
-export function createCodexAgentFromGenerate(
-  generate: CodexGenerate,
+export function createTextAgentFromGenerate(
+  generate: TextGenerate,
   close: () => void | Promise<void> = () => {},
   runtime: AgentRuntimeMetadata = {},
 ): SigilAgent {
@@ -448,12 +457,12 @@ export function createCodexAgentFromGenerate(
       const schema = schemaOrOptions instanceof z.ZodType ? schemaOrOptions : undefined;
       const promptOptions = schema ? options : schemaOrOptions as AgentPromptOptions | undefined;
       return schema
-        ? promptCodexWithSchema(generate, text, schema, SCHEMA_PROMPT_RETRY_ATTEMPTS, promptOptions)
+        ? promptTextWithSchema(generate, text, schema, SCHEMA_PROMPT_RETRY_ATTEMPTS, promptOptions)
         : generate(text, promptOptions);
     },
     promptWithOptions<T>(text: string, schema: z.ZodType<T> | undefined, options: AgentPromptOptions) {
       return schema
-        ? promptCodexWithSchema(generate, text, schema, SCHEMA_PROMPT_RETRY_ATTEMPTS, options)
+        ? promptTextWithSchema(generate, text, schema, SCHEMA_PROMPT_RETRY_ATTEMPTS, options)
         : generate(text, options);
     },
     async close() {
@@ -539,8 +548,8 @@ export function createCopilotAgentFromClient(client: CopilotClientLike, binding:
   );
 }
 
-export function createCopilotAgentFromGenerate(generate: CodexGenerate, close: () => void | Promise<void> = () => {}): SigilAgent {
-  return createCodexAgentFromGenerate(generate, close);
+export function createCopilotAgentFromGenerate(generate: TextGenerate, close: () => void | Promise<void> = () => {}): SigilAgent {
+  return createTextAgentFromGenerate(generate, close);
 }
 
 async function promptClaude<T>(
@@ -581,18 +590,13 @@ function agentEffort(binding: AgentBinding): string {
   return binding.effort ?? "medium";
 }
 
-function claudeEffort(value: string | undefined): ClaudeReasoningEffort | undefined {
-  if (value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max") return value;
-  return undefined;
-}
-
 function reasoningEffort(value: string | undefined): CopilotReasoningEffort | undefined {
   if (value === "low" || value === "medium" || value === "high" || value === "xhigh") return value;
   return undefined;
 }
 
-export async function promptCodexWithSchema<T>(
-  generate: CodexGenerate,
+export async function promptTextWithSchema<T>(
+  generate: TextGenerate,
   text: string,
   schema: z.ZodType<T>,
   attempts = SCHEMA_PROMPT_RETRY_ATTEMPTS,

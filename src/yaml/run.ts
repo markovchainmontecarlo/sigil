@@ -167,7 +167,9 @@ export async function runYamlWorkflowFile(file: string, repo: string, ctxOverrid
   const checked = validateYamlWorkflowFile(file, repo);
   if (checked.errors.length || !checked.workflow) throw new Error(checked.errors.join("\n") || "invalid yaml workflow");
   const compiled = compileYamlWorkflow(checked.workflow, repo);
-  return runCompiledWorkflow(compiled, repo, ctxOverride ?? createContext(repo));
+  const ctx = ctxOverride ?? createContext(repo);
+  await ctx.initialize();
+  return runCompiledWorkflow(compiled, repo, ctx);
 }
 
 export { parseYamlWorkflow, validateYamlWorkflowFile } from "./validate.js";

@@ -2,7 +2,11 @@
 .SH NAME
 sigil \- composable workflow CLI with built-in software-change workflows
 .SH SYNOPSIS
-.B sigil codex\-profile <add|remove|list|status|automatic|next|enable|disable|prime|rearm> ...
+.B sigil dashboard [\-\-host 127.0.0.1] [\-\-port <number>] [\-\-root <dir>]...
+.br
+.B sigil config show \-\-effective [\-\-repo <dir>] [\-\-json]
+.br
+.B sigil profile <add|remove|list|inspect|status|next|enable|disable|prime|rearm> ...
 .br
 .B sigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir>
 .br
@@ -34,20 +38,57 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil setup [\-\-dir <repo>] [\-\-force]
 .br
-.B sigil discover\-env [\-\-repo <dir>]
+.B sigil discover\-env [\-\-repo <dir>] [\-\-json]
 .br
 .SH DESCRIPTION
 Sigil is a composable workflow system with built-in software-change workflows. Run \fBsigil <verb> --help\fR for command-specific help.
 .SH COMMANDS
-.SS codex\-profile
-Manage local Codex routing profiles and admission limits.
+.SS dashboard
+Serve a read\-only live dashboard for local Sigil runs.
 .P
-Usage: \fBsigil codex\-profile <add|remove|list|status|automatic|next|enable|disable|prime|rearm> ...\fR
+Usage: \fBsigil dashboard [\-\-host 127.0.0.1] [\-\-port <number>] [\-\-root <dir>]...\fR
 .P
 Arguments and flags:
 .TP
-\fBadd <name> \-\-home <dir>\fR
-Register a Codex\-owned authentication home after verifying its account class through account/read.
+\fB\-\-host <loopback>\fR
+Loopback host. Defaults to 127.0.0.1; remote binding is rejected.
+.TP
+\fB\-\-port <number>\fR
+Local HTTP port. Defaults to 4317; use 0 to select an available port.
+.TP
+\fB\-\-root <dir>\fR
+Optional repeatable additional run\-discovery root; the current directory is included automatically.
+.P
+Exit codes: 0 after an orderly local shutdown; 1 when startup fails.
+.SS config
+Inspect deterministic effective project configuration and its provenance.
+.P
+Usage: \fBsigil config show \-\-effective [\-\-repo <dir>] [\-\-json]\fR
+.P
+Arguments and flags:
+.TP
+\fBshow \-\-effective\fR
+Resolve defaults, project input, and command overlays without probing providers.
+.TP
+\fB\-\-repo <dir>\fR
+Repository directory. Defaults to the current directory.
+.TP
+\fB\-\-json\fR
+Print the stable machine\-readable effective\-configuration record.
+.P
+Exit codes: 0 when effective configuration is printed; 1 for invalid or missing configuration; 2 for invalid usage.
+.SS profile
+Manage local provider profiles and inspect routing eligibility.
+.P
+Usage: \fBsigil profile <add|remove|list|inspect|status|next|enable|disable|prime|rearm> ...\fR
+.P
+Arguments and flags:
+.TP
+\fBadd <name> \-\-provider <codex|claude> \-\-class <subscription|metered\-api>\fR
+Register a provider\-owned authentication context and bounded routing policy.
+.TP
+\fB\-\-home <dir> | \-\-default\-config | \-\-config\-dir <dir> | \-\-credential\-source <name>\fR
+Select provider\-owned authentication without displaying its location or credential source.
 .TP
 \fB\-\-concurrency <count>\fR
 Limit simultaneous assignments for the profile.
@@ -79,17 +120,29 @@ Explicitly authorize when a metered profile may be assigned; overflow is used on
 \fB\-\-require\-rearm\fR
 Require explicit rearm after metered completion or active subscription capacity exhaustion.
 .TP
-\fBnext <name> \-\-agents <count>\fR
-Route the next bounded number of new agents to a profile.
+\fB\-\-admission\-usd <amount> \-\-operation\-usd <amount>\fR
+Bound Claude API admission and each admitted operation.
 .TP
-\fBprime [name]... [\-\-repo <dir>]\fR
-Explicitly start inactive subscription windows with the configured Codex binding; automatic priming remains disabled.
+\fB\-\-json\fR
+Print a versioned, machine\-readable record instead of the safe human summary.
+.TP
+\fBlist [\-\-provider <provider>]\fR
+List safe registry summaries without reading live provider state.
+.TP
+\fBinspect <provider:name|unique\-name>\fR
+Show one profile policy and its stored routing state.
+.TP
+\fBnext <provider:name|unique\-name> \-\-agents <count>\fR
+Route a bounded number of new agents without bypassing eligibility policy.
+.TP
+\fBprime <provider:name|unique\-name> [\-\-repo <dir>]\fR
+Explicitly start a Codex subscription window; Claude returns unsupported.
 .TP
 \fBrearm <name>\fR
 Clear authentication, capacity, transient, and metered rearm blocks without changing active reservations or usage accounting.
 .TP
-\fBstatus\fR
-Show redacted admission policy, active assignments and reserved headroom, remaining\-capacity class, and circuit reason/state; never show homes or account credentials.
+\fBstatus [\-\-provider <provider>]\fR
+Show current eligibility and safe provider evidence separately from registry inspection.
 .P
 Exit codes: 0 when the requested local profile operation succeeds; 1 otherwise.
 .SS migrate
@@ -390,14 +443,17 @@ Overwrite an existing config file.
 .P
 Exit codes: 0 when the config is written; 1 when it already exists without \-\-force.
 .SS discover\-env
-Print a read\-only report of configured agents, Codex native ACP reachability, and Claude auth source.
+Report prerequisites for each configured role and candidate transport without probing authentication.
 .P
-Usage: \fBsigil discover\-env [\-\-repo <dir>]\fR
+Usage: \fBsigil discover\-env [\-\-repo <dir>] [\-\-json]\fR
 .P
 Arguments and flags:
 .TP
 \fB\-\-repo <dir>\fR
 Repository directory. Defaults to the current directory.
+.TP
+\fB\-\-json\fR
+Print the versioned prerequisite report as JSON.
 .P
 Exit codes: 0 when the environment report is printed; 1 when config cannot be loaded.
 .SH SEE ALSO
