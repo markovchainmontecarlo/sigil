@@ -54,16 +54,26 @@ export async function softwareChangeCommand(args: string[]): Promise<number> {
 }
 
 export async function implementCommand(args: string[]): Promise<number> {
+  return implementCommandWith(args, { implement, publish });
+}
+
+type ImplementCommandEffects = {
+  implement: (input: Parameters<typeof implement>[0]) => ReturnType<typeof implement>;
+  publish: (repo: Parameters<typeof publish>[0], input: Parameters<typeof publish>[1]) => ReturnType<typeof publish>;
+};
+
+export async function implementCommandWith(args: string[], effects: ImplementCommandEffects): Promise<number> {
   const parsed = parseCommandArgs(args, {
     repo: { type: "string" },
     "task-file": { type: "string" },
     branch: { type: "string" },
     instructions: { type: "string" },
+    publish: { type: "boolean" },
   });
   rejectPositionals(parsed);
 
   const repo = requireValue(parsed, "repo");
-  const result = await implement({
+  const result = await effects.implement({
     repo,
     taskFile: requireValue(parsed, "task-file"),
     branch: value(parsed, "branch"),
@@ -73,11 +83,12 @@ export async function implementCommand(args: string[]): Promise<number> {
   const deliverable = !result.reviewBlocking
     && result.failedTasks.length === 0
     && result.issues.length === 0;
-  const published = deliverable
-    ? await publish(repo, { branch: result.branch, title: result.branch, body: result.prBody, base })
+  const publicationRequested = parsed.values.publish === true;
+  const published = deliverable && publicationRequested
+    ? await effects.publish(repo, { branch: result.branch, title: result.branch, body: result.prBody, base })
     : null;
   printJson({ implement: result, publish: published });
-  return implementExitCode(result, published);
+  return implementExitCode(result, published, publicationRequested);
 }
 
 export async function reviewCommand(args: string[]): Promise<number> {

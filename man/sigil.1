@@ -8,6 +8,8 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil profile <add|remove|list|inspect|status|next|enable|disable|prime|rearm> ...
 .br
+.B sigil task\-graph validate [\-\-repo <dir>] [\-\-json] <task\-file> | sigil task\-graph schema [\-\-out <file>]
+.br
 .B sigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir>
 .br
 .B sigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]...
@@ -18,15 +20,13 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>]
 .br
-.B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>]
+.B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>] [\-\-publish]
 .br
 .B sigil review \-\-repo <dir> \-\-base <ref> [\-\-no\-autofix] [\-\-context <text>]
 .br
 .B sigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]
 .br
 .B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch \-\-run\-dir <dir> [...] | sigil dispatch \-\-resume <dir>
-.br
-.B sigil validate [\-\-repo <dir>] <task\-file>
 .br
 .B sigil validate\-workflow [\-\-repo <dir>] <workflow\-file>
 .br
@@ -145,6 +145,29 @@ Clear authentication, capacity, transient, and metered rearm blocks without chan
 Show current eligibility and safe provider evidence separately from registry inspection.
 .P
 Exit codes: 0 when the requested local profile operation succeeds; 1 otherwise.
+.SS task\-graph
+Validate an assistant\-authored task graph or print its public schema.
+.P
+Usage: \fBsigil task\-graph validate [\-\-repo <dir>] [\-\-json] <task\-file> | sigil task\-graph schema [\-\-out <file>]\fR
+.P
+Arguments and flags:
+.TP
+\fBvalidate <task\-file>\fR
+Validate one task graph's structure, dependencies, cycles, and repository paths.
+.TP
+\fB\-\-repo <dir>\fR
+Repository directory used to resolve and check task file paths.
+.TP
+\fB\-\-json\fR
+Print the stable machine\-readable validation record.
+.TP
+\fBschema\fR
+Print the public task\-graph JSON Schema.
+.TP
+\fB\-\-out <file>\fR
+Write the schema to a file instead of standard output.
+.P
+Exit codes: 0 when validation succeeds or the schema is written; 1 when validation fails; 2 for invalid usage.
 .SS migrate
 Apply a dependency\-ordered repository migration with verified commit checkpoints.
 .P
@@ -261,9 +284,9 @@ Optional run\-specific implementation instructions.
 .P
 Exit codes: 0 when the workflow result is valid and reports no issues; 1 otherwise.
 .SS implement
-Apply a task graph, run gates and review, then push and open a PR.
+Apply a task graph, commit verified tasks, run gates, and review locally.
 .P
-Usage: \fBsigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>]\fR
+Usage: \fBsigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>] [\-\-publish]\fR
 .P
 Arguments and flags:
 .TP
@@ -278,8 +301,11 @@ Optional branch name.
 .TP
 \fB\-\-instructions <file>\fR
 Optional run\-specific implementation instructions.
+.TP
+\fB\-\-publish\fR
+After local success, push the branch and open a pull request.
 .P
-Exit codes: 0 when PR creation succeeds, review is not blocking, and no failed tasks or issues are reported; 1 otherwise.
+Exit codes: 0 when review is not blocking and no failed tasks or issues are reported; with \-\-publish, pull\-request creation must also succeed.
 .SS review
 Review the current diff against a base ref.
 .P
@@ -349,20 +375,6 @@ Required durable dispatch manifest, operation, and recovery directory.
 Resume the recorded operation after validating repository state and live process ownership.
 .P
 Exit codes: 0 when dispatch finishes; 1 when it stops on a deterministic failure; 75 when durable capacity waiting is retryable.
-.SS validate
-Validate a task graph file.
-.P
-Usage: \fBsigil validate [\-\-repo <dir>] <task\-file>\fR
-.P
-Arguments and flags:
-.TP
-\fB\-\-repo <dir>\fR
-Repository directory used to resolve and check task file paths.
-.TP
-\fB<task\-file>\fR
-Required. Task graph JSON file.
-.P
-Exit codes: 0 when the validation error array is empty; 1 otherwise.
 .SS validate\-workflow
 Validate a static YAML workflow file.
 .P

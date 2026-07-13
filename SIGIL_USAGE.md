@@ -16,15 +16,44 @@ A TypeScript Sigil is a workflow implemented with the `sigil()` API. TypeScript 
 
 TypeScript workflows are intended to read as the process they execute, not to imitate YAML. Use ordinary branches and loops for dynamic behavior, one named statement per conceptual step, and typed returns between steps. Use agents for judgment; use deterministic code for control, verification, persistence, and external effects.
 
+## Package surfaces
+
+| Surface | Responsibility | Supported use |
+| --- | --- | --- |
+| `sigil` | Server authoring primitives and built-in workflows | Server and Node-compatible worker code with filesystem and process access |
+| `sigil/contracts` | Backlog, task-graph, and YAML contracts and validators | Server, worker, and browser-targeted code after verification with the chosen bundler |
+| `sigil/server` | Execute one acquired workflow with events, cancellation, external artifacts, and a typed result | Node-compatible background workers |
+| `sigil` command | Built Bun CLI, including runtime TypeScript Sigils and PTY-backed local transports | Local or operator-controlled Bun processes |
+
+Do not import the root or server entrypoint into browser, Edge, or restricted serverless code. The package does not promise universal bundler enforcement. The CLI is not a Node CLI.
+
+## Development modes
+
+Sigil has two main development modes. They differ in who produces the task graph, not in how implementation runs.
+
+### AI-assisted development
+
+Use AI-assisted development by default when a developer is already working with a capable code assistant. The assistant uses the accepted conversation, active Markdown plan when present, and verified repository evidence to author the task graph directly. It validates the graph and passes it to `implement`. Sigil does not plan the same change again.
+
+An active Markdown plan is context for the current assistant. Its presence does not select `software-change --brief`. Use `software-change --brief` only when the developer explicitly asks Sigil to plan or replan agentically.
+
+### Agentic development
+
+Use agentic development when the developer asks Sigil to investigate, plan, probe uncertain behavior, decompose a mission, or run unattended delivery. `plan`, `probe`, and `software-change` can produce the same task graph consumed by `implement`. `breakdown` and `dispatch` extend the model to dependency-ordered program delivery.
+
+Both modes converge on a validated task graph. A mode is an entry path, not a command flag or repository configuration value.
+
 ## Choose the right surface
 
 Reuse accepted artifacts and verified state. Invoke the narrowest workflow that owns the unfinished transition.
 
 | Accepted state or intent | Next surface | Main commands |
 | --- | --- | --- |
-| One software change with no accepted task graph | Run the complete local single-change workflow. Use `plan` alone only when the planning boundary is the requested output. | `sigil software-change`, `sigil plan` |
+| Bounded change already discussed with the current assistant | Have the assistant author and validate the task graph, then enter implementation without Sigil planning. | `sigil task-graph validate`, then `sigil implement` |
+| Active Markdown plan in AI-assisted development | Have the assistant read the complete plan, verify it against the repository, and translate it directly into a task graph. | `sigil task-graph validate`, then `sigil implement` |
+| Explicit request for Sigil-owned planning | Run the agentic single-change workflow. Use `plan` alone when you only need the task graph. | `sigil software-change`, `sigil plan` |
 | Uncertain change that requires safe behavioral experiments | Produce an evidence-backed task graph in a sandbox, then reuse it downstream. | `sigil probe`, then `sigil software-change --task-file` or `sigil implement` |
-| Accepted task graph | Skip planning. Use the unified workflow unless the implementation stage itself is the desired boundary. | `sigil software-change --task-file`, `sigil implement` |
+| Accepted task graph | Skip planning and enter implementation. | `sigil implement` |
 | Existing diff or branch change | Review the current diff without repeating planning or implementation. | `sigil review` |
 | Large mission without an accepted backlog | Produce the backlog, then deliver it according to explicit policy. | `sigil breakdown`, `sigil dispatch` |
 | Accepted or partially delivered backlog | Start or resume dependency-ordered delivery. | `sigil dispatch` |
@@ -36,6 +65,14 @@ Reuse accepted artifacts and verified state. Invoke the narrowest workflow that 
 Do not use Sigil for quick factual checks, simple edits, or one-turn answers that do not need orchestration.
 
 ## Install and setup
+
+Install the server package in an application with its package manager:
+
+```sh
+npm install sigil
+```
+
+For durable application integration, use an application-owned queue and a Node worker as described in [Run Sigil from a server application](./docs/how-to/server-application.md).
 
 Install from the release archive:
 
@@ -54,6 +91,8 @@ sigil setup --dir /path/to/repo
 ```
 
 Then edit `sigil.config.json` in that repository. Setup also adds `/.sigil/runs/` to `.gitignore` so durable local execution state never dirties the worktree. Sigil resolves config by searching upward from the target repo path.
+
+After setup, the recommended first action is to ask the current code assistant to create and validate a Sigil task graph for the change already under discussion. See [Make your first change with an AI assistant](./docs/tutorials/first-change-with-ai-assistant.md).
 
 ## Configuration
 
@@ -139,8 +178,9 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 | `sigil probe --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--max-probes <n>]` | Run sandboxed probes, synthesize findings, and produce a task graph. | The produced task graph is valid and the target working tree is preserved. |
 | `sigil plan --repo <dir> --intent <text> [--brief <file>] [--out <file>]` | Plan one change into a task graph. | The produced task graph is valid. |
 | `sigil software-change --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--task-file <file>] [--branch <name>] [--instructions <file>]` | Run the unified local single-change workflow without publishing. | The workflow result is valid and reports no issues. |
-| `sigil validate [--repo <dir>] <task-file>` | Validate a task graph. | The validation error array is empty. |
-| `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>]` | Apply a task graph, review it, then push and open a PR. | PR creation succeeded, review is not blocking, and no failed tasks or issues were reported. |
+| `sigil task-graph validate [--repo <dir>] [--json] <task-file>` | Validate an assistant-authored or agentically produced task graph. | The graph satisfies structural, dependency, and repository-path rules. |
+| `sigil task-graph schema [--out <file>]` | Print or write the public task-graph JSON Schema. | The schema was produced. |
+| `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>] [--publish]` | Apply and review an accepted task graph locally, with optional explicit publication. | Local implementation succeeds; when `--publish` is supplied, publication also succeeds. |
 | `sigil review --repo <dir> --base <ref> [--no-autofix] [--context <text>]` | Review the current diff. | There are no unresolved high findings and no issues. |
 | `sigil breakdown --repo <dir> --mission <text> [--out <file>]` | Turn a mission into a backlog. | The produced backlog is valid. |
 | `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch --run-dir <dir>` | Start durable backlog delivery through main or an accumulating integration branch. | Dispatch finished without stopping. |
@@ -153,7 +193,7 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 
 ## Built-in software workflows
 
-Use `software-change` for the normal single-change path. It plans from an intent, implements the typed task graph, runs configured verification and review through the implementation stage, and returns combined evidence. It does not push, open a pull request, merge, or apply a dispatch policy.
+Use `software-change` when Sigil should own agentic planning for one change. It plans from an intent, implements the typed task graph, runs configured verification and review through the implementation stage, and returns combined evidence. It does not push, open a pull request, merge, or apply a dispatch policy.
 
 ```sh
 env -u CLAUDECODE sigil software-change \
@@ -162,13 +202,7 @@ env -u CLAUDECODE sigil software-change \
   --out /path/to/repo/.sigil/runs/task-graph.json
 ```
 
-Use `--brief <file>` when planning needs longer context. When a Markdown plan
-is already the accepted description of the change, pass the complete plan as
-the brief even if the immediate run request states only a short intent. The
-intent names the change; it does not replace accepted planning context. Use
-`--instructions <file>` for implementation-only guidance. Use
-`--task-file <file>` to skip planning and run the same unified workflow from an
-existing typed task graph.
+Use `--brief <file>` when Sigil planning should read requirements or constraints from a file. In AI-assisted development, the current assistant translates an active Markdown plan directly into a task graph instead. Use `--instructions <file>` for implementation-only guidance and `--task-file <file>` to skip planning and run the unified workflow from an existing typed task graph.
 
 ### Single changes, detached execution, and dispatch
 
@@ -177,18 +211,11 @@ owns one code change. `dispatch` owns backlog delivery policy. `run-sigil` launc
 a composed workflow as a detached durable run; it does not turn that workflow into
 a dispatch.
 
-| Starting point and desired result | Surface |
+| Delivery requirement | Surface |
 |---|---|
-| Intent or Markdown plan for one verified local change | `software-change --brief` |
-| Accepted task graph for one verified local change | `software-change --task-file` |
 | One change requiring detached execution or a custom authority boundary | A temporary TypeScript Sigil that calls `ctx.run(softwareChange, ...)`, launched with `run-sigil` |
 | One backlog item requiring dispatch-owned publication, merge, delivery-base verification, or delivery recovery | A one-item backlog passed to `dispatch` |
 | Several dependent deliverables | `breakdown`, then `dispatch` |
-
-A Markdown implementation plan is planning context, not the task graph contract.
-Pass it through `--brief`; `software-change` still translates it into a validated
-task graph. A validated task graph is accepted implementation state. Pass it
-through `--task-file` to skip planning.
 
 Dispatch accepts a one-item backlog, but use that shape only when dispatch must own
 publication, merging, delivery-base verification, or resumable delivery state. Do
@@ -212,11 +239,11 @@ Launch that wrapper with `run-sigil` and a durable run directory. The wrapper ad
 detached execution, logs, artifacts, and a caller-owned authority boundary while
 preserving `software-change` semantics.
 
-Use the stage commands when the stage boundary is the object you need to inspect or compose. `plan` writes a task graph. `implement` consumes a task graph, requires a clean target working tree, owns one local implementation branch, runs configured gates and review, returns a PR body, and the CLI command publishes that branch. `review` can also be run by itself against an existing diff.
+Use the stage commands when the stage boundary is the object you need to inspect or compose. `plan` writes a task graph. `implement` consumes a task graph, requires a clean target working tree, owns one local implementation branch, runs configured gates and review, and returns a PR body. The CLI keeps the result local by default and publishes only with explicit `--publish`. `review` can also be run by itself against an existing diff.
 
 ```sh
 env -u CLAUDECODE sigil plan --repo /path/to/repo --intent "<change intent>" --out /path/to/repo/.sigil/runs/task-graph.json
-env -u CLAUDECODE sigil validate --repo /path/to/repo /path/to/repo/.sigil/runs/task-graph.json
+env -u CLAUDECODE sigil task-graph validate --repo /path/to/repo /path/to/repo/.sigil/runs/task-graph.json
 env -u CLAUDECODE sigil implement --repo /path/to/repo --task-file /path/to/repo/.sigil/runs/task-graph.json
 env -u CLAUDECODE sigil review --repo /path/to/repo --base main
 ```
@@ -268,9 +295,13 @@ Every migration item attempt owns its events, status, plan, reviews, result or e
 
 ## Task graph contract
 
-The task graph is the seam between `plan` and `implement`. It has `contractVersion`, `project`, optional `goal`, and ordered `tasks`. Each task has `id`, `title`, `summary`, `dependencies`, `acceptanceCriteria`, `diagrams`, and `files`.
+The task graph is the public contract between agreed requirements and implementation. It may be authored by the developer's current assistant or produced by `plan` or `probe`. It has `contractVersion`, `project`, optional `goal`, and ordered `tasks`. Each task has `id`, `title`, `summary`, `dependencies`, `acceptanceCriteria`, `diagrams`, and `files`.
 
 Acceptance criteria should describe observable outcomes, not mechanism mandates. `implement` should satisfy the intended behavior even when a prescribed mechanism is stale. Task order is dependency-driven. `implement` skips a task when one of its dependencies has already failed.
+
+Use `sigil task-graph schema` to inspect the machine-readable structural contract and `sigil task-graph validate --repo <dir> <file>` before implementation. Repository-relative file paths are resolved against `--repo`. File entries describe the expected changes, but implementation may change additional files when they are required to complete the task correctly.
+
+See the [task-graph reference](./docs/reference/task-graph.md) and [author a task graph with an AI assistant](./docs/how-to/author-task-graph-with-ai-assistant.md).
 
 ## Static YAML workflows
 
@@ -316,6 +347,8 @@ env -u CLAUDECODE sigil run-sigil \
 ```
 
 `run-sigil` validates the launch inputs, starts a detached worker, and returns the run handle. The worker writes status, events, logs, artifacts, results, and errors into the run directory. The CLI-resolved `--repo` value is authoritative. If `input.json` contains a `repo` field, the runner replaces it with the resolved command-line repository path. `--input` must be a JSON object.
+
+This is a Bun CLI facility that compiles the TypeScript workflow at runtime. Its local files are not a durable application database, queue, or worker lease. Production applications should precompile workflows, acquire jobs through application infrastructure, and call `runWorkflow` from `sigil/server`. Do not attach a long run to an HTTP request lifecycle.
 
 Run persistence defaults to `durable`. Durable runs reject repositories, workflow files, inputs, outputs, and run directories beneath operating-system temporary storage. When `--run-dir` is omitted, Sigil creates an isolated run under `<repo>/.sigil/runs/`. `sigil setup` adds that directory to `.gitignore`, and Sigil also registers the path in the repository's local exclude file. Built-in and nested workflows inherit the active run artifact root.
 

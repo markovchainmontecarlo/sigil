@@ -17,11 +17,20 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "baseUrl": ".",
+    "paths": {
+      "sigil": ["./src/index.ts"],
+      "sigil/contracts": ["./src/contracts-entry.ts"],
+      "sigil/server": ["./src/server-entry.ts"]
+    }
   },
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
     "examples/**/*.ts"
+  ],
+  "exclude": [
+    "test/fixtures"
   ]
 }

@@ -21,16 +21,21 @@ describe("task graph contract", () => {
     expect(validateTaskGraph(valid).tasks.map((t) => t.id)).toEqual(["a", "b"]);
   });
 
-  test("invalid graph collects missing ids, missing repo root for relative paths, unknown dependencies, and cycles", () => {
+  test("structural validation reports the exact invalid field", () => {
+    const invalid = graph([{ ...task(""), files: [file("relative.ts")] }]);
+
+    expect(checkTaskGraph(invalid).errors.join("\n")).toContain("tasks.0.id");
+  });
+
+  test("semantic validation collects path, dependency, and cycle errors", () => {
     const invalid = graph([
-      { ...task(""), files: [file("relative.ts")] },
+      { ...task("root"), files: [file("relative.ts")] },
       task("a", ["b", "missing"]),
       task("b", ["a"]),
     ]);
 
     const errors = checkTaskGraph(invalid).errors.join("\n");
 
-    expect(errors).toContain("task missing id");
     expect(errors).toContain("file path is relative but no repo root was provided");
     expect(errors).toContain("depends on unknown task: missing");
     expect(errors).toContain("dependency cycle through task");
@@ -44,10 +49,30 @@ describe("task graph contract", () => {
     const absolutePathErrors = checkTaskGraph(absolutePathProject).errors.join("\n");
 
     expect(absolutePathErrors).toContain("project");
-    expect(absolutePathErrors).toContain("/Users/x/repo");
     expect(() => validateTaskGraph(absolutePathProject)).toThrow("project");
     expect(checkTaskGraph(emptyProject).errors.join("\n")).toContain("project");
     expect(checkTaskGraph(slugProject).errors.filter((error) => error.includes("project"))).toEqual([]);
+  });
+
+  test("assistant-authored graphs normalize optional arrays and validate goal and unknown fields", () => {
+    const minimal = {
+      contractVersion: CONTRACT_VERSION,
+      project: "assistant-change",
+      goal: "Ship the accepted behavior.",
+      tasks: [{
+        id: "change",
+        title: "Make the change",
+        summary: "Implement the accepted outcome.",
+        acceptanceCriteria: ["The accepted behavior is observable."],
+        files: [{ path: "src/change.ts", action: "modify", details: ["Implement the behavior."] }],
+      }],
+    };
+
+    const normalized = validateTaskGraph(minimal, { repoRoot: "/repo" });
+    expect(normalized.tasks[0].dependencies).toEqual([]);
+    expect(normalized.tasks[0].diagrams).toEqual([]);
+    expect(checkTaskGraph({ ...minimal, goal: 42 }, { repoRoot: "/repo" }).errors.join("\n")).toContain("goal");
+    expect(checkTaskGraph({ ...minimal, typo: true }, { repoRoot: "/repo" }).errors.join("\n")).toContain("Unrecognized key");
   });
 
   test("repoRoot option resolves relative paths and rejects paths outside the repo", () => {

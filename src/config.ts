@@ -1,10 +1,23 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
-import { AGENT_EFFORTS, AGENT_PROVIDERS, resolveExecutionPolicy, type AgentEffort, type AgentProvider, type ExecutionPolicy } from "./provider-capabilities.js";
+import {
+  AgentBindingSchema,
+  parseAgentBinding,
+  type AgentBinding,
+  type AgentEffort,
+  type AgentProvider,
+  type ExecutionPolicy,
+} from "./agent-binding.js";
 
-export type { AgentEffort, AgentProvider, ExecutionPolicy } from "./provider-capabilities.js";
-export type AgentBinding = { provider: AgentProvider; model: string; effort?: AgentEffort; execution?: ExecutionPolicy };
+export {
+  AgentBindingSchema,
+  parseAgentBinding,
+  type AgentBinding,
+  type AgentEffort,
+  type AgentProvider,
+  type ExecutionPolicy,
+} from "./agent-binding.js";
 export type ContextEntry = { path: string; update: boolean };
 export type SigilConfig = {
   agents: Record<string, AgentBinding>;
@@ -71,32 +84,6 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
   review: { reviewers: ["sol-low", "terra-low", "luna-low"], synthesizer: "sol-low", followUpReviews: 0 },
 };
 
-const ExecutionPolicySchema = z.object({
-  approval: z.literal("unattended").optional(),
-  sandbox: z.enum(["workspace-write", "unrestricted"]).optional(),
-  network: z.enum(["enabled", "disabled"]).optional(),
-}).optional();
-
-export const AgentBindingSchema = z.object({
-  provider: z.enum(AGENT_PROVIDERS, { error: (issue) => issue.input === "claude-pty"
-    ? 'provider "claude-pty" was replaced by provider "claude" with local profile selection'
-    : "unsupported provider" }),
-  model: z.string().trim().min(1),
-  effort: z.enum(AGENT_EFFORTS).default("medium"),
-  execution: ExecutionPolicySchema,
-}).superRefine((binding, context) => {
-  const transports = binding.provider === "claude"
-    ? ["claude-cli-pty", "claude-agent-sdk"] as const
-    : binding.provider === "codex" ? ["codex-acp"] as const : ["copilot-cli", "copilot-sdk"] as const;
-  for (const transport of transports) {
-    try { resolveExecutionPolicy(transport, binding.execution); }
-    catch (error) { context.addIssue({ code: "custom", path: ["execution"], message: String(error instanceof Error ? error.message : error) }); }
-  }
-});
-
-export function parseAgentBinding(input: unknown): AgentBinding {
-  return AgentBindingSchema.parse(input);
-}
 const ContextEntrySchema = z.object({
   path: z.string().min(1),
   update: z.boolean().default(false),

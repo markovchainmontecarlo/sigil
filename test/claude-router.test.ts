@@ -65,7 +65,7 @@ describe("Claude profile routing", () => {
     const files = store();
     const subscription: ClaudeProfile = {
       provider: "claude", name: "subscription", enabled: true, accessClass: "subscription",
-      details: { configurationDirectory: "/home/test/.claude" },
+      details: { configurationDirectory: join(tmpdir(), "claude") },
     };
     await writeClaudeProfiles([subscription, metered("api", 10, 1)], files);
     await updateClaudeRoutingState((state) => { state.next = { profile: "api", remaining: 1 }; }, files);

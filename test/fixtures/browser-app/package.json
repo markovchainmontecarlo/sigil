@@ -1,0 +1,6 @@
+{
+  "name": "sigil-browser-consumer",
+  "private": true,
+  "type": "module",
+  "dependencies": { "sigil": "SIGIL_TARBALL" }
+}

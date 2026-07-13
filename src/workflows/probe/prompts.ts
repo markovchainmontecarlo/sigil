@@ -3,7 +3,7 @@ import { loadPromptTemplate } from "../../prompts.js";
 export type ProbePromptName = "design" | "findings" | "buildTaskGraph";
 
 export function probePrompt(name: ProbePromptName, variables: Record<string, unknown> = {}): string {
-  return loadPromptTemplate(`src/workflows/probe/prompts/${name}.md`, variables);
+  return loadPromptTemplate(`workflows/probe/prompts/${name}.md`, variables);
 }
 
 export const probePrompts = {

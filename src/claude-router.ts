@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AgentBinding } from "./config.js";
-import type { AgentOptions, AgentRuntimeMetadata, SigilAgent } from "./agents.js";
-import { createClaudeAgentFromGenerate } from "./agents.js";
-import { createClaudePtyAgent } from "./claude-pty.js";
+import { SchemaPromptError, formatZodIssues, type AgentOptions, type AgentPromptOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agent.js";
 import {
   claudeProfileStore,
   readClaudeProfiles,
@@ -13,21 +11,20 @@ import {
   type ClaudeProfile,
   type ClaudeProfileStore,
 } from "./claude-profiles.js";
-import { createClaudeSdkGenerate, type ClaudeObservedUsage } from "./claude-sdk.js";
+import type { ClaudeObservedUsage } from "./claude-sdk.js";
 import { classifyProviderFailure, ProviderError, type ProviderFailure } from "./provider-failure.js";
 import { processIdentityStatus, readProcessIdentity } from "./process-identity.js";
 
 export type ClaudeAssignment = { profile: ClaudeProfile; reservationId: string; routingReason: string };
 
-export function createRoutedClaudeAgent(binding: AgentBinding, cwd: string, options: AgentOptions): SigilAgent {
+export function createRoutedClaudeAgent(binding: AgentBinding, cwd: string, options: AgentOptions, runtime: AgentRuntimeMetadata = { binding: `claude:${binding.model}`, provider: "claude" }): SigilAgent {
   let assignmentPromise: Promise<{ agent: SigilAgent; assignment: ClaudeAssignment }> | undefined;
   let failure: ProviderFailure | undefined;
   let usage: ClaudeObservedUsage | undefined;
   let closed = false;
-  const runtime: AgentRuntimeMetadata = { binding: `claude:${binding.model}`, provider: "claude" };
 
   const assigned = () => assignmentPromise ??= assignClaude(binding, cwd, options, runtime);
-  const prompt = async <T>(text: string, schema?: import("zod").z.ZodType<T>, promptOptions?: import("./agents.js").AgentPromptOptions): Promise<string | T> => {
+  const prompt = async <T>(text: string, schema?: import("zod").z.ZodType<T>, promptOptions?: AgentPromptOptions): Promise<string | T> => {
     if (closed) throw new Error("agent is closed");
     const active = await assigned();
     try {
@@ -82,10 +79,15 @@ async function assignClaude(binding: AgentBinding, cwd: string, options: AgentOp
     await options.onRuntimeUpdate?.(runtime);
     const profile = assignment.profile;
     if (profile.accessClass === "subscription") {
+      if (!("Bun" in globalThis)) {
+        throw new ProviderError("Claude PTY requires the Bun runtime", { code: "invalid_request" });
+      }
+      const { createClaudePtyAgent } = await import("./claude-pty.js");
       return { assignment, agent: createClaudePtyAgent(binding, cwd, profile, options, options.claudePtyDependencies, runtime) };
     }
     const credential = resolveClaudeCredentialSource(profile);
     if (!credential) throw new ProviderError("Claude credential source is unresolved", { code: "credential_unresolved" });
+    const { createClaudeSdkGenerate } = await import("./claude-sdk.js");
     const generate = createClaudeSdkGenerate(binding, cwd, profile, credential);
     const agent = createClaudeAgentFromGenerate(async <T>(text: string, promptOptions?: Record<string, unknown>) => {
       const result = await generate<T>(text, promptOptions);
@@ -184,4 +186,34 @@ function consumeNextClaudeProfile(
   state.next.remaining -= 1;
   if (state.next.remaining === 0) delete state.next;
   return profile;
+}
+
+export function createClaudeAgentFromGenerate(
+  generate: <T>(text: string, options?: Record<string, unknown>) => Promise<{ text: string; object?: T }>,
+  close: () => void | Promise<void> = () => {},
+): SigilAgent {
+  let continued = false;
+  const prompt = async <T>(text: string, schema?: import("zod").z.ZodType<T>, promptOptions?: AgentPromptOptions): Promise<string | T> => {
+    const abortController = new AbortController();
+    const abort = () => abortController.abort(promptOptions?.signal?.reason);
+    promptOptions?.signal?.addEventListener("abort", abort, { once: true });
+    if (promptOptions?.signal?.aborted) abort();
+    const options = { ...(schema ? { structuredOutput: { schema } } : {}), sdkOptions: { ...(continued ? { continue: true } : {}), abortController } };
+    try {
+      const result = await generate<T>(text, options);
+      continued = true;
+      if (!schema) return result.text;
+      const checked = schema.safeParse(result.object);
+      if (!checked.success) throw new SchemaPromptError(`schema invalid: ${formatZodIssues(checked.error)}`);
+      return checked.data;
+    } finally {
+      promptOptions?.signal?.removeEventListener("abort", abort);
+    }
+  };
+  return {
+    prompt: prompt as SigilAgent["prompt"],
+    promptWithOptions: prompt,
+    async close() { await close(); },
+    async [Symbol.asyncDispose]() { await this.close(); },
+  };
 }

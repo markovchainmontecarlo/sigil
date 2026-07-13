@@ -28,6 +28,8 @@ export async function setupCommand(args: string[]): Promise<number> {
 
   await ensureRunDirectoryIgnored(repo);
   console.log(configPath);
+  console.log("Next: discuss a bounded change with your AI assistant, then ask it to create and validate a Sigil task graph.");
+  console.log("Guide: docs/tutorials/first-change-with-ai-assistant.md");
   return 0;
 }
 

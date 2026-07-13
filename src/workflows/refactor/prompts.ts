@@ -15,5 +15,5 @@ export function refactorPrompt(
   name: RefactorPromptName,
   variables: Record<string, string>,
 ): string {
-  return loadPromptTemplate(`src/workflows/refactor/prompts/${name}.md`, variables);
+  return loadPromptTemplate(`workflows/refactor/prompts/${name}.md`, variables);
 }

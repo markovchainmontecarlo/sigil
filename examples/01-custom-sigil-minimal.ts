@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { sigil } from "../src/index.js";
+import { sigil } from "sigil";
 
 const Classification = z.object({
   kind: z.enum(["BUG", "FEATURE"]),

@@ -12,15 +12,24 @@ Sigil is a composable workflow runtime over tool-using agent runtimes. Ordinary 
 
 ## Install
 
+Install the server-side TypeScript package as an application dependency:
+
+```sh
+npm install sigil
+```
+
+The package contains built ESM JavaScript, declarations, and runtime resources. Import `sigil` from server or Node-worker code, `sigil/server` from Node workers, and `sigil/contracts` from runtime-neutral contract code.
+
 Install from the latest GitHub release archive:
 
 ```sh
 gh api repos/markovchainmontecarlo/sigil/contents/scripts/install.sh --jq .content | base64 -d | sh
 ```
 
-The installer verifies the downloaded archive checksum, unpacks Sigil into `~/.sigil/lib`, runs `bun install --production --frozen-lockfile` there so native packages are materialized for the local platform, replaces the bundled skills under `~/.sigil/skills`, exposes their authoritative documentation through the same installed relative layout, links those skills into the Claude Code and Codex discovery directories, installs the bundled man page when present, and writes a `sigil` launcher to `~/.local/bin`. Upgrade by re-running the installer; it replaces the existing install and removes obsolete managed skill links.
+The installer verifies the archive checksum, installs the built Bun CLI runtime under `~/.sigil/lib`, materializes frozen production dependencies, reconciles managed skills and documentation, and writes `sigil` to `~/.local/bin`. Upgrade by re-running it.
 
 Codex and Claude both use subscription auth. The installer does not create or store API keys.
+Developer-local subscription credentials are for local operator use. They are not shared hosted-service credentials; server applications must provision provider authentication appropriate to their worker and tenant isolation model.
 
 ## Setup
 
@@ -32,13 +41,36 @@ sigil setup
 
 Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` commands for that repo, such as build and test. Repositories that need dependencies or generated tool state before baseline gates can also define `workspace.bootstrap`. Unconfigured evals are skipped.
 
+## Make your first change with an AI assistant
+
+AI-assisted development is the recommended way to try Sigil. Keep working with the code assistant that already knows your discussion and repository. Ask it:
+
+> Create and validate a Sigil task graph for what we have discussed. Show me the task summary, then implement it with Sigil.
+
+The assistant reads the agreed requirements or active Markdown plan, verifies concrete claims against the repository, writes the task graph, and validates it. These are the commands it runs; you can also run them directly:
+
+```sh
+sigil task-graph validate --repo . .sigil/runs/my-change/task-graph.json
+sigil implement --repo . --task-file .sigil/runs/my-change/task-graph.json
+```
+
+Implementation creates a local branch, commits verified tasks, runs configured gates, and reviews the result. It stays local unless you add `--publish`.
+
+Use agentic development when you want Sigil itself to investigate or plan:
+
+```sh
+sigil software-change --repo . --intent "Add the requested behavior"
+```
+
+Both paths converge on the same validated task graph and implementation workflow. [Make your first change with an AI assistant](./docs/tutorials/first-change-with-ai-assistant.md) walks through the local workflow.
+
 ## CLI
 
-The CLI verbs are `migrate`, `refactor`, `probe`, `plan`, `software-change`, `implement`, `review`, `breakdown`, `dispatch`, `profile`, `config`, `validate`, `validate-workflow`, `validate-sigil`, `run-workflow`, `run-sigil`, `setup`, and `discover-env`. Run `sigil <verb> --help` for flags and exit codes. Use [SIGIL_USAGE.md](./SIGIL_USAGE.md) as the canonical operator reference.
+The CLI covers task graphs, single changes, repository programs, custom workflows, provider profiles, and project configuration. Run `sigil --help` for the command list or `sigil <command> --help` for flags and exit codes. Use [SIGIL_USAGE.md](./SIGIL_USAGE.md) as the operator reference.
 
 Provider configuration and billing authorization are separate. See the [configuration reference](./docs/reference/configuration.md) and [provider profile setup](./docs/how-to/configure-provider-profiles.md).
 
-## Build agent workflows
+## Build custom agent workflows
 
 An LLM supplies reasoning and generation. An agent runtime supplies tools and session continuity. An agent role resolves through repository configuration to a runtime/provider, model, and reasoning-effort binding. A workflow coordinates agent sessions and deterministic operations while owning a state transition.
 
@@ -217,7 +249,7 @@ If you want to write your own workflows, read the examples in order:
 5. [Nested workflow](./examples/05-nested-workflow.ts)
 6. [Full issue workflow](./examples/06-issue-workflow.ts)
 
-There is also an [examples guide](./examples/README.md) that explains what each file teaches and why the example files import from the local source tree while the README snippets import from the public `sigil` entrypoint.
+There is also an [examples guide](./examples/README.md). All maintained TypeScript examples import from the public `sigil` entrypoint.
 
 ### When to write a custom workflow
 
@@ -350,7 +382,7 @@ See [examples/07-triage-workflow.yaml](./examples/07-triage-workflow.yaml) for t
 
 The public TypeScript entrypoint exports these async functions and their input/result types:
 
-- `softwareChange`: the primary single-change workflow. It plans, implements, verifies/reviews, and returns combined evidence without publishing.
+- `softwareChange`: the agentic single-change workflow. It plans when given an intent, accepts an existing task graph when planning is already complete, implements, verifies/reviews, and returns combined evidence without publishing.
 - `plan`: turns an intent and optional brief into a typed task graph for a target repo.
 - `implement`: applies a task graph, runs configured gates, commits work, runs review, and returns the branch and PR body for a delivery caller.
 - `review`: reviews the diff against a base branch and can run an autofix pass for actionable findings.
@@ -365,20 +397,8 @@ The public TypeScript entrypoint exports these async functions and their input/r
 
 Use shipped workflows directly when the standard flow is almost right but your product needs its own policy.
 
-**Run the standard single-change workflow:**
-
-```ts
-import { softwareChange } from "sigil";
-
-export async function buildChange(repo: string, intent: string) {
-  return softwareChange({ repo, intent });
-}
-```
-
 **Run one complete local software change:**
 
-See [examples/03-software-change.ts](./examples/03-software-change.ts) for a richer version that carries `brief` and `outFile` through planning and returns explicit stage state.
-
 ```ts
 import { softwareChange } from "sigil";
 
@@ -387,26 +407,48 @@ export async function buildChange(repo: string, intent: string) {
 }
 ```
 
-**Add your own delivery policy:**
+[examples/03-software-change.ts](./examples/03-software-change.ts) carries `brief` and `outFile` through planning and returns explicit stage state.
+
+**Keep delivery authority in the application:**
 
 See [examples/04-custom-delivery.ts](./examples/04-custom-delivery.ts) for a stronger policy wrapper that decides whether to publish and shapes the PR title.
 
 ```ts
-import { publish, softwareChange } from "sigil";
+import { softwareChange } from "sigil";
 
-export async function shipWhenClean(repo: string, intent: string, base = "main") {
+type Delivery = { publish(input: { repo: string; branch: string; body: string; base: string }): Promise<void> };
+
+export async function shipWhenClean(delivery: Delivery, repo: string, intent: string, base = "main") {
   const change = await softwareChange({ repo, intent });
   if (!change.valid || !change.branch || !change.prBody) return { shipped: false, change };
 
-  const published = await publish(repo, {
-    branch: change.branch,
-    title: change.branch,
-    body: change.prBody,
-    base,
-  });
-  return { shipped: published.pr?.ok === true, change, published };
+  await delivery.publish({ repo, branch: change.branch, body: change.prBody, base });
+  return { shipped: true, change };
 }
 ```
+
+The caller must authenticate and authorize this effect. Sigil does not grant delivery permission merely because a workflow returned a branch and PR body.
+
+## Application and runtime boundaries
+
+| Surface | Server | Node worker | Browser | Bun CLI |
+| --- | --- | --- | --- | --- |
+| `sigil` | Yes | Yes | No | Used by built CLI workflows |
+| `sigil/contracts` | Yes | Yes | Yes, subject to bundler verification | Not required |
+| `sigil/server` | No request-owned long runs | Yes | No | Not required |
+| `sigil` command | Local Bun process | Optional operator tool | No | Yes |
+
+The root authoring and workflow API is server-only. `sigil/server` executes one already-acquired job and streams normalized events; the application still owns authentication, authorization, durable records, queueing, leases, workspace and secret isolation, quotas, cancellation requests, artifact retention, event delivery, and delivery permission. See [Run Sigil from a server application](./docs/how-to/server-application.md).
+
+AI-assisted and agentic development use the same runtime and implementation workflow.
+
+| Workflow category | Examples | Effect boundary |
+| --- | --- | --- |
+| Read-oriented | `plan`, `breakdown`, `review` without repair | Produces analysis or artifacts; callers still control repository access. |
+| Repository-mutating | `softwareChange`, `implement`, `refactor`, `migrate` | May change an isolated checkout and create commits according to workflow input. |
+| Delivery-authorized | `dispatch` or application delivery code | Push, pull-request, merge, and deployment authority must be granted by application or operator policy. |
+
+This table describes intended capabilities, not a sandbox or universal runtime enforcement mechanism. Full workflows require filesystem and process facilities. Edge and restricted serverless runtimes are unsupported, request-owned long runs are unsafe, and browser bundlers must be tested individually. The CLI remains Bun-based; do not claim Node support for CLI runtime TypeScript loading or PTY-backed provider features.
 
 **Run parallel analysis:**
 
@@ -453,7 +495,7 @@ Dispatch processes items serially in dependency order. Use `integrationBranch` w
 
 The boundary stays explicit: planning, implementation, review, publishing, and merging remain separate composable steps. Callers choose the policy that connects them.
 
-## Authoring modes
+## Choose a workflow authoring surface
 
 Use a **TypeScript Sigil** when the workflow needs runtime adaptation: dynamic batching, runtime branching, sequential investigation, model selection, iterative repair, or nested workflow composition. This is the most expressive authoring surface because the workflow is ordinary code.
 
@@ -476,18 +518,29 @@ Every configured eval command must be non-interactive. It must never prompt. Set
 
 If a workflow references an eval that is not defined in `evals`, Sigil skips it.
 
-## Learn the model in more depth
-
-If you want the deeper model behind the examples and workflow surfaces, see:
+## Reference and examples
 
 - [SIGIL_USAGE.md](./SIGIL_USAGE.md), the primary usage reference
+- [Developer documentation](./docs/README.md)
+- [First change with an AI assistant](./docs/tutorials/first-change-with-ai-assistant.md)
+- [Task-graph reference](./docs/reference/task-graph.md)
 - [LLMs, agent runtimes, agents, and workflows](./docs/explanation/llms-agents-and-workflows.md)
 - [Workflow shapes: static and dynamic](./docs/explanation/workflow-shapes.md)
 - [Primitives and composition](./docs/explanation/primitives-and-composition.md)
 - [Prompt patterns](./docs/explanation/prompt-patterns.md)
 - [Workflow patterns](./docs/explanation/workflow-patterns.md)
 - [Create and run a temporary TypeScript Sigil](./docs/how-to/temporary-typescript-sigil.md)
+- [Run Sigil from a server application](./docs/how-to/server-application.md)
 
 ## Development
+
+Build the staged package and verify both exact distribution artifacts:
+
+```sh
+bun run build
+bun run verify:package
+```
+
+`verify:package` builds once, records artifact and manifest digests, and tests the registry package and Bun installer archive without recomposing them.
 
 Run `bun run typecheck` and `bun run test:fast` while changing code. Run the relevant integration test file while changing an integration path. Run `bun run test:all` for final verification. Sigil uses the fast suite for task gates and the complete suite for final verification. The test-suite manifest rejects unclassified test files. Use `bun run preview:readme` to preview README rendering locally while iterating on product docs or assets.

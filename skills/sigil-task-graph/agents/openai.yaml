@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sigil Task Graph"
+  short_description: "Turn accepted development context into an implementation graph"
+  default_prompt: "Use $sigil-task-graph to create and validate a task graph from what we have discussed, then implement it when authorized."

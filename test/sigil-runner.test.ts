@@ -137,7 +137,7 @@ describe("TypeScript sigil runner", () => {
     expect(JSON.parse(result.formatted)).toEqual({ repo, kind: "named" });
   });
 
-  test("bundled workflows resolve feature-owned prompt resources from the package", async () => {
+  test("runs a packaged workflow importing a feature-owned prompt group", async () => {
     const repo = tempRepo();
     const workflowFile = writeWorkflow(tempDir(), `
       import { planningPrompts, sigil } from "sigil";

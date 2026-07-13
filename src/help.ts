@@ -59,6 +59,19 @@ export const commandHelps = [
     exitCode: "0 when the requested local profile operation succeeds; 1 otherwise.",
   },
   {
+    name: "task-graph",
+    summary: "Validate an assistant-authored task graph or print its public schema.",
+    usage: "sigil task-graph validate [--repo <dir>] [--json] <task-file> | sigil task-graph schema [--out <file>]",
+    flags: [
+      { name: "validate <task-file>", description: "Validate one task graph's structure, dependencies, cycles, and repository paths." },
+      { name: "--repo <dir>", description: "Repository directory used to resolve and check task file paths." },
+      { name: "--json", description: "Print the stable machine-readable validation record." },
+      { name: "schema", description: "Print the public task-graph JSON Schema." },
+      { name: "--out <file>", description: "Write the schema to a file instead of standard output." },
+    ],
+    exitCode: "0 when validation succeeds or the schema is written; 1 when validation fails; 2 for invalid usage.",
+  },
+  {
     name: "migrate",
     summary: "Apply a dependency-ordered repository migration with verified commit checkpoints.",
     usage: "sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir>",
@@ -125,15 +138,16 @@ export const commandHelps = [
   },
   {
     name: "implement",
-    summary: "Apply a task graph, run gates and review, then push and open a PR.",
-    usage: "sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>]",
+    summary: "Apply a task graph, commit verified tasks, run gates, and review locally.",
+    usage: "sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>] [--publish]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--task-file <file>", description: "Required. Task graph JSON file." },
       { name: "--branch <name>", description: "Optional branch name." },
       { name: "--instructions <file>", description: "Optional run-specific implementation instructions." },
+      { name: "--publish", description: "After local success, push the branch and open a pull request." },
     ],
-    exitCode: "0 when PR creation succeeds, review is not blocking, and no failed tasks or issues are reported; 1 otherwise.",
+    exitCode: "0 when review is not blocking and no failed tasks or issues are reported; with --publish, pull-request creation must also succeed.",
   },
   {
     name: "review",
@@ -173,16 +187,6 @@ export const commandHelps = [
       { name: "--resume <dir>", description: "Resume the recorded operation after validating repository state and live process ownership." },
     ],
     exitCode: "0 when dispatch finishes; 1 when it stops on a deterministic failure; 75 when durable capacity waiting is retryable.",
-  },
-  {
-    name: "validate",
-    summary: "Validate a task graph file.",
-    usage: "sigil validate [--repo <dir>] <task-file>",
-    flags: [
-      { name: "--repo <dir>", description: "Repository directory used to resolve and check task file paths." },
-      { name: "<task-file>", description: "Required. Task graph JSON file." },
-    ],
-    exitCode: "0 when the validation error array is empty; 1 otherwise.",
   },
   {
     name: "validate-workflow",

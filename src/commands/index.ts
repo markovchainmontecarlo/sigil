@@ -3,8 +3,9 @@ import { discoverEnvCommand } from "./environment.js";
 import { breakdownCommand, dispatchCommand, migrateCommand, probeCommand, refactorCommand } from "./repository-programs.js";
 import { runSigilCommand, runWorkflowCommand } from "./run.js";
 import { setupCommand } from "./setup.js";
+import { taskGraphCommand } from "./task-graph.js";
 import { implementCommand, planCommand, reviewCommand, softwareChangeCommand } from "./software-change.js";
-import { validateCommand, validateSigilCommand, validateWorkflowCommand } from "./validation.js";
+import { validateSigilCommand, validateWorkflowCommand } from "./validation.js";
 import { dashboardCommand } from "./dashboard.js";
 import { profileCommand } from "./profile.js";
 import { configCommand } from "./config.js";
@@ -15,6 +16,7 @@ export const commandHandlers: Record<CommandName, CommandHandler> = {
   config: configCommand,
   dashboard: dashboardCommand,
   profile: profileCommand,
+  "task-graph": taskGraphCommand,
   migrate: migrateCommand,
   refactor: refactorCommand,
   probe: probeCommand,
@@ -24,7 +26,6 @@ export const commandHandlers: Record<CommandName, CommandHandler> = {
   review: reviewCommand,
   breakdown: breakdownCommand,
   dispatch: dispatchCommand,
-  validate: validateCommand,
   "validate-workflow": validateWorkflowCommand,
   "validate-sigil": validateSigilCommand,
   "run-workflow": runWorkflowCommand,

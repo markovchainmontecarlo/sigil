@@ -8,5 +8,5 @@ export function migrationPrompt(
     | "repair-protected-paths",
   variables: Record<string, string>,
 ): string {
-  return loadPromptTemplate(`src/workflows/migrate/prompts/${name}.md`, variables);
+  return loadPromptTemplate(`workflows/migrate/prompts/${name}.md`, variables);
 }

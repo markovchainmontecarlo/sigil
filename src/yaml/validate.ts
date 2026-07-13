@@ -1,8 +1,5 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import YAML from "yaml";
 
-import { loadConfig } from "../config.js";
 import { YamlWorkflowSchema } from "./schema.js";
 import type { YamlJob, YamlStep, YamlValidationResult, YamlWorkflow } from "./types.js";
 
@@ -68,28 +65,6 @@ function validateJobKinds(job: YamlJob, errors: string[]): void {
 
   if (hasAgent && hasScript) errors.push(`job ${job.id}: agent jobs cannot contain script or sh steps`);
   if (!hasAgent && hasPrompt) errors.push(`job ${job.id}: prompt steps require an agent job`);
-}
-
-function validateAgentRefs(workflow: YamlWorkflow, repo: string, errors: string[]): void {
-  const needsConfig = workflow.stages.some((stage) =>
-    (stage.jobs ?? []).some((job) => typeof job.agent === "string"),
-  );
-  if (!needsConfig) return;
-
-  let config;
-  try {
-    config = loadConfig(repo);
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
-    return;
-  }
-  for (const stage of workflow.stages) {
-    for (const job of stage.jobs ?? []) {
-      if (typeof job.agent === "string" && !config.agents[job.agent]) {
-        errors.push(`job ${job.id}: unknown agent "${job.agent}" in sigil.config.json`);
-      }
-    }
-  }
 }
 
 function validateWorkflow(workflow: YamlWorkflow, errors: string[]): void {
@@ -160,11 +135,11 @@ function validateWorkflow(workflow: YamlWorkflow, errors: string[]): void {
   }
 }
 
-export function parseYamlWorkflow(file: string): unknown {
-  return YAML.parse(readFileSync(file, "utf8"));
+export function parseYamlWorkflow(source: string): unknown {
+  return YAML.parse(source);
 }
 
-export function validateYamlWorkflow(raw: unknown, repo?: string): YamlValidationResult {
+export function validateYamlWorkflow(raw: unknown): YamlValidationResult {
   const parsed = YamlWorkflowSchema.safeParse(raw);
   if (!parsed.success) {
     return {
@@ -174,11 +149,6 @@ export function validateYamlWorkflow(raw: unknown, repo?: string): YamlValidatio
   }
 
   const errors: string[] = [];
-  if (repo) validateAgentRefs(parsed.data, resolve(repo), errors);
   validateWorkflow(parsed.data, errors);
   return { workflow: parsed.data, errors };
-}
-
-export function validateYamlWorkflowFile(file: string, repo?: string): YamlValidationResult {
-  return validateYamlWorkflow(parseYamlWorkflow(file), repo);
 }

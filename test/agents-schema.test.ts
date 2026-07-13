@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { agent, createClaudeAgentFromGenerate, createTextAgentFromGenerate, createCopilotAgentFromClient, createCopilotAgentFromGenerate, isSchemaPromptError, monitorActiveCodexCapacity } from "../src/agents.js";
+import { agent } from "../src/agents.js";
+import { createTextAgentFromGenerate, isSchemaPromptError } from "../src/agent.js";
+import { createClaudeAgentFromGenerate } from "../src/providers/claude.js";
+import { createCopilotAgentFromClient, createCopilotAgentFromGenerate } from "../src/providers/copilot.js";
+import { monitorActiveCodexCapacity } from "../src/providers/codex.js";
 import { codexProfileStore, readCodexRoutingState, writeCodexProfiles } from "../src/codex-profiles.js";
 import { releaseCodexProfile, reserveCodexProfile } from "../src/codex-router.js";
 

@@ -1,3 +1,3 @@
 import { createPromptGroup } from "../../prompts.js";
 
-export const breakdownPrompts = createPromptGroup("src/workflows/breakdown/prompts");
+export const breakdownPrompts = createPromptGroup("workflows/breakdown/prompts");

@@ -74,7 +74,7 @@ const complexWorkflowDiagrams: DiagramExpectation[] = [
 
 const rules: Rule[] = [
   { name: "do not clobber artifacts with agent turn text", pattern: /\bwriteFileSync\s*\([^,\n]+,\s*[^)\n]*\.text\b/ },
-  { name: "provider literals are only allowed in provider-owned modules", pattern: /["'](?:claude|codex|copilot)["']/, allowed: new Set(["src/agents.ts", "src/claude-pty.ts", "src/claude-profiles.ts", "src/claude-router.ts", "src/codex-router.ts", "src/config.ts", "src/provider-capabilities.ts", "src/provider-profiles.ts", "src/provider-profile-service.ts"]) },
+  { name: "provider literals are only allowed in provider-owned modules", pattern: /["'](?:claude|codex|copilot)["']/, allowed: new Set(["src/agent-binding.ts", "src/claude-pty.ts", "src/claude-profiles.ts", "src/claude-router.ts", "src/codex-router.ts", "src/config.ts", "src/provider-capabilities.ts", "src/provider-profiles.ts", "src/provider-profile-service.ts", "src/providers/index.ts", "src/providers/codex.ts", "src/providers/claude.ts", "src/providers/copilot.ts"]) },
   { name: "z.any is forbidden", pattern: /\bz\.any\s*\(/ },
   { name: "old orchestration identifiers are forbidden", pattern: /\b(?:setState|residual|fanout|spine|lane|slot)\b/ },
   { name: "Mastra imports are only allowed at integration seams", pattern: /^\s*import\b.*["']@mastra\//, allowed: new Set(["src/agents.ts", "src/claude-sdk.ts", "src/mastra.ts"]) },
@@ -169,6 +169,30 @@ describe("src structural invariants", () => {
 
     expect(workflow).not.toMatch(/\b(?:publish|push|pullRequest|merge)\b/);
     expect(workflow).not.toContain("../../git.js");
+  });
+
+  test("assistant routing does not turn an active Markdown plan into implicit agentic planning", () => {
+    const router = readFileSync(join(process.cwd(), "skills/sigil/SKILL.md"), "utf8");
+    const usage = readFileSync(join(process.cwd(), "SIGIL_USAGE.md"), "utf8");
+
+    for (const guidance of [router, usage]) {
+      expect(guidance).toContain("active Markdown plan");
+      expect(guidance).toContain("task graph");
+      expect(guidance).toContain("explicitly");
+    }
+    expect(router).toContain("Do not invoke Sigil planning merely because a plan file exists.");
+    expect(usage).toContain("Its presence does not select `software-change --brief`.");
+  });
+
+  test("explicit Sigil routing defaults to AI-assisted development without self-reference", () => {
+    const router = readFileSync(join(process.cwd(), "skills/sigil/SKILL.md"), "utf8");
+
+    expect(router).toContain("Treat “use Sigil” or “use the Sigil skill” as a request to route the work");
+    expect(router).toContain("Default to AI-assisted development");
+    expect(router).toContain("only when that choice is genuinely unclear");
+    expect(router).toContain("## Detailed guidance");
+    expect(router).not.toContain("Use this skill");
+    expect(router).not.toContain("invoking this skill");
   });
 
   test("complex workflows own checked-in stage diagrams with stable structural labels", () => {

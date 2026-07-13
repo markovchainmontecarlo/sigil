@@ -9,16 +9,22 @@ function run(cmd: string[]) {
 }
 
 describe("distribution scripts", () => {
+  test("fast tests serialize shared package staging access", () => {
+    const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
+
+    expect(manifest.scripts["test:fast"]).toBe("bun scripts/test-suite.ts fast --max-concurrency 1");
+  });
+
   test("pack.sh and install.sh are bash syntax-valid", () => {
     expect(run(["bash", "-n", "scripts/pack.sh"]).exitCode).toBe(0);
     expect(run(["bash", "-n", "scripts/install.sh"]).exitCode).toBe(0);
     expect(run(["bash", "-n", "scripts/distribution-smoke.sh"]).exitCode).toBe(0);
   });
 
-  test("pack.sh uses bun pm pack with the dist destination", () => {
+  test("pack.sh delegates to authoritative package verification", () => {
     const script = readFileSync("scripts/pack.sh", "utf8");
 
-    expect(script).toContain("bun pm pack --destination dist/");
+    expect(script).toContain("exec bun run verify:package");
   });
 
   test("install.sh verifies checksums, installs production deps, writes launcher, and stays keyless", () => {
@@ -35,15 +41,23 @@ describe("distribution scripts", () => {
     expect(script).toContain('for skill_path in "$SKILL_DIR"/*');
     expect(script).toContain("$BIN_DIR/sigil");
     expect(script).toContain(".local/bin");
+    expect(script).toContain("lib/src/cli.js");
+    expect(script).not.toContain("lib/src/cli.ts");
     expect(script).not.toContain("ANTHROPIC_API_KEY");
     expect(script).not.toContain("OPENAI_API_KEY");
   });
 
-  test("pack.sh injects the lockfile and writes the checksum file", () => {
-    const script = readFileSync("scripts/pack.sh", "utf8");
+  test("package verification owns two artifacts, parity, and explicit checks", () => {
+    const script = readFileSync("scripts/verify-package.ts", "utf8");
 
-    expect(script).toContain("cp bun.lock");
-    expect(script).toContain('tee "$tarball.sha256"');
+    expect(script).toContain("-registry.tgz");
+    expect(script).toContain("-installer.tgz");
+    expect(script).toContain("assertSharedBytes");
+    expect(script).toContain("assertInventory");
+    expect(script).toContain("test-package-consumers.ts");
+    expect(script).toContain("distribution-smoke.sh");
+    expect(script).toContain('["skills", "docs", "man"]');
+    expect(script).toContain('["ARCHITECTURE.md", "SIGIL_USAGE.md"]');
   });
 
   test("distribution-smoke.sh exercises both fresh install and update", () => {
@@ -52,8 +66,10 @@ describe("distribution scripts", () => {
     expect(script).toContain("=== fresh install ===");
     expect(script).toContain("=== update install ===");
     expect(script).toContain("SIGIL_RELEASE_TARBALL");
+    expect(script).toContain("installer archive path required");
     expect(script).toContain("stale-skill");
     expect(script).toContain("sigil-plan");
+    expect(script).toContain("sigil-task-graph");
     expect(script).toContain("user-skill");
     expect(script).toContain(".claude/skills/sigil");
     expect(script).toContain(".claude/skills/sigil-authoring");
@@ -61,12 +77,12 @@ describe("distribution scripts", () => {
     expect(script).toContain(".codex/skills/sigil-authoring");
     expect(script).toContain(".local/share/man/man1/sigil.1");
     expect(script).toContain("readlink");
+    expect(script).toContain("run-sigil");
     expect(script).toContain("distribution smoke passed");
     expect(script).not.toContain("durable-context");
   });
 
   test("the packaged skill set and its authoritative documents agree", () => {
-    const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { files: string[] };
     const skills = readdirSync("skills", { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
@@ -78,10 +94,8 @@ describe("distribution scripts", () => {
       "sigil-dispatch",
       "sigil-migration",
       "sigil-refactor",
+      "sigil-task-graph",
     ]);
-    expect(manifest.files).toContain("SIGIL_USAGE.md");
-    expect(manifest.files).toContain("docs/explanation");
-    expect(manifest.files).toContain("docs/how-to");
     expect(existsSync("docs/explanation/workflow-patterns.md")).toBe(true);
     expect(existsSync("docs/explanation/ephemeral-sigil-patterns.md")).toBe(false);
     expect(existsSync("docs/how-to/temporary-typescript-sigil.md")).toBe(true);

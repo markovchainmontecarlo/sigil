@@ -6,9 +6,15 @@ import {
 import { terminateProcessGroup } from "./process-group.js";
 import type { OwnedProcessInfo, ProcessLifecycle } from "./process-lifecycle.js";
 
-export type PtyTerminal = Pick<Bun.Terminal, "write" | "close">;
+export type PtyTerminal = {
+  write(data: string | ArrayBufferLike | ArrayBufferView<ArrayBufferLike>): number;
+  close(): void;
+};
 
-export type PtySubprocess = Pick<Bun.Subprocess, "pid" | "exited" | "kill"> & {
+export type PtySubprocess = {
+  readonly pid: number;
+  readonly exited: Promise<number>;
+  kill(exitCode?: number | NodeJS.Signals): void;
   terminal: PtyTerminal | undefined;
 };
 
@@ -128,7 +134,7 @@ export class OwnedPtyProcess implements AsyncDisposable {
     }
   }
 
-  write(data: Parameters<Bun.Terminal["write"]>[0]): number {
+  write(data: string | ArrayBufferLike | ArrayBufferView<ArrayBufferLike>): number {
     if (this.cleanup) throw new Error("cannot write to a closing PTY process");
     return this.terminal.write(data);
   }
@@ -186,21 +192,37 @@ export class OwnedPtyProcess implements AsyncDisposable {
 }
 
 const defaultDependencies: OwnedPtyProcessDependencies = {
-  spawn: (options) => Bun.spawn({
-    cmd: options.cmd,
-    cwd: options.cwd,
-    env: options.env,
-    terminal: {
-      cols: options.terminal.cols,
-      rows: options.terminal.rows,
-      name: options.terminal.name,
-      data: (terminal, data) => options.terminal.data(terminal, data),
-    },
-  }),
+  spawn: (options) => {
+    const process = Bun.spawn({
+      cmd: options.cmd,
+      cwd: options.cwd,
+      env: options.env,
+      terminal: {
+        cols: options.terminal.cols,
+        rows: options.terminal.rows,
+        name: options.terminal.name,
+        data: (terminal, data) => options.terminal.data(adaptTerminal(terminal), data),
+      },
+    });
+
+    return {
+      pid: process.pid,
+      exited: process.exited,
+      kill: (signal) => process.kill(signal),
+      terminal: process.terminal ? adaptTerminal(process.terminal) : undefined,
+    };
+  },
   readIdentity: readProcessIdentity,
   readGroupId: readProcessGroupId,
   terminateGroup: terminateProcessGroup,
 };
+
+function adaptTerminal(terminal: Bun.Terminal): PtyTerminal {
+  return {
+    write: (data) => terminal.write(data as Parameters<Bun.Terminal["write"]>[0]),
+    close: () => terminal.close(),
+  };
+}
 
 function spawnOptions(
   options: OwnedPtyProcessOptions,

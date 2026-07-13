@@ -98,6 +98,32 @@ describe("Codex profile routing", () => {
     expect((await readCodexRoutingState(files)).ledgers.parallel?.active).toBe(12);
   });
 
+  test("holds the routing-state lock until an asynchronous update completes", async () => {
+    const files = store();
+    let releaseFirst!: () => void;
+    let secondEntered = false;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const first = updateCodexRoutingState(async (state) => {
+      state.roundRobin = 1;
+      await firstCanFinish;
+    }, files);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const second = updateCodexRoutingState((state) => {
+      secondEntered = true;
+      state.roundRobin++;
+    }, files);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(secondEntered).toBe(false);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect((await readCodexRoutingState(files)).roundRobin).toBe(2);
+  });
+
   test("isolates failed subscription capacity reads and never probes API profiles", async () => {
     const files = store();
     const profiles = [profile("bad"), profile("good"), profile("api", "metered-api")];

@@ -1,7 +1,8 @@
 import { accessSync, constants } from "node:fs";
 import { resolve } from "node:path";
 
-import { codexAcpAvailable, copilotCliAvailable, copilotSdkAvailable } from "../agents.js";
+import { codexAcpAvailable } from "../providers/codex.js";
+import { copilotCliAvailable, copilotSdkAvailable } from "../providers/copilot.js";
 import { claudePtyAvailable } from "../claude-pty.js";
 import { readClaudeProfiles, type ClaudeProfile } from "../claude-profiles.js";
 import { readCodexProfiles, type CodexProfile } from "../codex-profiles.js";

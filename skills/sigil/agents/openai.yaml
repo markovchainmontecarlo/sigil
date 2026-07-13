@@ -1,4 +1,4 @@
 interface:
   display_name: "Sigil Router"
   short_description: "Route work to the right Sigil workflow"
-  default_prompt: "Use $sigil to choose and operate the narrowest workflow for this request."
+  default_prompt: "Route the request with $sigil. Default to AI-assisted development when the current assistant already has the requirements or active plan. Use agentic development only for explicitly requested Sigil-owned planning or orchestration."

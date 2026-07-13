@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { sigil, softwareChange } from "../src/index.js";
+import { sigil, softwareChange } from "sigil";
 
 const IssueKind = z.object({
   kind: z.enum(["BUG", "FEATURE"]),

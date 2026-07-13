@@ -2,7 +2,8 @@ import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { z } from "zod";
 
-import { agent as createAgent, isSchemaPromptError, type AgentOptions, type AgentPromptOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agents.js";
+import { agent as createAgent } from "./agents.js";
+import { isSchemaPromptError, type AgentOptions, type AgentPromptOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agent.js";
 import { loadConfig, type AgentBinding, type ContextEntry } from "./config.js";
 import { resolveConfig } from "./config.js";
 import { projectEffectiveConfig } from "./effective-config.js";
@@ -67,16 +68,26 @@ export interface RichSigilAgent extends SigilAgent {
 }
 
 export type ContextAgentFactory = (binding: string | AgentBinding, opts: AgentOptions & { cwd: string }) => SigilAgent;
+export type ContextStorage =
+  | { ownership: "repository"; artifactRoot?: string }
+  | { ownership: "external"; artifactRoot: string };
 export type CreateContextOptions = {
   createAgent?: ContextAgentFactory;
+  storage?: ContextStorage;
   artifactRoot?: string;
   agentOptions?: Omit<AgentOptions, "cwd">;
   onAgentRuntime?: (runtime: AgentRuntimeMetadata) => void | Promise<void>;
   signal?: AbortSignal;
   processLifecycle?: ProcessLifecycle;
   rootState?: ContextRootState;
+  onObserve?: (stage: string, details: Record<string, string>) => Promise<void>;
+  onObservation?: (stage: string, details: ObservationDetails) => Promise<void>;
 };
-type ContextRootState = { artifactRoot: string; initialization?: Promise<void> };
+type ContextRootState = {
+  artifactRoot: string;
+  initialization?: Promise<void>;
+  storage: ContextStorage["ownership"];
+};
 
 export interface SigilContext {
   readonly repo: string;
@@ -101,13 +112,18 @@ export interface SigilContext {
 
 export function createContext(
   repo: string,
-  options: CreateContextOptions & {
-    onObserve?: (stage: string, details: Record<string, string>) => Promise<void>;
-  } = {},
+  options: CreateContextOptions = {},
 ): SigilContext {
-  ensureRunStorageIgnored(repo);
+  const storage = options.storage ?? {
+    ownership: "repository" as const,
+    artifactRoot: options.artifactRoot,
+  };
+  if (storage.ownership === "external" && !isAbsolute(storage.artifactRoot)) {
+    throw new Error("external artifact root must be absolute");
+  }
+  if (storage.ownership === "repository") ensureRunStorageIgnored(repo);
   const issues: string[] = [];
-  const dir = resolve(options.artifactRoot ?? createArtifactRoot(repo));
+  const dir = resolve(storage.artifactRoot ?? options.artifactRoot ?? createArtifactRoot(repo));
   const agentFactory: ContextAgentFactory = options.createAgent ?? ((binding, opts) => (
     typeof binding === "string" ? createAgent(binding, opts) : createAgent(binding, opts)
   ));
@@ -133,7 +149,7 @@ export function createContext(
   const eventsFile = artifacts.path("events.jsonl");
   const statusFile = artifacts.path("status.json");
   let statusSequence = 0;
-  const rootState = options.rootState ?? { artifactRoot: dir };
+  const rootState = options.rootState ?? { artifactRoot: dir, storage: storage.ownership };
 
   const ctx: SigilContext = {
     repo,
@@ -266,28 +282,24 @@ export function createContext(
     },
     async observe(stage, details = {}) {
       const event = { version: 1 as const, at: new Date().toISOString(), stage, details };
-      await mkdir(dirname(eventsFile), { recursive: true });
-      await appendFile(eventsFile, `${JSON.stringify(event)}\n`);
-      const temporary = `${statusFile}.${process.pid}.${statusSequence++}.tmp`;
-      await writeFile(temporary, `${JSON.stringify(event, null, 2)}\n`);
-      await rename(temporary, statusFile);
-      const summary = terminalObservationSummary(details);
-      const suffix = summary
-        ? ` ${summary}`
-        : "";
-      process.stderr.write(`[sigil] ${stage}${suffix}\n`);
-      await options.onObserve?.(stage, Object.fromEntries(
-        Object.entries(details).flatMap(([key, value]) =>
-          typeof value === "string" || typeof value === "number" || typeof value === "boolean"
-            ? [[key, String(value)]]
-            : []),
-      ));
+      if (rootState.storage === "repository") {
+        await mkdir(dirname(eventsFile), { recursive: true });
+        await appendFile(eventsFile, `${JSON.stringify(event)}\n`);
+        const temporary = `${statusFile}.${process.pid}.${statusSequence++}.tmp`;
+        await writeFile(temporary, `${JSON.stringify(event, null, 2)}\n`);
+        await rename(temporary, statusFile);
+        const summary = terminalObservationSummary(details);
+        process.stderr.write(`[sigil] ${stage}${summary ? ` ${summary}` : ""}\n`);
+      }
+      await options.onObservation?.(stage, details);
+      await options.onObserve?.(stage, stringDetails(details));
     },
     fork(child) {
+      assertChildArtifactRoot(rootState, child.artifactRoot);
       return createContext(repo, {
         createAgent: agentFactory,
-        artifactRoot: child.artifactRoot,
-        onObserve: (stage, details) => ctx.observe(stage, {
+        storage: { ownership: rootState.storage, artifactRoot: child.artifactRoot },
+        onObservation: (stage, details) => ctx.observe(stage, {
           operationPath: child.operationPath,
           ...details,
         }),
@@ -305,6 +317,24 @@ export function createContext(
     processLifecycle: options.processLifecycle,
   };
   return ctx;
+}
+
+function stringDetails(details: ObservationDetails): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(details).flatMap(([key, value]) =>
+      typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+        ? [[key, String(value)]]
+        : []),
+  );
+}
+
+function assertChildArtifactRoot(rootState: ContextRootState, artifactRoot: string): void {
+  if (rootState.storage !== "external") return;
+  if (!isAbsolute(artifactRoot)) throw new Error("external child artifact root must be absolute");
+  const child = resolve(artifactRoot);
+  const rel = relative(rootState.artifactRoot, child);
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return;
+  throw new Error("external child artifact root escapes the supplied artifact root");
 }
 
 async function runSettledJob<T>(

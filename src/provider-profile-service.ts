@@ -1,6 +1,5 @@
 import { resolve } from "node:path";
 
-import { primeCodexProfile } from "./agents.js";
 import {
   readClaudeProfiles,
   readClaudeRoutingState,
@@ -19,7 +18,6 @@ import {
 } from "./codex-profiles.js";
 import { readCodexAccountStatus } from "./codex-rate-limits.js";
 import { circuitIsOpen } from "./codex-router.js";
-import { reconcileClaudeRoutingState } from "./claude-router.js";
 import { CODEX_PROVIDER, loadConfig, resolveAgentBinding } from "./config.js";
 import {
   qualifiedProfileIdentity,
@@ -155,6 +153,7 @@ async function primeProfile(args: string[]): Promise<number> {
   const config = loadConfig(resolve(value(parsed, "repo") ?? process.cwd()));
   const binding = resolveAgentBinding(config.implement.coder, config);
   if (binding.provider !== CODEX_PROVIDER) throw new UsageError("configured implementation binding is not Codex");
+  const { primeCodexProfile } = await import("./providers/codex.js");
   const result = await primeCodexProfile(selected.profile, binding);
   return output({ version: 1, kind: "profile-operation", operation: "prime", profile: identity(selected), support: "supported", outcome: result.windowStarted ? "primed" : "active" }, jsonRequested(parsed));
 }
@@ -184,6 +183,7 @@ function safeProfile(selected: CommonProfile): SafeProfileDto & { policy: Record
 
 async function storedState(selected: CommonProfile): Promise<Record<string, unknown>> {
   if (selected.provider === "claude") {
+    const { reconcileClaudeRoutingState } = await import("./claude-router.js");
     await reconcileClaudeRoutingState();
     const state = await readClaudeRoutingState();
     return { ledger: state.ledgers[selected.name], activeAssignments: Object.values(state.reservations).filter((entry) => entry.profile === selected.name).length, circuit: state.circuits[selected.name] ? { state: "open", reason: state.circuits[selected.name].reason } : { state: "closed" } };

@@ -6,13 +6,13 @@ import type { SoftwareChangeResult } from "../workflows/software-change/workflow
 export function implementExitCode(
   result: Pick<ImplementResult, "reviewBlocking" | "failedTasks" | "issues">,
   published: PublishResult | null,
+  publicationRequested = true,
 ): 0 | 1 {
-  return published?.pr?.ok === true
-    && !result.reviewBlocking
+  const implemented = !result.reviewBlocking
     && result.failedTasks.length === 0
-    && result.issues.length === 0
-    ? 0
-    : 1;
+    && result.issues.length === 0;
+  const delivered = !publicationRequested || published?.pr?.ok === true;
+  return implemented && delivered ? 0 : 1;
 }
 
 export function reviewExitCode(result: Pick<ReviewResult, "valid" | "unresolvedHigh" | "issues">): 0 | 1 {
