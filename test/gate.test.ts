@@ -110,7 +110,7 @@ const config = {
     cancellable: "node process-tree.mjs",
   },
   plan: { planners: ["explorer"], synthesizer: "explorer" },
-  implement: { coder: "implementer", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+  implement: { coder: "implementer", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
   review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };
 

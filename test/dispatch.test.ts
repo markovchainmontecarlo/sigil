@@ -30,7 +30,7 @@ function tempRepo(evals: Record<string, string> = {}): string {
     },
     evals,
     plan: { planners: ["planner"], synthesizer: "planner" },
-    implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+    implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   return dir;
@@ -531,6 +531,93 @@ describe("dispatch", () => {
     }, context);
 
     expect(prepareCalls).toBe(1);
+  });
+
+  test("resume routes completed implementation tasks to delivery repair", async () => {
+    const repo = tempRepo();
+    const context = createContext(repo, {
+      artifactRoot: join(repo, ".sigil", "runs", "completed-implementation-repair"),
+    });
+    const singleItemBacklog: Backlog = {
+      contractVersion: BACKLOG_CONTRACT_VERSION,
+      mission: "completed implementation repair",
+      items: [backlog().items[0]],
+    };
+    const input = {
+      repo,
+      backlogFile: backlogFile(repo, singleItemBacklog),
+      deliveryPolicy: "integrationBranch" as const,
+      integrationBranch: "feature/site-studio",
+    };
+
+    await dispatchWithOptions(input, {
+      prepareIntegrationBranch: async () => {},
+      softwareChange: async (changeInput) => {
+        const graph = taskGraph(repo, "base");
+        if (!changeInput.outFile
+          || !changeInput.canonicalGraphFile
+          || !changeInput.checkpointFile) {
+          throw new Error("dispatch did not supply implementation artifacts");
+        }
+        mkdirSync(dirname(changeInput.outFile), { recursive: true });
+        mkdirSync(dirname(changeInput.canonicalGraphFile), { recursive: true });
+        writeFileSync(changeInput.outFile, JSON.stringify(graph));
+        writeFileSync(changeInput.canonicalGraphFile, JSON.stringify(graph));
+        writeFileSync(changeInput.checkpointFile, JSON.stringify({
+          version: 1,
+          graphDigest: "digest",
+          branch: changeInput.branch,
+          baseBranch: changeInput.baseBranch,
+          baselineCommit: "baseline",
+          tasks: {
+            "base-task": {
+              status: "completed",
+              attempts: 1,
+              verifiedCommit: "commit",
+            },
+          },
+        }));
+        return changeResult(changeInput, {
+          valid: false,
+          reviewBlocking: true,
+          issues: ["Codex capacity blocked: no eligible profile"],
+        });
+      },
+      wait: async () => {},
+    }, context);
+
+    const checkpointFile = context.artifacts.path("dispatch-state.json");
+    const checkpoint = JSON.parse(readFileSync(checkpointFile, "utf8"));
+    checkpoint.operation.status = "recovering";
+    writeFileSync(checkpointFile, JSON.stringify(checkpoint));
+    let repairs = 0;
+    let recoveries = 0;
+
+    await dispatchWithOptions(input, {
+      prepareIntegrationBranch: async () => {},
+      repairChange: async (_ctx, repairInput) => {
+        repairs++;
+        return changeResult({
+          repo,
+          intent: repairInput.item.brief,
+          branch: repairInput.branch,
+          baseBranch: repairInput.baseBranch,
+          taskFile: repairInput.taskFile,
+        });
+      },
+      recoverChange: async () => {
+        recoveries++;
+        throw new Error("completed implementation must not restart task recovery");
+      },
+      publish: makePublishStub(),
+      merge: makeMergeStub(),
+      createPullRequest: makeCreatePrStub(),
+      verifyBase: makeVerifyBaseStub(),
+      wait: async () => {},
+    }, context);
+
+    expect(repairs).toBe(1);
+    expect(recoveries).toBe(0);
   });
 
   test("integration branch reports a failed final PR without merging it", async () => {

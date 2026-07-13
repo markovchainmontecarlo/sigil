@@ -10,7 +10,7 @@ const project = {
   agents: { worker: { provider: "codex", model: "project-model", effort: "medium" } },
   evals: {},
   plan: { planners: ["worker"], synthesizer: "worker" },
-  implement: { coder: "worker", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+  implement: { coder: "worker", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
   review: { reviewers: ["worker"], synthesizer: "worker", followUpReviews: 0 },
 };
 
@@ -30,7 +30,7 @@ describe("effective configuration", () => {
 
     expect(effective.version).toBe(EFFECTIVE_CONFIG_VERSION);
     expect(effective.values["agents.worker.model"]).toMatchObject({ value: "command-model", source: "command" });
-    expect(effective.values["implement.batchSize"]).toMatchObject({ value: 5, source: "project" });
+    expect(effective.values["implement.sessionTaskLimit"]).toMatchObject({ value: 5, source: "project" });
     expect(effective.values["implement.idleTimeoutMs"]).toMatchObject({ source: "default" });
   });
 

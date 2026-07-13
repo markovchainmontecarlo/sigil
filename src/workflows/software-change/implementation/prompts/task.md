@@ -8,6 +8,8 @@
 
 {{CONTEXT}}
 
+{{HANDOFF}}
+
 ### First: verify and falsify the claims in this task
 Read the actual code for every file this task touches before you change anything. Verify and falsify the task's claims against what you find at HEAD. This is not ceremony and it is not a gate. The point is to force you to read the code and form your own opinion before acting, instead of executing the plan blind. That includes the task's design decisions, not just its facts: if the prescribed approach is wrong or inferior for this task's goal given what you read, say so and carry the better approach into your implementation. In one or two lines, state what you confirmed and what, if anything, the task got wrong about the current code.
 

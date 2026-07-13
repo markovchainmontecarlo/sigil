@@ -7,6 +7,7 @@ import { taskGraphDigest, validateTaskGraph, type Task, type TaskGraph } from ".
 import { changedPaths, checkoutFreshBranch, commitAll, git, isCleanTree, type CommitResult } from "../../../git.js";
 import { loadConfiguredContext, renderContextBlock, sigil, type RichSigilAgent, type SigilContext } from "../../../context.js";
 import { implementationPrompts } from "./prompts.js";
+import { CoderSessionLifecycle } from "./coder-session.js";
 import {
   compareWithBaseline,
   establishBaseline,
@@ -49,16 +50,37 @@ async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
-function taskPrompt(task: Task, contextBlock: string): string {
+function taskPrompt(task: Task, contextBlock: string, handoff: string): string {
   return implementationPrompts.task({
     PREAMBLE: implementationPrompts.preamble(),
     TASK_ID: task.id,
     TASK_TITLE: task.title,
     TASK_SUMMARY: task.summary,
     CONTEXT: contextBlock,
+    HANDOFF: handoff,
     DIAGRAMS: task.diagrams.join("\n"),
     ACCEPTANCE: task.acceptanceCriteria.map((c) => `- ${c}`).join("\n"),
     FILES: task.files.map((f) => `- ${f.action} ${f.path}\n${f.details.map((d) => `  - ${d}`).join("\n")}`).join("\n"),
+  });
+}
+
+function coderSessionHandoff(
+  graph: TaskGraph,
+  checkpoint: ImplementationCheckpoint,
+  branch: string,
+  head: string,
+): string {
+  const completed = Object.entries(checkpoint.tasks)
+    .filter(([, state]) => state.status === "completed")
+    .map(([id, state]) => `- ${id}: ${state.verifiedCommit ?? "verified commit unavailable"}`)
+    .join("\n");
+
+  return implementationPrompts.sessionHandoff({
+    GOAL: graph.goal ?? graph.project,
+    GRAPH_DIGEST: checkpoint.graphDigest,
+    BRANCH: branch,
+    HEAD: head,
+    COMPLETED_TASKS: completed || "- none",
   });
 }
 
@@ -311,6 +333,11 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
   const issues: string[] = [];
   const noopTasks: string[] = [];
   let interrupted = false;
+  await using coderSessions = new CoderSessionLifecycle(
+    ctx,
+    config.implement.coder,
+    config.implement.sessionTaskLimit,
+  );
 
   for (;;) {
     const id = nextRunnable(graph, checkpoint);
@@ -327,9 +354,19 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
     await ctx.observe("task-started", { task: id });
     let reply = "";
     let noopVerdict: string | undefined;
-    await using coder = ctx.agent(config.implement.coder);
+    const session = await coderSessions.acquire();
+    const coder = session.agent;
+    const handoff = session.rotated
+      ? coderSessionHandoff(graph, checkpoint, branch, taskBase)
+      : "";
     try {
-          reply = await promptWithRecovery(ctx, coder, config, `task:${id}:implement`, taskPrompt(task, contextBlock));
+          reply = await promptWithRecovery(
+            ctx,
+            coder,
+            config,
+            `task:${id}:implement`,
+            taskPrompt(task, contextBlock, handoff),
+          );
           let gate = await runBuildAndTest(ctx);
           for (let attempt = 0; !gate.ok && attempt < config.implement.repairLimit; attempt++) {
             reply = await repair(ctx, coder, config, `task:${id}:gate-repair`, `Task ${id} failed build/test. Follow relevant repository dependencies while preserving task intent.`, "configured build/test gates", gate.evidence);
@@ -342,6 +379,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
             await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "build-test", gate.evidence);
             await writeAtomicJson(checkpointFile, checkpoint);
             await ctx.observe("task-failed", { task: id, stage: "build-test" });
+            await coderSessions.invalidate("task-gates-exhausted");
             continue;
           }
 
@@ -362,6 +400,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
             await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "commit", commit.log);
             await writeAtomicJson(checkpointFile, checkpoint);
             await ctx.observe("task-failed", { task: id, stage: "commit" });
+            await coderSessions.invalidate("task-commit-failed");
             continue;
           }
 
@@ -376,6 +415,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
               issues.push(recovered.evidence);
               await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "noop-recovery", recovered.evidence);
               await ctx.observe("task-failed", { task: id, stage: "noop-recovery" });
+              await coderSessions.invalidate("task-noop-recovery-exhausted");
             }
           }
           if (state.status !== "failed") {
@@ -406,6 +446,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
               issues.push(`task ${id} ${state.evidence}`);
               await writeAtomicJson(checkpointFile, checkpoint);
             }
+            await coderSessions.invalidate("provider-interrupted");
           } else {
             state.status = "failed";
             state.evidence = evidence;
@@ -413,6 +454,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
             await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "operation", evidence);
             await writeAtomicJson(checkpointFile, checkpoint);
             await ctx.observe("task-failed", { task: id, stage: "operation" });
+            await coderSessions.invalidate("task-operation-failed");
           }
         } finally {
           await persistTaskReply(ctx.artifacts.path, task, reply, noopVerdict, issues);

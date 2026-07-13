@@ -14,7 +14,7 @@ export type SigilConfig = {
   plan: { planners: string[]; synthesizer: string };
   implement: {
     coder: string;
-    batchSize: number;
+    sessionTaskLimit: number;
     repairLimit: number;
     operationTimeoutMs: number;
     idleTimeoutMs: number;
@@ -60,7 +60,7 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
   plan: { planners: ["sol-low", "terra-low", "luna-low"], synthesizer: "sol-low" },
   implement: {
     coder: "sol-low",
-    batchSize: 5,
+    sessionTaskLimit: 5,
     repairLimit: 3,
     operationTimeoutMs: 5_400_000,
     idleTimeoutMs: 300_000,
@@ -113,7 +113,7 @@ const ConfigSchema: z.ZodType<SigilConfig> = z.object({
   plan: z.object({ planners: z.array(z.string().min(1)), synthesizer: z.string().min(1) }),
   implement: z.object({
     coder: z.string().min(1),
-    batchSize: z.number().finite(),
+    sessionTaskLimit: z.number().int().positive(),
     repairLimit: z.number().finite(),
     operationTimeoutMs: z.number().int().positive().default(5_400_000),
     idleTimeoutMs: z.number().int().positive().default(300_000),

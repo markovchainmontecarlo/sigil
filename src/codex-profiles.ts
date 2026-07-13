@@ -147,7 +147,8 @@ export async function readCodexRoutingState(
     version: 2,
     state: emptyRoutingState(),
   });
-  return migrateRoutingState(file.state);
+  const profiles = await readCodexProfiles(store);
+  return migrateRoutingState(file.state, profiles);
 }
 
 export async function updateCodexRoutingState<T>(
@@ -209,7 +210,10 @@ function emptyRoutingState(): CodexRoutingState {
   };
 }
 
-function migrateRoutingState(state: PersistedRoutingState): CodexRoutingState {
+function migrateRoutingState(
+  state: PersistedRoutingState,
+  profiles: CodexProfile[],
+): CodexRoutingState {
   const reservations: Record<string, ProfileReservation> = {};
   const legacyReservations: PersistedReservation[] = [];
 
@@ -218,13 +222,15 @@ function migrateRoutingState(state: PersistedRoutingState): CodexRoutingState {
     else legacyReservations.push(reservation);
   }
 
-  reconcileLegacyReservations(state.ledgers, legacyReservations);
+  reconcileLegacyReservations(state.ledgers, legacyReservations, profiles);
+  normalizeRearmState(state.ledgers, profiles);
   return { ...state, reservations };
 }
 
 function reconcileLegacyReservations(
   ledgers: Record<string, ProfileLedger>,
   reservations: PersistedReservation[],
+  profiles: CodexProfile[],
 ): void {
   for (const reservation of reservations) {
     const ledger = ledgers[reservation.profile];
@@ -238,13 +244,38 @@ function reconcileLegacyReservations(
       0,
       ledger.reservedTokens - reservedTokens,
     );
-    ledger.rearmRequired = true;
+    if (profileRequiresRearm(profiles, reservation.profile)) {
+      ledger.rearmRequired = true;
+    }
   }
+}
+
+function normalizeRearmState(
+  ledgers: Record<string, ProfileLedger>,
+  profiles: CodexProfile[],
+): void {
+  for (const profile of profiles) {
+    const ledger = ledgers[profile.name];
+    if (ledger && !profileRequiresRearm(profiles, profile.name)) {
+      ledger.rearmRequired = false;
+    }
+  }
+}
+
+function profileRequiresRearm(
+  profiles: CodexProfile[],
+  name: string,
+): boolean {
+  const profile = profiles.find((entry) => entry.name === name);
+  if (profile?.profileClass === "subscription") {
+    return profile.requireRearmOnCapacityExhaustion === true;
+  }
+  return profile?.budget?.requireRearm === true;
 }
 
 async function withProfileLock<T>(store: CodexProfileStore, body: () => Promise<T>): Promise<T> {
   await using _lock = await acquireFileLock(store.lockDir, { recovery: "strict" });
-  return body();
+  return await body();
 }
 
 async function atomicOwnerWrite(path: string, value: unknown): Promise<void> {

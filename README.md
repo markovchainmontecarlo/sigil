@@ -490,4 +490,4 @@ If you want the deeper model behind the examples and workflow surfaces, see:
 
 ## Development
 
-Run `bun run typecheck` and `bun test`. Use `bun run preview:readme` to preview README rendering locally while iterating on product docs or assets.
+Run `bun run typecheck` and `bun run test:fast` while changing code. Run the relevant integration test file while changing an integration path. Run `bun run test:all` for final verification. Sigil uses the fast suite for task gates and the complete suite for final verification. The test-suite manifest rejects unclassified test files. Use `bun run preview:readme` to preview README rendering locally while iterating on product docs or assets.

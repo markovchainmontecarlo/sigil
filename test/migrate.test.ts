@@ -93,7 +93,7 @@ function fixtureRepo(): string {
     plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst" },
     implement: {
       coder: "coder",
-      batchSize: 5,
+      sessionTaskLimit: 5,
       repairLimit: 1,
       branchPrefix: "sigil/",
       baseBranch: "main",

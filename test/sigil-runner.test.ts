@@ -13,7 +13,7 @@ function tempRepo(): string {
     evals: { build: "printf build-ok" },
     context: [],
     plan: { planners: ["coder"], synthesizer: "coder" },
-    implement: { coder: "coder", batchSize: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
+    implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }, null, 2));
   return dir;

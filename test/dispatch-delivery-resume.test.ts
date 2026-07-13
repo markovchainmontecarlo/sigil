@@ -13,7 +13,7 @@ test("delivery stages retain evidence and final effects resume independently", a
   writeFileSync(join(repo, "sigil.config.json"), JSON.stringify({
     agents: { coder: { provider: "codex", model: "gpt-5.5" } }, evals: { production: "true" },
     plan: { planners: ["coder"], synthesizer: "coder" },
-    implement: { coder: "coder", batchSize: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
+    implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }));
   const backlogFile = join(repo, "backlog.json");
