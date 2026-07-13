@@ -1,9 +1,13 @@
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { acquireFileLock } from "./file-lock.js";
+import { stat } from "node:fs/promises";
+import { z } from "zod";
+import type { ProcessIdentity } from "./process-identity.js";
+import { ProcessOwnerSchema, ProfileStoreError } from "./provider-profiles.js";
 
 export type CodexProfileClass = "subscription" | "metered-api";
 export type MeteredMode = "manual" | "overflow" | "automatic";
@@ -51,6 +55,7 @@ export type ProfileLedger = {
 export type ProfileReservation = {
   id: string;
   profile: string;
+  owner: ProcessIdentity;
   startedAt: string;
   startingPercentage?: number;
   percentageQuantum?: number;
@@ -79,7 +84,12 @@ export type CodexRoutingState = {
 };
 
 type RegistryFile = { version: 1; profiles: CodexProfile[] };
-type StateFile = { version: 2; state: CodexRoutingState };
+type PersistedReservation = Omit<ProfileReservation, "owner"> & {
+  owner?: ProcessIdentity;
+};
+type PersistedRoutingState = Omit<CodexRoutingState, "reservations"> & {
+  reservations: Record<string, PersistedReservation>;
+};
 
 export type CodexProfileStore = {
   registryFile: string;
@@ -105,7 +115,9 @@ export function codexProfileStore(sigilHome = process.env.SIGIL_HOME): CodexProf
 }
 
 export async function readCodexProfiles(store = codexProfileStore()): Promise<CodexProfile[]> {
-  return (await readJson<RegistryFile>(store.registryFile, { version: 1, profiles: [] })).profiles;
+  const value = await readValidatedJson(store.registryFile, RegistryFileSchema, { version: 1, profiles: [] });
+  validateProfiles(value.profiles);
+  return value.profiles;
 }
 
 export async function writeCodexProfiles(
@@ -131,12 +143,11 @@ export async function updateCodexProfiles<T>(
 export async function readCodexRoutingState(
   store = codexProfileStore(),
 ): Promise<CodexRoutingState> {
-  const empty = emptyRoutingState();
-  const file = await readJson<{ version?: number; state?: Partial<CodexRoutingState> }>(
-    store.stateFile,
-    { version: 2, state: empty },
-  );
-  return migrateRoutingState(file.state, file.version);
+  const file = await readValidatedJson(store.stateFile, PersistedStateFileSchema, {
+    version: 2,
+    state: emptyRoutingState(),
+  });
+  return migrateRoutingState(file.state);
 }
 
 export async function updateCodexRoutingState<T>(
@@ -165,16 +176,18 @@ export function profileLedger(state: CodexRoutingState, name: string): ProfileLe
 }
 
 export function newReservation(profile: string, options: {
+  owner: ProcessIdentity;
   startingPercentage?: number;
   percentageQuantum?: number;
   reservedTokens?: number;
   observedAt?: string;
   observedRemainingPercentage?: number;
   reservedHeadroomPercentage?: number;
-} = {}): ProfileReservation {
+}): ProfileReservation {
   return {
     id: randomUUID(),
     profile,
+    owner: options.owner,
     startedAt: new Date().toISOString(),
     startingPercentage: options.startingPercentage,
     percentageQuantum: options.percentageQuantum,
@@ -196,29 +209,41 @@ function emptyRoutingState(): CodexRoutingState {
   };
 }
 
-function migrateRoutingState(
-  state: Partial<CodexRoutingState> | undefined,
-  version: number | undefined,
-): CodexRoutingState {
-  const migrated: CodexRoutingState = {
-    ...emptyRoutingState(),
-    ...state,
-    reservations: state?.reservations ?? {},
-    ledgers: state?.ledgers ?? {},
-    circuits: state?.circuits ?? {},
-    unavailableProfiles: state?.unavailableProfiles ?? {},
-  };
-  if (version !== 2) {
-    for (const reservation of Object.values(migrated.reservations)) {
-      if (reservation.observedAt || reservation.reservedTokens !== undefined) continue;
-      migrated.unavailableProfiles[reservation.profile] = "legacy active reservation lacks admission evidence";
-    }
+function migrateRoutingState(state: PersistedRoutingState): CodexRoutingState {
+  const reservations: Record<string, ProfileReservation> = {};
+  const legacyReservations: PersistedReservation[] = [];
+
+  for (const reservation of Object.values(state.reservations)) {
+    if (reservation.owner) reservations[reservation.id] = reservation as ProfileReservation;
+    else legacyReservations.push(reservation);
   }
-  return migrated;
+
+  reconcileLegacyReservations(state.ledgers, legacyReservations);
+  return { ...state, reservations };
+}
+
+function reconcileLegacyReservations(
+  ledgers: Record<string, ProfileLedger>,
+  reservations: PersistedReservation[],
+): void {
+  for (const reservation of reservations) {
+    const ledger = ledgers[reservation.profile];
+    if (!ledger) continue;
+
+    ledger.active = Math.max(0, ledger.active - 1);
+    const reservedTokens = reservation.reservedTokens ?? 0;
+    ledger.usage.inputTokens += reservedTokens;
+    ledger.usage.totalTokens += reservedTokens;
+    ledger.reservedTokens = Math.max(
+      0,
+      ledger.reservedTokens - reservedTokens,
+    );
+    ledger.rearmRequired = true;
+  }
 }
 
 async function withProfileLock<T>(store: CodexProfileStore, body: () => Promise<T>): Promise<T> {
-  await using _lock = await acquireFileLock(store.lockDir);
+  await using _lock = await acquireFileLock(store.lockDir, { recovery: "strict" });
   return body();
 }
 
@@ -230,14 +255,32 @@ async function atomicOwnerWrite(path: string, value: unknown): Promise<void> {
   await rename(temporary, path);
 }
 
-async function readJson<T>(path: string, fallback: T): Promise<T> {
+async function readValidatedJson<T>(path: string, schema: z.ZodType<T>, fallback: T): Promise<T> {
   try {
-    return JSON.parse(await readFile(path, "utf8")) as T;
+    const details = await stat(path);
+    if ((details.mode & 0o077) !== 0) throw new ProfileStoreError("unsafe-permissions", `unsafe permissions: ${path}`);
+    const input = JSON.parse(await readFile(path, "utf8")) as unknown;
+    const version = (input as { version?: unknown })?.version;
+    if (typeof version === "number" && version !== (fallback as { version: number }).version) {
+      throw new ProfileStoreError("unsupported-version", `unsupported profile file version: ${version}`);
+    }
+    const parsed = schema.safeParse(input);
+    if (!parsed.success) throw new ProfileStoreError("corrupt", `invalid profile file: ${path}`);
+    return parsed.data;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return fallback;
+    if (error instanceof SyntaxError) throw new ProfileStoreError("corrupt", `invalid JSON: ${path}`, { cause: error });
     throw error;
   }
 }
+
+const UsageSchema = z.object({ inputTokens: z.number().nonnegative(), cachedInputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), reasoningTokens: z.number().nonnegative(), totalTokens: z.number().nonnegative() }).strict();
+const LedgerSchema = z.object({ starts: z.number().int().nonnegative(), active: z.number().int().nonnegative(), reservedTokens: z.number().nonnegative(), runtimeMs: z.number().nonnegative(), usage: UsageSchema, rearmRequired: z.boolean() }).strict();
+const ReservationFileSchema = z.object({ id: z.string().min(1), profile: z.string().min(1), owner: ProcessOwnerSchema.optional(), startedAt: z.string().datetime(), startingPercentage: z.number().optional(), percentageQuantum: z.number().optional(), observedAt: z.string().optional(), observedRemainingPercentage: z.number().optional(), reservedHeadroomPercentage: z.number().optional(), reservedTokens: z.number().optional(), unresolved: z.literal(true) }).strict();
+const CircuitSchema = z.object({ reason: z.enum(["capacity", "authentication", "transient"]), openedAt: z.string(), fingerprint: z.string().optional(), failures: z.number().int().optional() }).strict();
+const ProfileSchema = z.object({ name: z.string().min(1), home: z.string().min(1), enabled: z.boolean(), profileClass: z.enum(["subscription", "metered-api"]), concurrencyLimit: z.number().int().positive().optional(), percentageQuantum: z.number().positive().optional(), reserveFloorPercentage: z.number().min(0).max(100).optional(), activeCapacityPollIntervalMs: z.number().positive().optional(), requireRearmOnCapacityExhaustion: z.boolean().optional(), meteredMode: z.enum(["manual", "overflow", "automatic"]).optional(), budget: z.object({ tokenLimit: z.number().positive().optional(), startLimit: z.number().int().positive().optional(), concurrencyLimit: z.number().int().positive().optional(), runtimeLimitMs: z.number().positive().optional(), requireRearm: z.boolean().optional(), reservationTokens: z.number().positive().optional() }).strict().optional() }).strict();
+const RegistryFileSchema = z.object({ version: z.literal(1), profiles: z.array(ProfileSchema) }).strict();
+const PersistedStateFileSchema: z.ZodType<{ version: 2; state: PersistedRoutingState }> = z.object({ version: z.literal(2), state: z.object({ roundRobin: z.number().int().nonnegative(), next: z.object({ profile: z.string(), remaining: z.number().int().positive() }).strict().optional(), reservations: z.record(z.string(), ReservationFileSchema), ledgers: z.record(z.string(), LedgerSchema), circuits: z.record(z.string(), CircuitSchema), unavailableProfiles: z.record(z.string(), z.string()) }).strict() }).strict();
 
 function validateProfiles(profiles: CodexProfile[]): void {
   const names = new Set<string>();

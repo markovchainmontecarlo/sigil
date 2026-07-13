@@ -29,6 +29,7 @@ run_install
 
 test -x "$home_dir/.local/bin/sigil"
 test -f "$home_dir/.sigil/lib/src/cli.ts"
+test -f "$home_dir/.sigil/lib/src/dashboard/public/index.html"
 test -f "$home_dir/.sigil/lib/bun.lock"
 test -f "$home_dir/.sigil/skills/sigil/SKILL.md"
 test -f "$home_dir/.sigil/skills/sigil-authoring/SKILL.md"

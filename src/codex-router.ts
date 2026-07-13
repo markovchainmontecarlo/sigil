@@ -1,6 +1,7 @@
 import {
   newReservation,
   profileLedger,
+  readCodexRoutingState,
   readCodexProfiles,
   updateCodexRoutingState,
   type CodexCircuitReason,
@@ -11,6 +12,12 @@ import {
   type ProfileReservation,
 } from "./codex-profiles.js";
 import type { ProviderFailure } from "./provider-failure.js";
+import { processIdentityStatus, readProcessIdentity, type ProcessIdentity } from "./process-identity.js";
+import {
+  qualifiedProfileIdentity,
+  type QualifiedProfileIdentity,
+  type ReservationLiveness,
+} from "./provider-profiles.js";
 
 export const CAPACITY_FRESHNESS_MS = 30_000;
 export const TRANSIENT_CIRCUIT_THRESHOLD = 3;
@@ -38,11 +45,20 @@ type LegacySubscriptionCapacity = {
 export type CapacityReader = (
   profile: CodexProfile,
 ) => Promise<SubscriptionCapacity | LegacySubscriptionCapacity>;
-export type CodexAssignment = { profile: CodexProfile; reservation: ProfileReservation };
+export type CodexAssignment = { qualifiedIdentity: `codex:${string}`; profile: CodexProfile; reservation: ProfileReservation };
 export type CodexAdmission =
   | { status: "assigned"; assignment: CodexAssignment; telemetry: CodexCapacityTelemetry[] }
   | { status: "capacity-blocked"; reasons: string[]; telemetry: CodexCapacityTelemetry[] }
   | { status: "configuration-error"; errors: string[]; telemetry: CodexCapacityTelemetry[] };
+
+export type ReservationReconciliationOutcome = {
+  profile: QualifiedProfileIdentity;
+  outcome: "settled" | "retained-live" | "retained-unverifiable";
+};
+export type ReservationReconciliation = {
+  outcomes: ReservationReconciliationOutcome[];
+  blocked: boolean;
+};
 
 export async function reserveCodexProfile(
   readCapacity: CapacityReader,
@@ -55,7 +71,8 @@ export async function reserveCodexProfile(
   }
 
   const capacities = await readCapacities(profiles, readCapacity);
-  return updateCodexRoutingState((state) => admitProfile(profiles, capacities, state), store);
+  const owner = await readProcessIdentity();
+  return updateCodexRoutingState((state) => admitProfile(profiles, capacities, state, owner), store);
 }
 
 export async function releaseCodexProfile(
@@ -96,29 +113,56 @@ export async function recordActiveCapacityExhaustion(
 
 export async function resolveUnfinishedReservations(
   store?: CodexProfileStore,
-): Promise<void> {
+): Promise<ReservationReconciliation> {
   const profiles = await readCodexProfiles(store);
+  const liveness = new Map<string, ReservationLiveness>();
+  const state = await readCodexRoutingState(store);
+  for (const reservation of Object.values(state.reservations)) {
+    try {
+      const status = await processIdentityStatus(reservation.owner);
+      liveness.set(reservation.id, status === "match" ? "live" : "dead");
+    } catch {
+      liveness.set(reservation.id, "unverifiable");
+    }
+  }
   await updateCodexRoutingState((state) => {
     for (const reservation of Object.values(state.reservations)) {
-      settleReservation(state, profiles, reservation, undefined);
+      const status = liveness.get(reservation.id);
+      if (status === "dead") settleReservation(state, profiles, reservation, undefined);
+      if (status === "unverifiable") state.unavailableProfiles[reservation.profile] = "reservation owner is unverifiable";
     }
-    state.unavailableProfiles = {};
   }, store);
+  const outcomes = Object.values(state.reservations).map((reservation) => {
+    const status = liveness.get(reservation.id);
+    return {
+      profile: qualifiedProfileIdentity("codex", reservation.profile),
+      outcome: status === "dead"
+        ? "settled" as const
+        : status === "live"
+          ? "retained-live" as const
+          : "retained-unverifiable" as const,
+    };
+  });
+  return {
+    outcomes,
+    blocked: outcomes.some((outcome) => outcome.outcome !== "settled"),
+  };
 }
 
 function admitProfile(
   profiles: CodexProfile[],
   capacities: Map<string, SubscriptionCapacity>,
   state: CodexRoutingState,
+  owner: ProcessIdentity,
 ): CodexAdmission {
   const profile = selectProfile(profiles, capacities, state);
   if (!profile) return blockedAdmission(profiles, capacities, state);
 
-  const reservation = reserveProfile(profile, capacities.get(profile.name), state);
+  const reservation = reserveProfile(profile, capacities.get(profile.name), state, owner);
   consumeManualAssignment(state, profile.name);
   return {
     status: "assigned",
-    assignment: { profile, reservation },
+    assignment: { qualifiedIdentity: qualifiedProfileIdentity("codex", profile.name), profile, reservation },
     telemetry: capacityTelemetry(profiles, capacities, profile.name),
   };
 }
@@ -191,12 +235,14 @@ function reserveProfile(
   profile: CodexProfile,
   capacity: SubscriptionCapacity | undefined,
   state: CodexRoutingState,
+  owner: ProcessIdentity,
 ): ProfileReservation {
   const available = capacity?.kind === "available" ? capacity : undefined;
   const reservedTokens = profile.profileClass === "metered-api"
     ? reservationTokenAmount(profile, state)
     : undefined;
   const reservation = newReservation(profile.name, {
+    owner,
     startingPercentage: available?.remainingPercentage,
     percentageQuantum: profile.percentageQuantum,
     observedAt: available?.observedAt,

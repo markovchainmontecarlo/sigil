@@ -4,6 +4,9 @@ import type { z } from "zod";
 
 import { agent as createAgent, isSchemaPromptError, type AgentOptions, type AgentPromptOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agents.js";
 import { loadConfig, type AgentBinding, type ContextEntry } from "./config.js";
+import { resolveConfig } from "./config.js";
+import { projectEffectiveConfig } from "./effective-config.js";
+import { terminalObservationSummary, type ObservationDetails } from "./provider-telemetry.js";
 import { emit as gateEmit, evalGate, type EmitOptions, type EmitResult, type EvalGateResult } from "./gate.js";
 import { createArtifactRoot, ensureRunStorageIgnored } from "./paths.js";
 import { OwnedProcess, type ProcessLifecycle } from "./owned-process.js";
@@ -71,7 +74,9 @@ export type CreateContextOptions = {
   onAgentRuntime?: (runtime: AgentRuntimeMetadata) => void | Promise<void>;
   signal?: AbortSignal;
   processLifecycle?: ProcessLifecycle;
+  rootState?: ContextRootState;
 };
+type ContextRootState = { artifactRoot: string; initialization?: Promise<void> };
 
 export interface SigilContext {
   readonly repo: string;
@@ -86,7 +91,8 @@ export interface SigilContext {
   loadConfiguredContext(entries?: ContextEntry[]): Promise<LoadedContext>;
   renderContextBlock(entries?: ContextEntry[]): Promise<string>;
   issue(detail: string): void;
-  observe(stage: string, details?: Record<string, string>): Promise<void>;
+  initialize(): Promise<void>;
+  observe(stage: string, details?: ObservationDetails): Promise<void>;
   fork(options: { artifactRoot: string; operationPath: string }): SigilContext;
   readonly issues: readonly string[];
   artifacts: ArtifactHelpers;
@@ -127,16 +133,63 @@ export function createContext(
   const eventsFile = artifacts.path("events.jsonl");
   const statusFile = artifacts.path("status.json");
   let statusSequence = 0;
+  const rootState = options.rootState ?? { artifactRoot: dir };
 
   const ctx: SigilContext = {
     repo,
+    initialize() {
+      rootState.initialization ??= (async () => {
+        const snapshot = (() => {
+          try {
+            return projectEffectiveConfig(resolveConfig(repo));
+          } catch {
+            return { version: 1, kind: "effective-config", available: false as const };
+          }
+        })();
+        await mkdir(rootState.artifactRoot, { recursive: true });
+        await writeFile(join(rootState.artifactRoot, "effective-config.json"), `${JSON.stringify(snapshot, null, 2)}\n`, { flag: "wx" })
+          .catch((error: NodeJS.ErrnoException) => { if (error.code !== "EEXIST") throw error; });
+      })();
+      return rootState.initialization;
+    },
     agent(binding, agentOptions = {}) {
+      let assigned = false;
+      const configured = typeof binding === "string" ? loadConfig(repo).agents[binding] : binding;
+      const runtimeUpdate = async (runtime: AgentRuntimeMetadata) => {
+        await options.onAgentRuntime?.(runtime);
+        if (runtime.active && !assigned) {
+          assigned = true;
+          await ctx.observe("provider-profile-assigned", {
+            provider: runtime.provider ?? configured.provider,
+            profile: `${runtime.provider ?? configured.provider}:${runtime.profile ?? "unknown"}`,
+            accessClass: runtime.accessClass ?? "subscription",
+            transport: runtime.transport ?? "unknown",
+            model: configured.model,
+            effort: configured.effort ?? "medium",
+            routingReason: runtime.routingReason ?? "provider-selected",
+            effectiveExecution: configured.execution ?? {},
+          });
+        }
+        if (runtime.usage) await ctx.observe("provider-usage-updated", { usage: runtime.usage as unknown as ObservationDetails });
+        if (!runtime.active && assigned) {
+          assigned = false;
+          await ctx.observe("provider-profile-released", {
+            provider: runtime.provider ?? configured.provider,
+            profile: `${runtime.provider ?? configured.provider}:${runtime.profile ?? "unknown"}`,
+          });
+        }
+      };
       return wrapAgentForContext(agentFactory(binding, {
         cwd: repo,
         ...options.agentOptions,
         ...agentOptions,
         processLifecycle: options.processLifecycle,
-        onRuntimeUpdate: options.onAgentRuntime,
+        onRuntimeUpdate: runtimeUpdate,
+        onProviderEvent: async (event) => {
+          await options.agentOptions?.onProviderEvent?.(event);
+          await agentOptions.onProviderEvent?.(event);
+          await ctx.observe(event.type, event.details);
+        },
         onCapacityTelemetry: async (telemetry) => {
           await options.agentOptions?.onCapacityTelemetry?.(telemetry);
           await agentOptions.onCapacityTelemetry?.(telemetry);
@@ -212,17 +265,23 @@ export function createContext(
       recordIssue(detail);
     },
     async observe(stage, details = {}) {
-      const event = { at: new Date().toISOString(), stage, ...details };
+      const event = { version: 1 as const, at: new Date().toISOString(), stage, details };
       await mkdir(dirname(eventsFile), { recursive: true });
       await appendFile(eventsFile, `${JSON.stringify(event)}\n`);
       const temporary = `${statusFile}.${process.pid}.${statusSequence++}.tmp`;
       await writeFile(temporary, `${JSON.stringify(event, null, 2)}\n`);
       await rename(temporary, statusFile);
-      const suffix = Object.values(details).length
-        ? ` ${Object.values(details).join(" ")}`
+      const summary = terminalObservationSummary(details);
+      const suffix = summary
+        ? ` ${summary}`
         : "";
       process.stderr.write(`[sigil] ${stage}${suffix}\n`);
-      await options.onObserve?.(stage, details);
+      await options.onObserve?.(stage, Object.fromEntries(
+        Object.entries(details).flatMap(([key, value]) =>
+          typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+            ? [[key, String(value)]]
+            : []),
+      ));
     },
     fork(child) {
       return createContext(repo, {
@@ -236,6 +295,7 @@ export function createContext(
         onAgentRuntime: options.onAgentRuntime,
         signal: options.signal,
         processLifecycle: options.processLifecycle,
+        rootState,
       });
     },
     get issues() {
@@ -418,7 +478,11 @@ function writesPrompt(text: string, names: string[], files: string[]): string {
 
 export function sigil<I, O>(name: string, body: (ctx: SigilContext, input: I & { repo: string }) => Promise<O>) {
   void name;
-  return async (input: I & { repo: string }, ctxOverride?: SigilContext): Promise<O> => body(ctxOverride ?? createContext(input.repo), input);
+  return async (input: I & { repo: string }, ctxOverride?: SigilContext): Promise<O> => {
+    const ctx = ctxOverride ?? createContext(input.repo);
+    await ctx.initialize();
+    return body(ctx, input);
+  };
 }
 
 export async function loadConfiguredContext(repo: string, entries: ContextEntry[] = []): Promise<LoadedContext> {

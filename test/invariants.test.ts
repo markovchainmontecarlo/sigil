@@ -74,16 +74,16 @@ const complexWorkflowDiagrams: DiagramExpectation[] = [
 
 const rules: Rule[] = [
   { name: "do not clobber artifacts with agent turn text", pattern: /\bwriteFileSync\s*\([^,\n]+,\s*[^)\n]*\.text\b/ },
-  { name: "provider literals are only allowed in agents.ts and config.ts", pattern: /["'](?:claude|codex|copilot)["']/, allowed: new Set(["src/agents.ts", "src/config.ts"]) },
+  { name: "provider literals are only allowed in provider-owned modules", pattern: /["'](?:claude|codex|copilot)["']/, allowed: new Set(["src/agents.ts", "src/claude-pty.ts", "src/claude-profiles.ts", "src/claude-router.ts", "src/codex-router.ts", "src/config.ts", "src/provider-capabilities.ts", "src/provider-profiles.ts", "src/provider-profile-service.ts"]) },
   { name: "z.any is forbidden", pattern: /\bz\.any\s*\(/ },
   { name: "old orchestration identifiers are forbidden", pattern: /\b(?:setState|residual|fanout|spine|lane|slot)\b/ },
-  { name: "Mastra imports are only allowed at integration seams", pattern: /^\s*import\b.*["']@mastra\//, allowed: new Set(["src/agents.ts", "src/mastra.ts"]) },
+  { name: "Mastra imports are only allowed at integration seams", pattern: /^\s*import\b.*["']@mastra\//, allowed: new Set(["src/agents.ts", "src/claude-sdk.ts", "src/mastra.ts"]) },
   { name: "process.chdir is forbidden", pattern: /\bprocess\.chdir\s*\(/ },
 ];
 
 const seededViolations: Array<[string, SourceFile]> = [
   ["do not clobber artifacts with agent turn text", { path: "src/workflows/old.ts", text: "writeFileSync(file, turn.text);" }],
-  ["provider literals are only allowed in agents.ts and config.ts", { path: "src/workflows/software-change/planning/index.ts", text: "const provider = 'codex';" }],
+  ["provider literals are only allowed in provider-owned modules", { path: "src/workflows/software-change/planning/index.ts", text: "const provider = 'claude';" }],
   ["z.any is forbidden", { path: "src/contracts/example.ts", text: "const schema = z.any();" }],
   ["old orchestration identifiers are forbidden", { path: "src/workflows/software-change/implementation/index.ts", text: "const residual = [];" }],
   ["Mastra imports are only allowed at integration seams", { path: "src/gate.ts", text: "import { createStep } from '@mastra/core/workflows';" }],
@@ -209,6 +209,6 @@ describe("src structural invariants", () => {
 
   test("provider literal in a workflow reports the offending file and line", () => {
     const violations = findViolations([{ path: "src/workflows/example.ts", text: "ok();\nconst provider = \"claude\";" }]);
-    expect(violations).toContain('src/workflows/example.ts:2: provider literals are only allowed in agents.ts and config.ts: const provider = "claude";');
+    expect(violations).toContain('src/workflows/example.ts:2: provider literals are only allowed in provider-owned modules: const provider = "claude";');
   });
 });

@@ -81,4 +81,16 @@ describe("yaml validate", () => {
     });
     expect(result.errors.join("\n")).toContain("unknown output reference");
   });
+
+  test.each([
+    [{ provider: "claude-pty", model: "model" }, "local profile selection"],
+    [{ provider: "codex", model: "model", effort: "high" }, '"low"|"medium"'],
+    [{ provider: "claude", model: "model", execution: { sandbox: "workspace-write" } }, "does not support"],
+  ])("rejects invalid inline agent bindings", (binding, message) => {
+    const result = validateYamlWorkflow({
+      name: "bad-binding",
+      stages: [{ id: "stage", jobs: [{ id: "job", agent: binding, steps: [{ id: "prompt", prompt: "hi" }] }] }],
+    });
+    expect(result.errors.join("\n")).toContain(message);
+  });
 });

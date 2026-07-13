@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
@@ -61,7 +61,7 @@ describe("Codex routing circuits", () => {
     expect((await readCodexRoutingState(store)).circuits.subscription).toBeUndefined();
   });
 
-  test("legacy active reservations quarantine routing until reconciliation", async () => {
+  test("unsupported state versions fail closed", async () => {
     const store = fixture();
     await writeCodexProfiles([profile], store);
     await Bun.write(store.stateFile, JSON.stringify({
@@ -83,13 +83,8 @@ describe("Codex routing circuits", () => {
         },
       },
     }));
+    chmodSync(store.stateFile, 0o600);
 
-    const blocked = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 90 }), store);
-    expect(blocked.status).toBe("capacity-blocked");
-    expect((await readCodexRoutingState(store)).ledgers.subscription?.usage.totalTokens).toBe(5);
-
-    await resolveUnfinishedReservations(store);
-    const available = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 90 }), store);
-    expect(available.status).toBe("assigned");
+    await expect(resolveUnfinishedReservations(store)).rejects.toMatchObject({ code: "unsupported-version" });
   });
 });

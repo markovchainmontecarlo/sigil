@@ -3,22 +3,22 @@
     "sol-low": {
       "provider": "codex",
       "model": "gpt-5.6-sol",
-      "effort": "low"
+      "effort": "medium"
     },
-    "luna-low": {
+    "luna-medium": {
       "provider": "codex",
       "model": "gpt-5.6-luna",
-      "effort": "low"
+      "effort": "medium"
     },
     "luna-high": {
       "provider": "codex",
       "model": "gpt-5.6-luna",
-      "effort": "high"
+      "effort": "medium"
     }
   },
   "evals": {
     "build": "bun run typecheck",
-    "test": "bun test"
+    "test": "bun test --max-concurrency 1"
   },
   "context": [
     {
@@ -34,7 +34,7 @@
     "planners": [
       "sol-low",
       "luna-high",
-      "luna-low"
+      "luna-medium"
     ],
     "synthesizer": "sol-low"
   },
@@ -50,7 +50,7 @@
     "reviewers": [
       "sol-low",
       "luna-high",
-      "luna-low"
+      "luna-medium"
     ],
     "synthesizer": "sol-low",
     "followUpReviews": 0

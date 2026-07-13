@@ -5,12 +5,16 @@ import { runSigilCommand, runWorkflowCommand } from "./run.js";
 import { setupCommand } from "./setup.js";
 import { implementCommand, planCommand, reviewCommand, softwareChangeCommand } from "./software-change.js";
 import { validateCommand, validateSigilCommand, validateWorkflowCommand } from "./validation.js";
-import { codexProfileCommand } from "./codex-profile.js";
+import { dashboardCommand } from "./dashboard.js";
+import { profileCommand } from "./profile.js";
+import { configCommand } from "./config.js";
 
 export type CommandHandler = (args: string[]) => Promise<number>;
 
 export const commandHandlers: Record<CommandName, CommandHandler> = {
-  "codex-profile": codexProfileCommand,
+  config: configCommand,
+  dashboard: dashboardCommand,
+  profile: profileCommand,
   migrate: migrateCommand,
   refactor: refactorCommand,
   probe: probeCommand,

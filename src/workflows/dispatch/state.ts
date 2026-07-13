@@ -2,7 +2,17 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { acquireFileLock } from "../../file-lock.js";
-import type { AgentRuntimeMetadata } from "../../agents.js";
+import { z } from "zod";
+
+const AgentRecoveryRuntimeSchema = z.object({
+  version: z.literal(1),
+  binding: z.string().optional(),
+  providerSessionId: z.string().optional(),
+  childProcessId: z.number().int().positive().optional(),
+  childStartIdentity: z.string().optional(),
+  active: z.boolean(),
+}).strict();
+export type AgentRecoveryRuntime = z.infer<typeof AgentRecoveryRuntimeSchema>;
 
 export type DispatchOperationType =
   | "planning"
@@ -91,15 +101,15 @@ export type DispatchIdentity = Pick<
 
 export async function writeDispatchRuntime(
   path: string,
-  runtime: AgentRuntimeMetadata,
+  runtime: AgentRecoveryRuntime,
 ): Promise<void> {
   await using _lock = await acquireFileLock(`${path}.lock`);
   await writeAtomic(path, runtime);
 }
 
-export async function readDispatchRuntime(path: string): Promise<AgentRuntimeMetadata | undefined> {
+export async function readDispatchRuntime(path: string): Promise<AgentRecoveryRuntime | undefined> {
   try {
-    return JSON.parse(await readFile(path, "utf8")) as AgentRuntimeMetadata;
+    return AgentRecoveryRuntimeSchema.parse(JSON.parse(await readFile(path, "utf8")));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
     throw error;

@@ -486,6 +486,53 @@ describe("dispatch", () => {
     });
   });
 
+  test("integration resume preserves the active item branch before implementation recovery", async () => {
+    const repo = tempRepo();
+    const context = createContext(repo, { artifactRoot: join(repo, ".sigil", "runs", "integration-resume") });
+    const input = {
+      repo,
+      backlogFile: backlogFile(repo, backlog()),
+      deliveryPolicy: "integrationBranch" as const,
+      integrationBranch: "feature/site-studio",
+    };
+    let prepareCalls = 0;
+
+    const interrupted = await dispatchWithOptions(input, {
+      prepareIntegrationBranch: async () => { prepareCalls++; },
+      softwareChange: async (changeInput) => changeResult(changeInput, {
+        valid: false,
+        failedTasks: ["remaining"],
+        issues: ["implementation stopped after provider interruption; resume with the implementation checkpoint"],
+      }),
+      wait: async () => {},
+    }, context);
+    expect(interrupted.stoppedAt).toBe("base");
+
+    const checkpointFile = context.artifacts.path("dispatch-state.json");
+    const checkpoint = JSON.parse(readFileSync(checkpointFile, "utf8"));
+    checkpoint.operation.status = "recovering";
+    writeFileSync(checkpointFile, JSON.stringify(checkpoint));
+
+    await dispatchWithOptions(input, {
+      prepareIntegrationBranch: async () => { prepareCalls++; },
+      softwareChange: makeSoftwareChangeStub(),
+      recoverChange: async (_ctx, recoveryInput) => changeResult({
+        repo,
+        intent: recoveryInput.item.brief,
+        branch: recoveryInput.branch,
+        baseBranch: recoveryInput.baseBranch,
+        taskFile: recoveryInput.taskFile,
+      }),
+      publish: makePublishStub(),
+      merge: makeMergeStub(),
+      createPullRequest: makeCreatePrStub(),
+      verifyBase: makeVerifyBaseStub(),
+      wait: async () => {},
+    }, context);
+
+    expect(prepareCalls).toBe(1);
+  });
+
   test("integration branch reports a failed final PR without merging it", async () => {
     const repo = tempRepo();
     const integrationBranch = "feature/site-studio";

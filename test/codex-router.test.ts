@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
@@ -137,7 +137,7 @@ describe("Codex profile routing", () => {
     expect([assignment(first).profile.name, assignment(second).profile.name, assignment(automatic).profile.name]).toEqual(["api", "api", "subscription"]);
   });
 
-  test("reserves remaining metered tokens and conservatively charges unresolved work", async () => {
+  test("keeps a live metered reservation active during reconciliation", async () => {
     const files = store();
     await writeCodexProfiles([{
       ...profile("api", "metered-api"),
@@ -152,8 +152,8 @@ describe("Codex profile routing", () => {
 
     expect(assignment(first).reservation.reservedTokens).toBe(100);
     expect(blocked.status).toBe("capacity-blocked");
-    expect(state.ledgers.api?.usage.totalTokens).toBe(100);
-    expect(state.ledgers.api?.rearmRequired).toBe(true);
+    expect(state.ledgers.api?.usage.totalTokens).toBe(0);
+    expect(state.ledgers.api?.active).toBe(1);
   });
 
   test("reserves subscription headroom without crossing the reserve floor", async () => {
@@ -238,14 +238,64 @@ describe("Codex profile routing", () => {
     expect((await readCodexRoutingState(files)).next?.remaining).toBe(1);
   });
 
-  test("invalid configuration is distinct from capacity blocking", async () => {
+  test("invalid persisted configuration fails closed before routing", async () => {
     const files = store();
     const invalid = profile("invalid");
     invalid.home = "";
     await Bun.write(files.registryFile, JSON.stringify({ version: 1, profiles: [invalid] }));
+    chmodSync(files.registryFile, 0o600);
 
-    const result = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 90 }), files);
+    await expect(reserveCodexProfile(
+      async () => ({ available: true, remainingPercentage: 90 }),
+      files,
+    )).rejects.toMatchObject({ code: "corrupt" });
+  });
 
-    expect(result.status).toBe("configuration-error");
+  test("migrates ownerless reservations written by the previous routing state schema", async () => {
+    const files = store();
+    const startedAt = new Date().toISOString();
+    mkdirSync(dirname(files.stateFile), { recursive: true });
+    writeFileSync(files.stateFile, JSON.stringify({
+      version: 2,
+      state: {
+        roundRobin: 1,
+        reservations: {
+          legacy: {
+            id: "legacy",
+            profile: "pro",
+            startedAt,
+            reservedTokens: 25,
+            unresolved: true,
+          },
+        },
+        ledgers: {
+          pro: {
+            starts: 1,
+            active: 1,
+            reservedTokens: 25,
+            runtimeMs: 0,
+            usage: {
+              inputTokens: 0,
+              cachedInputTokens: 0,
+              outputTokens: 0,
+              reasoningTokens: 0,
+              totalTokens: 0,
+            },
+            rearmRequired: false,
+          },
+        },
+        circuits: {},
+        unavailableProfiles: {},
+      },
+    }));
+    chmodSync(files.stateFile, 0o600);
+
+    const state = await readCodexRoutingState(files);
+
+    expect(state.reservations).toEqual({});
+    expect(state.ledgers.pro?.active).toBe(0);
+    expect(state.ledgers.pro?.reservedTokens).toBe(0);
+    expect(state.ledgers.pro?.usage.totalTokens).toBe(25);
+    expect(state.ledgers.pro?.rearmRequired).toBe(true);
   });
 });

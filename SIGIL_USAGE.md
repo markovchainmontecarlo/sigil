@@ -45,7 +45,7 @@ gh api repos/markovchainmontecarlo/sigil/contents/scripts/install.sh --jq .conte
 
 The installer writes the `sigil` launcher, installs the library and production dependencies, refreshes bundled skills, and installs the man page when present. Upgrade by re-running the installer.
 
-Sigil uses local or subscription authentication for Codex and Claude. Do not use provider API keys as the ordinary setup path.
+Sigil uses local or subscription authentication for Codex and Claude. The public `claude` provider can use the local Claude CLI PTY or the Claude Agent SDK through its selected local access profile. Run Claude and complete its login flow before using the CLI transport. Do not expose credential values in Sigil configuration or diagnostics.
 
 Initialize a target repository:
 
@@ -63,8 +63,8 @@ A representative config shape is:
 {
   "agents": {
     "explorer": { "provider": "codex", "model": "<model-name>", "effort": "medium" },
-    "implementer": { "provider": "codex", "model": "<model-name>", "effort": "medium" },
-    "reviewer": { "provider": "codex", "model": "<model-name>", "effort": "medium" }
+    "implementer": { "provider": "claude", "model": "<claude-model>", "effort": "medium" },
+    "reviewer": { "provider": "claude", "model": "<claude-sdk-model>", "effort": "medium" }
   },
   "evals": {
     "build": "<non-interactive build command>",
@@ -97,7 +97,7 @@ A representative config shape is:
 
 Config sections:
 
-- `agents`: named provider and model bindings. Supported providers are `codex`, `claude`, and `copilot`.
+- `agents`: named provider and model bindings. Supported providers are `codex`, `claude`, and `copilot`. Claude transport selection is local rather than a separate project provider. When `effort` is omitted, the binding defaults to `medium`.
 - `evals`: named shell commands. Commands run under the target repo and must be non-interactive. Missing eval names are skipped.
 - `workspace.bootstrap`: optional deterministic preparation command run before implementation or refactor baseline gates. It must leave tracked files unchanged.
 - `context`: repo-relative files loaded at run start. Paths cannot escape the repo.
@@ -113,11 +113,17 @@ Use `discover-env` when provider availability or authentication is uncertain:
 sigil discover-env --repo /path/to/repo
 ```
 
+The report distinguishes configured bindings, Claude SDK credential presence, Claude PTY executable availability, and Claude PTY authentication. Executable availability means only that Sigil can find and execute Claude; it does not prove that Claude is logged in. Claude owns and stores its local subscription authentication, and Sigil reports that state as not verified rather than inspecting it.
+
+For the Claude CLI transport, executable selection is deterministic: `SIGIL_CLAUDE_PTY_BIN` takes precedence, then `CLAUDE_BIN`, then the first executable named `claude` on `PATH`. The child process receives a filtered environment that removes inherited agent-session markers and provider credential variables. This keeps the Claude CLI on its own local login and prevents a parent agent shell from supplying credentials or session identity to the child.
+
 When running Sigil from inside another agent shell, clear the nested Claude session marker:
 
 ```sh
 env -u CLAUDECODE sigil <command> ...
 ```
+
+For the complete provider boundary, see the [configuration reference](./docs/reference/configuration.md), [provider profile reference](./docs/reference/provider-profiles.md), [profile setup how-to](./docs/how-to/configure-provider-profiles.md), and [provider routing explanation](./docs/explanation/provider-routing.md).
 
 ## CLI reference
 
@@ -125,6 +131,7 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 
 | Command | What it does | Exit code `0` means |
 | --- | --- | --- |
+| `sigil dashboard [--host 127.0.0.1] [--port <number>] [--root <dir>]...` | Serve a read-only live dashboard for discoverable local runs. | The dashboard shut down normally. |
 | `sigil setup [--dir <repo>] [--force]` | Write the default repo config. | The config was written. |
 | `sigil discover-env [--repo <dir>]` | Print a read-only environment report. | The report was printed. |
 | `sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir>` | Apply a dependency-ordered repository migration with commit checkpoints. | Every item, final review, build, and test passed. |
@@ -138,7 +145,7 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 | `sigil breakdown --repo <dir> --mission <text> [--out <file>]` | Turn a mission into a backlog. | The produced backlog is valid. |
 | `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch --run-dir <dir>` | Start durable backlog delivery through main or an accumulating integration branch. | Dispatch finished without stopping. |
 | `sigil dispatch --resume <dir>` | Resume the recorded operation after repository and process ownership checks. | Dispatch finished without stopping. |
-| `sigil codex-profile <action>` | Manage local Codex profiles, spawn-time routing, reservations, and metered admission limits. | Profile operation completed. |
+| `sigil profile <action>` | Manage local Codex and Claude profiles, inspect stored policy, and observe current eligibility. | Profile operation completed. |
 | `sigil validate-workflow [--repo <dir>] <workflow-file>` | Validate a static YAML workflow. | The workflow error array is empty. |
 | `sigil run-workflow --repo <dir> --file <workflow-file>` | Run a static YAML workflow inline. | The workflow completed without recorded issues. |
 | `sigil validate-sigil <workflow.ts>` | Validate a TypeScript sigil without running it. | The workflow imports and has a callable export. |
@@ -155,7 +162,13 @@ env -u CLAUDECODE sigil software-change \
   --out /path/to/repo/.sigil/runs/task-graph.json
 ```
 
-Use `--brief <file>` when planning needs longer context. Use `--instructions <file>` for implementation-only guidance. Use `--task-file <file>` to skip planning and run the same unified workflow from an existing typed task graph.
+Use `--brief <file>` when planning needs longer context. When a Markdown plan
+is already the accepted description of the change, pass the complete plan as
+the brief even if the immediate run request states only a short intent. The
+intent names the change; it does not replace accepted planning context. Use
+`--instructions <file>` for implementation-only guidance. Use
+`--task-file <file>` to skip planning and run the same unified workflow from an
+existing typed task graph.
 
 ### Single changes, detached execution, and dispatch
 
@@ -217,9 +230,19 @@ env -u CLAUDECODE sigil software-change --repo /path/to/repo --intent "<same int
 
 For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. Start dispatch with a durable `--run-dir`, then use `--resume` after interruption. Resume validates the repository, backlog, policy, delivery base, active branch, and process ownership before allowing mutation. A live dispatcher blocks resume. For an abandoned child, resume terminates the recorded process group, escalates from `SIGTERM` to `SIGKILL` when required, confirms that its descendants are gone, and then removes the lease. Completed items are not replayed, and expected in-progress repair edits are preserved rather than reset. Use `integrationBranch` to accumulate item pull requests away from main. The default final action opens one final pull request. `--final-action mergeWhenGreen` also merges that pull request, and `--production-gate <name>` verifies the configured deployment gate afterward.
 
-Codex profiles are user-local routing configuration. Sigil asks Codex for account class and subscription capacity without reading authentication contents. At new-agent boundaries, subscription admission subtracts active reserved headroom and the new assignment quantum from a fresh remaining-capacity observation, then refuses assignments that would cross `--reserve-floor`. Active subscription assignments retain their original profile and poll capacity on the `--capacity-poll-ms` cadence. Reaching the floor records capacity exhaustion, opens the capacity circuit, requests cancellation once, and releases the reservation during cleanup before failover. A fresh above-floor observation permits automatic re-entry unless `--require-rearm` requires `codex-profile rearm <name>`. `codex-profile next` can route a bounded number of new agents to a selected subscription or manual metered profile, but it does not bypass capacity policy. Metered profiles support token, start, concurrency, runtime, per-reservation, and explicit-rearm admission limits. Status and capacity telemetry omit profile paths, credentials, and account identity.
+Provider profiles are user-local routing configuration. Use `profile list` for safe registry summaries, `profile inspect <selector>` for one stored policy and state record, and `profile status` for current eligibility and provider evidence. Selectors are provider-qualified, such as `codex:pro` or `claude:pro`; a bare name works only when globally unique. Human output is the default and `--json` returns distinct versioned records. Neither form exposes provider-local paths, credential-source names or values, environment data, or account identity.
+
+Codex subscription admission subtracts active reserved headroom and the new assignment quantum from observed capacity, then refuses assignments that would cross `--reserve-floor`. `profile next` records only a bounded one-shot selection and cannot bypass disabled state, circuits, rearm requirements, capacity floors, or metered budgets. `profile prime` is an explicit Codex subscription operation. Claude returns a typed unsupported result, and read operations and dispatch never prime profiles. Metered profiles require explicit routing mode, bounded admission, and a hard per-operation limit.
 
 Agent attempts have total, idle, and cancellation-settlement bounds. When a total or idle deadline expires, Sigil requests provider cancellation and waits through the configured cancellation grace. Cleanup must settle before a retry starts. If a provider ignores cancellation, Sigil returns the classified timeout without starting overlapping work; a later provider rejection remains observed rather than becoming an unhandled rejection.
+
+Claude PTY creates one Claude session identity per Sigil agent and starts a new PTY process for each turn, resuming that session after the first turn. Claude's transcript is the authority for matching the submitted prompt to a completed assistant turn; terminal output contributes only startup classification and payload-free provider progress. Closing or cancelling a turn terminates its owned process group and publishes the stopped lifecycle state before another attempt may start. Recovery owns total and idle deadlines and may retry only after that cleanup settles.
+
+After logging in with the local Claude CLI, run the opt-in smoke check from a Sigil source checkout:
+
+```sh
+env -u CLAUDECODE bun run smoke:claude-subscription
+```
 
 ```sh
 env -u CLAUDECODE sigil breakdown --repo /path/to/repo --mission "<mission>" --out /path/to/repo/.sigil/runs/backlog.json

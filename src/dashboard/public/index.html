@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sigil runs</title>
+    <link rel="stylesheet" href="/dashboard.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">Local observability</p>
+          <h1>Sigil runs</h1>
+        </div>
+        <p id="connection" role="status">Connecting</p>
+      </header>
+
+      <section id="summary" class="summary" aria-label="Run summary"></section>
+
+      <nav class="views" aria-label="Dashboard view">
+        <button type="button" data-view="current" aria-pressed="true">Current</button>
+        <button type="button" data-view="attention" aria-pressed="false">Needs attention</button>
+        <button type="button" data-view="history" aria-pressed="false">History</button>
+        <button type="button" data-view="archived" aria-pressed="false">Archived</button>
+        <button type="button" data-view="profiles" aria-pressed="false">Profiles</button>
+      </nav>
+
+      <section class="toolbar" aria-label="Run filters">
+        <label>Project <select id="project-filter"><option value="">All</option></select></label>
+        <label>State <select id="state-filter"><option value="">All</option></select></label>
+      </section>
+
+      <section id="runs-section">
+        <h2>Runs</h2>
+        <div id="runs" class="runs"></div>
+      </section>
+
+      <section id="profiles-section" hidden>
+        <h2>Codex profiles</h2>
+        <div id="profiles" class="profiles"></div>
+      </section>
+    </main>
+    <script src="/dashboard.js" defer></script>
+  </body>
+</html>

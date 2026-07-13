@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createContext, type SigilContext } from "./context.js";
+import { readProcessIdentity, type ProcessIdentity } from "./process-identity.js";
 import { assertDurablePaths, type RunPersistence } from "./storage.js";
 
 export type TypeScriptSigil = (input: Record<string, unknown>, ctxOverride?: SigilContext) => Promise<unknown>;
@@ -54,6 +55,7 @@ export type RunSigilHandle = {
 type RunSigilStatus = {
   state: "starting" | "started" | "running" | "succeeded" | "failed";
   pid?: number;
+  processIdentity?: ProcessIdentity;
   message: string;
   updatedAt: string;
 };
@@ -89,6 +91,7 @@ export async function runTypeScriptSigil(input: RunSigilInput): Promise<RunSigil
     ...(artifactRoot ? { artifactRoot } : {}),
     onObserve: input.onObserve,
   });
+  await ctx.initialize();
   const result = await callWorkflow(workflow, workflowInput, ctx);
   const formatted = `${JSON.stringify(result, null, 2)}\n`;
   const outFile = await writeResult(input.outFile, formatted);
@@ -122,7 +125,8 @@ export async function launchTypeScriptSigil(input: RunSigilInput): Promise<RunSi
 export async function runTypeScriptSigilWorker(manifestFile: string): Promise<void> {
   const manifest = JSON.parse(await readFile(resolve(manifestFile), "utf8")) as RunSigilManifest;
   const layout = runLayout(manifest.runDir);
-  await writeRunStatus(layout, { state: "running", pid: process.pid, message: "workflow running" });
+  const processIdentity = await readProcessIdentity();
+  await writeRunStatus(layout, { state: "running", pid: process.pid, processIdentity, message: "workflow running" });
   await recordRunEvent(layout, "workflow-started", { pid: String(process.pid) });
 
   try {
@@ -131,12 +135,12 @@ export async function runTypeScriptSigilWorker(manifestFile: string): Promise<vo
       onObserve: (stage, details) => recordRunEvent(layout, stage, details),
     });
     await writeFile(layout.resultFile, result.formatted);
-    await writeRunStatus(layout, { state: "succeeded", pid: process.pid, message: "workflow succeeded" });
+    await writeRunStatus(layout, { state: "succeeded", pid: process.pid, processIdentity, message: "workflow succeeded" });
     await recordRunEvent(layout, "workflow-succeeded");
   } catch (error) {
     const message = errorMessage(error);
     await writeFile(layout.errorFile, `${message}\n`);
-    await writeRunStatus(layout, { state: "failed", pid: process.pid, message });
+    await writeRunStatus(layout, { state: "failed", pid: process.pid, processIdentity, message });
     await recordRunEvent(layout, "workflow-failed", { error: message });
     throw error;
   }

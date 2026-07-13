@@ -111,4 +111,15 @@ describe("distribution scripts", () => {
     expect(result.exitCode).toBe(0);
     expect(readFileSync(outFile, "utf8")).toBe(readFileSync("man/sigil.1", "utf8"));
   });
+  test("Claude subscription smoke is optional, transport-neutral, and credential-safe", () => {
+    const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
+    const script = readFileSync("scripts/smoke-claude-subscription.mjs", "utf8");
+
+    expect(manifest.scripts["smoke:claude-subscription"]).toBe("bun scripts/smoke-claude-subscription.mjs");
+    expect(manifest.scripts["smoke:claude-pty"]).toBeUndefined();
+    expect(existsSync("scripts/smoke-claude-pty.mjs")).toBe(false);
+    expect(script).not.toContain("ANTHROPIC_API_KEY");
+    expect(script).not.toContain("CLAUDE_CONFIG_DIR");
+  });
+
 });

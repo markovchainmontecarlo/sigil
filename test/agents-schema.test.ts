@@ -1,14 +1,23 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { agent, createClaudeAgentFromGenerate, createCodexAgentFromGenerate, createCopilotAgentFromClient, createCopilotAgentFromGenerate, isSchemaPromptError, monitorActiveCodexCapacity } from "../src/agents.js";
+import { agent, createClaudeAgentFromGenerate, createTextAgentFromGenerate, createCopilotAgentFromClient, createCopilotAgentFromGenerate, isSchemaPromptError, monitorActiveCodexCapacity } from "../src/agents.js";
 import { codexProfileStore, readCodexRoutingState, writeCodexProfiles } from "../src/codex-profiles.js";
 import { releaseCodexProfile, reserveCodexProfile } from "../src/codex-router.js";
 
 describe("schema prompts", () => {
+  test("inline bindings pass through the common runtime schema", () => {
+    expect(() => agent({ provider: "codex", model: "", effort: "medium" })).toThrow();
+    expect(() => agent({ provider: "codex", model: "model", effort: "high" as "medium" })).toThrow();
+    expect(() => agent({
+      provider: "claude",
+      model: "model",
+      execution: { sandbox: "workspace-write" },
+    })).toThrow("does not support requested sandbox workspace-write");
+  });
   test("claude schema prompt preserves warm continuation", async () => {
     const schema = z.object({ name: z.string(), count: z.number() });
     const calls: Array<{ text: string; options?: Record<string, unknown> }> = [];
@@ -62,7 +71,7 @@ describe("schema prompts", () => {
   });
 
   test("schema-valid", async () => {
-    const agent = createCodexAgentFromGenerate(async () => JSON.stringify({ name: "codex", count: 1 }));
+    const agent = createTextAgentFromGenerate(async () => JSON.stringify({ name: "codex", count: 1 }));
 
     const value = await agent.prompt("return an object", z.object({ name: z.string(), count: z.number() }));
 
@@ -71,7 +80,7 @@ describe("schema prompts", () => {
 
   test("schema-invalid-then-reask", async () => {
     const turns: string[] = [];
-    const agent = createCodexAgentFromGenerate(async (prompt) => {
+    const agent = createTextAgentFromGenerate(async (prompt) => {
       turns.push(prompt);
       return turns.length === 1 ? "not json" : JSON.stringify({ ok: true });
     });
@@ -86,7 +95,7 @@ describe("schema prompts", () => {
   });
 
   test("exhausted-invalid", async () => {
-    const agent = createCodexAgentFromGenerate(async () => JSON.stringify({ count: "wrong" }));
+    const agent = createTextAgentFromGenerate(async () => JSON.stringify({ count: "wrong" }));
 
     let caught: unknown;
     try {
@@ -102,7 +111,7 @@ describe("schema prompts", () => {
 
   test("text-prompt unchanged", async () => {
     const turns: string[] = [];
-    const agent = createCodexAgentFromGenerate(async (prompt) => {
+    const agent = createTextAgentFromGenerate(async (prompt) => {
       turns.push(prompt);
       return "not json";
     });
@@ -151,6 +160,7 @@ describe("schema prompts", () => {
       version: 1,
       profiles: [{ name: "invalid", home: "", enabled: true, profileClass: "subscription" }],
     }));
+    chmodSync(profiles.registryFile, 0o600);
     const previous = process.env.SIGIL_CODEX_ACP_BIN;
     process.env.SIGIL_CODEX_ACP_BIN = join(root, "must-not-start");
     const codex = agent({ provider: "codex", model: "test", effort: "medium" }, {

@@ -2,6 +2,16 @@ import { z } from "zod";
 
 import { AgentBindingSchema } from "../config.js";
 
+const YamlAgentRefSchema = z.unknown().transform((value, context) => {
+  if (typeof value === "string" && value.length > 0) return value;
+  const binding = AgentBindingSchema.safeParse(value);
+  if (binding.success) return binding.data;
+  for (const issue of binding.error.issues) {
+    context.addIssue({ code: "custom", path: issue.path, message: issue.message });
+  }
+  return z.NEVER;
+});
+
 const PromptOutputSchema = z.object({
   enum: z.array(z.string().min(1)).min(1).optional(),
 });
@@ -48,7 +58,7 @@ export const YamlStepSchema = z.union([
 
 export const YamlJobSchema = z.object({
   id: z.string().min(1),
-  agent: z.union([z.string().min(1), AgentBindingSchema]).optional(),
+  agent: YamlAgentRefSchema.optional(),
   condition: z.string().min(1).optional(),
   steps: z.array(YamlStepSchema).min(1),
 });

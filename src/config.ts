@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
+import { AGENT_EFFORTS, AGENT_PROVIDERS, resolveExecutionPolicy, type AgentEffort, type AgentProvider, type ExecutionPolicy } from "./provider-capabilities.js";
 
-export type AgentProvider = "claude" | "codex" | "copilot";
-export type AgentBinding = { provider: AgentProvider; model: string; effort?: string };
+export type { AgentEffort, AgentProvider, ExecutionPolicy } from "./provider-capabilities.js";
+export type AgentBinding = { provider: AgentProvider; model: string; effort?: AgentEffort; execution?: ExecutionPolicy };
 export type ContextEntry = { path: string; update: boolean };
 export type SigilConfig = {
   agents: Record<string, AgentBinding>;
@@ -23,6 +24,23 @@ export type SigilConfig = {
     testReport?: { path: string; format: "junit" };
   };
   review: { reviewers: string[]; synthesizer: string; followUpReviews: number };
+};
+export type ConfigSource = "command" | "project" | "default";
+export type ConfigOverlay = {
+  agents?: Record<string, Partial<AgentBinding>>;
+  evals?: Record<string, string>;
+  workspace?: Partial<SigilConfig["workspace"]>;
+  context?: ContextEntry[];
+  plan?: Partial<SigilConfig["plan"]>;
+  implement?: Partial<SigilConfig["implement"]>;
+  review?: Partial<SigilConfig["review"]>;
+};
+export type ResolvedConfig = {
+  config: SigilConfig;
+  configPath: string;
+  rawProject: Readonly<Record<string, unknown>>;
+  commandOverlay: Readonly<ConfigOverlay>;
+  provenance: Readonly<Record<string, ConfigSource>>;
 };
 
 export const CONFIG_FILE = "sigil.config.json";
@@ -53,11 +71,32 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
   review: { reviewers: ["sol-low", "terra-low", "luna-low"], synthesizer: "sol-low", followUpReviews: 0 },
 };
 
+const ExecutionPolicySchema = z.object({
+  approval: z.literal("unattended").optional(),
+  sandbox: z.enum(["workspace-write", "unrestricted"]).optional(),
+  network: z.enum(["enabled", "disabled"]).optional(),
+}).optional();
+
 export const AgentBindingSchema = z.object({
-  provider: z.enum(["claude", "codex", "copilot"]),
-  model: z.string().min(1),
-  effort: z.string().min(1).default("medium"),
+  provider: z.enum(AGENT_PROVIDERS, { error: (issue) => issue.input === "claude-pty"
+    ? 'provider "claude-pty" was replaced by provider "claude" with local profile selection'
+    : "unsupported provider" }),
+  model: z.string().trim().min(1),
+  effort: z.enum(AGENT_EFFORTS).default("medium"),
+  execution: ExecutionPolicySchema,
+}).superRefine((binding, context) => {
+  const transports = binding.provider === "claude"
+    ? ["claude-cli-pty", "claude-agent-sdk"] as const
+    : binding.provider === "codex" ? ["codex-acp"] as const : ["copilot-cli", "copilot-sdk"] as const;
+  for (const transport of transports) {
+    try { resolveExecutionPolicy(transport, binding.execution); }
+    catch (error) { context.addIssue({ code: "custom", path: ["execution"], message: String(error instanceof Error ? error.message : error) }); }
+  }
 });
+
+export function parseAgentBinding(input: unknown): AgentBinding {
+  return AgentBindingSchema.parse(input);
+}
 const ContextEntrySchema = z.object({
   path: z.string().min(1),
   update: z.boolean().default(false),
@@ -91,19 +130,33 @@ const ConfigSchema: z.ZodType<SigilConfig> = z.object({
 });
 
 export function loadConfig(rootDir = process.cwd()): SigilConfig {
+  return resolveConfig(rootDir).config;
+}
+
+export function resolveConfig(rootDir = process.cwd(), commandOverlay: ConfigOverlay = {}): ResolvedConfig {
   const path = findConfigPath(rootDir);
   if (!path) throw new Error(`Missing ${join(resolve(rootDir), CONFIG_FILE)}`);
 
-  const parsed = ConfigSchema.safeParse(JSON.parse(readFileSync(path, "utf8")));
+  const rawProject = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (!isRecord(rawProject)) throw new Error(`Invalid ${path}: configuration must be an object`);
+  const merged = mergeProjectConfig(DEFAULT_SIGIL_CONFIG, rawProject);
+  const configured = mergeValue(merged, commandOverlay);
+  const parsed = ConfigSchema.safeParse(configured);
   if (!parsed.success) throw new Error(`Invalid ${path}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
   validateAgentReferences(parsed.data, path);
-  return parsed.data;
+  return {
+    config: parsed.data,
+    configPath: path,
+    rawProject,
+    commandOverlay,
+    provenance: collectProvenance(parsed.data, rawProject, commandOverlay),
+  };
 }
 
 export function resolveAgentBinding(name: string, config = loadConfig()): AgentBinding {
   const binding = config.agents[name];
   if (!binding) throw new Error(`Unknown agent "${name}" in ${CONFIG_FILE}`);
-  return binding;
+  return parseAgentBinding(binding);
 }
 
 export function resolveEvalCommand(name: string, config = loadConfig()): string | undefined {
@@ -119,6 +172,71 @@ function findConfigPath(start: string): string | undefined {
     if (parent === dir) return undefined;
     dir = parent;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function mergeConfig(...values: unknown[]): unknown {
+  return values.reduce<unknown>((result, value) => mergeValue(result, value), {});
+}
+
+function mergeProjectConfig(defaults: SigilConfig, project: Record<string, unknown>): unknown {
+  const merged = mergeConfig(defaults, project) as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(project, "agents")) merged.agents = project.agents;
+  if (Object.prototype.hasOwnProperty.call(project, "evals")) merged.evals = project.evals;
+  return merged;
+}
+
+function mergeValue(base: unknown, overlay: unknown): unknown {
+  if (!isRecord(base) || !isRecord(overlay)) return overlay;
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(overlay)) {
+    merged[key] = key in merged ? mergeValue(merged[key], value) : value;
+  }
+  return merged;
+}
+
+function collectProvenance(
+  config: SigilConfig,
+  project: Record<string, unknown>,
+  command: ConfigOverlay,
+): Record<string, ConfigSource> {
+  const provenance: Record<string, ConfigSource> = {};
+  visitLeaves(config, [], (path) => {
+    provenance[path.join(".")] = hasPath(command, path)
+      ? "command"
+      : hasPath(project, path) ? "project" : "default";
+  });
+  return provenance;
+}
+
+function visitLeaves(value: unknown, path: string[], visit: (path: string[]) => void): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => visitLeaves(entry, [...path, String(index)], visit));
+    return;
+  }
+  if (isRecord(value)) {
+    for (const [key, entry] of Object.entries(value)) visitLeaves(entry, [...path, key], visit);
+    return;
+  }
+  visit(path);
+}
+
+function hasPath(value: unknown, path: string[]): boolean {
+  let current = value;
+  for (const segment of path) {
+    if (Array.isArray(current)) {
+      const index = Number(segment);
+      if (!Number.isInteger(index) || !(index in current)) return false;
+      current = current[index];
+      continue;
+    }
+    if (!isRecord(current) || !Object.prototype.hasOwnProperty.call(current, segment)) return false;
+    current = current[segment];
+  }
+  return true;
 }
 
 function validateAgentReferences(config: SigilConfig, path: string): void {
