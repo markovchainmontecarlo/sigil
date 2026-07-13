@@ -42,7 +42,7 @@ function task(repo: string, id: string, dependencies: string[] = []): Task {
   };
 }
 
-function fixture(tasks: Task[], opts: { batchSize?: number; baseBranch?: string; evals?: Record<string, string>; bootstrap?: string; context?: Array<{ path: string; update?: boolean }>; contextFiles?: Record<string, string> } = {}): { repo: string; taskFile: string } {
+function fixture(tasks: Task[], opts: { sessionTaskLimit?: number; baseBranch?: string; evals?: Record<string, string>; bootstrap?: string; context?: Array<{ path: string; update?: boolean }>; contextFiles?: Record<string, string> } = {}): { repo: string; taskFile: string } {
   const repo = mkdtempSync(join(tmpdir(), "sigil-implement-test-"));
   run(repo, ["init"]);
   run(repo, ["config", "user.email", "test@example.com"]);
@@ -56,7 +56,7 @@ function fixture(tasks: Task[], opts: { batchSize?: number; baseBranch?: string;
     workspace: opts.bootstrap ? { bootstrap: opts.bootstrap } : {},
     context: opts.context ?? [],
     plan: { planners: ["coder"], synthesizer: "coder" },
-    implement: { coder: "coder", batchSize: opts.batchSize ?? 2, repairLimit: 2, branchPrefix: "impl/", baseBranch: opts.baseBranch ?? "master" },
+    implement: { coder: "coder", sessionTaskLimit: opts.sessionTaskLimit ?? 2, repairLimit: 2, branchPrefix: "impl/", baseBranch: opts.baseBranch ?? "master" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
   const graph: TaskGraph = { contractVersion: CONTRACT_VERSION, project: "fixture", goal: "test goal", tasks: repoTasks };
@@ -176,28 +176,38 @@ describe("implement", () => {
     expect(gateCalls).toBe(0);
   });
 
-  test("runs a two-batch graph in task order and commits each task", async () => {
+  test("runs tasks in dependency order and commits each task", async () => {
     const initial = fixture([]).repo;
     const tasks = [task(initial, "a"), task(initial, "b"), task(initial, "c")];
-    const { repo, taskFile } = fixture(tasks, { batchSize: 2 });
+    const { repo, taskFile } = fixture(tasks, { sessionTaskLimit: 2 });
     const seen: string[] = [];
+    const coders: StubAgent[] = [];
 
     const result = await implement({ repo, taskFile, branch: "impl/happy" }, stubContext(repo,
       {
       evalGate: okEval,
-      createAgent: () => new StubAgent((_call, prompt) => {
-        const id = prompt.match(/## Your task: (\w+)/)?.[1];
-        if (id) {
-          seen.push(id);
-          writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
-        }
-      }),
+      createAgent: () => {
+        const coder = new StubAgent((_call, prompt) => {
+          const id = prompt.match(/## Your task: (\w+)/)?.[1];
+          if (id) {
+            seen.push(id);
+            writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+          }
+        });
+        coders.push(coder);
+        return coder;
+      },
       review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
     }));
 
     expect(result.branch).toBe("impl/happy");
     expect(result.prBody).toContain("## Issues\n- none");
     expect(seen).toEqual(["a", "b", "c"]);
+    expect(coders).toHaveLength(2);
+    expect(coders[0].calls.filter((call) => call.includes("## Your task:"))).toHaveLength(2);
+    expect(coders[1].calls[0]).toContain("## Coder session handoff");
+    expect(coders[1].calls[0]).toContain("- a:");
+    expect(coders[1].calls[0]).toContain("- b:");
     expect(run(repo, ["log", "--oneline"]).split("\n").filter((line) => line.includes(": Task"))).toHaveLength(3);
   });
 
@@ -257,7 +267,7 @@ describe("implement", () => {
   test("red gates trigger repair in the same coder window while dependents remain blocked", async () => {
     const base = fixture([]).repo;
     const tasks = [task(base, "a"), task(base, "b", ["a"]), task(base, "c")];
-    const { repo, taskFile } = fixture(tasks, { batchSize: 3 });
+    const { repo, taskFile } = fixture(tasks, { sessionTaskLimit: 3 });
     let buildCalls = 0;
     const coder = new StubAgent((_call, prompt) => {
       if (prompt.includes("Task c")) writeFileSync(join(repo, "c.txt"), "c after\n");
@@ -302,7 +312,7 @@ describe("implement", () => {
   test("unsatisfied no-ops exhaust locally without stopping independent tasks", async () => {
     const base = fixture([]).repo;
     const tasks = [task(base, "a"), task(base, "b"), task(base, "c")];
-    const { repo, taskFile } = fixture(tasks, { batchSize: 3 });
+    const { repo, taskFile } = fixture(tasks, { sessionTaskLimit: 3 });
 
     const result = await implement({ repo, taskFile, branch: "impl/noop-stop" }, stubContext(repo,
       {

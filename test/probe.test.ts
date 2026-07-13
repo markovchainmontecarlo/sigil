@@ -70,7 +70,7 @@ function tempGitRepo(): string {
     evals: {},
     context: [],
     plan: { planners: ["planner"], synthesizer: "synthesizer" },
-    implement: { coder: "planner", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+    implement: { coder: "planner", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["synthesizer"], synthesizer: "synthesizer" },
   }, null, 2));
   writeFileSync(join(dir, "app.txt"), "hello\n");

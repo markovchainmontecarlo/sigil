@@ -34,7 +34,7 @@ function tempRepo(): string {
     agents: { coder: { provider: "codex", model: "gpt-5.5" } },
     evals: {},
     plan: { planners: ["coder"], synthesizer: "coder" },
-    implement: { coder: "coder", batchSize: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
+    implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }, null, 2));
   return dir;

@@ -1,6 +1,6 @@
 {
   "name": "sigil",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "CLI and TypeScript toolkit for repository workflows, static YAML workflows, and TypeScript sigils over configured agents",
@@ -42,7 +42,10 @@
   "scripts": {
     "cli": "bun src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun run test:all",
+    "test:fast": "bun scripts/test-suite.ts fast",
+    "test:integration": "bun scripts/test-suite.ts integration --max-concurrency 1",
+    "test:all": "bun run test:fast && bun run test:integration",
     "preview:readme": "node scripts/preview-readme.mjs --serve",
     "smoke:distribution": "bash scripts/distribution-smoke.sh",
     "smoke:agents": "node scripts/smoke-agents.mjs",

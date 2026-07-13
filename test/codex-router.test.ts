@@ -254,6 +254,10 @@ describe("Codex profile routing", () => {
   test("migrates ownerless reservations written by the previous routing state schema", async () => {
     const files = store();
     const startedAt = new Date().toISOString();
+    await writeCodexProfiles([{
+      ...profile("pro", "metered-api"),
+      budget: { tokenLimit: 100, reservationTokens: 25, requireRearm: true },
+    }], files);
     mkdirSync(dirname(files.stateFile), { recursive: true });
     writeFileSync(files.stateFile, JSON.stringify({
       version: 2,
@@ -297,5 +301,46 @@ describe("Codex profile routing", () => {
     expect(state.ledgers.pro?.reservedTokens).toBe(0);
     expect(state.ledgers.pro?.usage.totalTokens).toBe(25);
     expect(state.ledgers.pro?.rearmRequired).toBe(true);
+  });
+
+  test("clears obsolete rearm state when a subscription policy does not require it", async () => {
+    const files = store();
+    await writeCodexProfiles([profile("pro")], files);
+    mkdirSync(dirname(files.stateFile), { recursive: true });
+    writeFileSync(files.stateFile, JSON.stringify({
+      version: 2,
+      state: {
+        roundRobin: 1,
+        reservations: {},
+        ledgers: {
+          pro: {
+            starts: 1,
+            active: 0,
+            reservedTokens: 0,
+            runtimeMs: 0,
+            usage: {
+              inputTokens: 0,
+              cachedInputTokens: 0,
+              outputTokens: 0,
+              reasoningTokens: 0,
+              totalTokens: 0,
+            },
+            rearmRequired: true,
+          },
+        },
+        circuits: {},
+        unavailableProfiles: {},
+      },
+    }));
+    chmodSync(files.stateFile, 0o600);
+
+    const admission = await reserveCodexProfile(async () => ({
+      available: true,
+      remainingPercentage: 80,
+    }), files);
+    const state = await readCodexRoutingState(files);
+
+    expect(admission.status).toBe("assigned");
+    expect(state.ledgers.pro?.rearmRequired).toBe(false);
   });
 });

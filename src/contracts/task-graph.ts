@@ -10,7 +10,6 @@ export interface TaskFile {
   action: FileAction;
   details: string[];
 }
-
 export interface Task {
   id: string;
   title: string;
@@ -159,30 +158,4 @@ export function orderedTasks(tasks: Task[]): Task[] {
     result.push(next);
   }
   return result;
-}
-
-export function planBatches(tasks: Task[], cap: number): { batches: string[][]; byId: Record<string, Task> } {
-  const dep: Record<string, string[]> = Object.fromEntries(tasks.map((t) => [t.id, t.dependencies ?? []]));
-  const placed = new Set<string>();
-  const levels: string[][] = [];
-  while (placed.size < tasks.length) {
-    const level = tasks.filter((t) => !placed.has(t.id) && dep[t.id].every((x) => placed.has(x))).map((t) => t.id);
-    if (!level.length) throw new Error("cycle in task graph");
-    level.forEach((x) => placed.add(x));
-    levels.push(level);
-  }
-  const batches: string[][] = [];
-  let current: string[] = [];
-  for (const id of levels.flat()) {
-    if (current.length >= cap) {
-      batches.push(current);
-      current = [];
-    }
-    current.push(id);
-  }
-  if (current.length) batches.push(current);
-  const order = batches.flat();
-  const pos = Object.fromEntries(order.map((id, i) => [id, i]));
-  for (const t of tasks) for (const x of dep[t.id]) if (pos[x] >= pos[t.id]) throw new Error(`dep-order violation: ${t.id} before ${x}`);
-  return { batches, byId: Object.fromEntries(tasks.map((t) => [t.id, t])) };
 }

@@ -15,7 +15,7 @@ function repository(bootstrap: string, ready?: string): string {
     evals: {},
     workspace: { bootstrap, ...(ready ? { ready } : {}) },
     plan: { planners: ["coder"], synthesizer: "coder" },
-    implement: { coder: "coder", batchSize: 1, repairLimit: 1, branchPrefix: "x/", baseBranch: "main" },
+    implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "x/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   };
   writeFileSync(join(repo, "sigil.config.json"), JSON.stringify(config));

@@ -18,7 +18,8 @@
   },
   "evals": {
     "build": "bun run typecheck",
-    "test": "bun test --max-concurrency 1"
+    "test": "bun run test:fast",
+    "verify": "bun run test:all"
   },
   "context": [
     {
@@ -40,7 +41,7 @@
   },
   "implement": {
     "coder": "sol-low",
-    "batchSize": 5,
+    "sessionTaskLimit": 5,
     "repairLimit": 3,
     "operationTimeoutMs": 5400000,
     "branchPrefix": "sigil/",
