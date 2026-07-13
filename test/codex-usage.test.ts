@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { addCodexUsage, usageFromEvent } from "../src/agents.js";
+import { addCodexUsage, usageFromEvent } from "../src/providers/codex.js";
 
 describe("Codex ACP usage accounting", () => {
   test("parses the installed ACP usage_update schema", () => {

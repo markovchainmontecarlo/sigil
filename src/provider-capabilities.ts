@@ -1,18 +1,18 @@
-export const AGENT_PROVIDERS = ["codex", "claude", "copilot"] as const;
-export type AgentProvider = typeof AGENT_PROVIDERS[number];
+import {
+  AGENT_EFFORTS,
+  AGENT_PROVIDERS,
+  type AgentEffort,
+  type AgentProvider,
+  type ExecutionPolicy,
+} from "./agent-binding.js";
 
-export const AGENT_EFFORTS = ["low", "medium"] as const;
-export type AgentEffort = typeof AGENT_EFFORTS[number];
+export { AGENT_EFFORTS, AGENT_PROVIDERS } from "./agent-binding.js";
+export type { AgentEffort, AgentProvider, ExecutionPolicy } from "./agent-binding.js";
 
 export type ApprovalPolicy = "unattended";
 export type SandboxPolicy = "workspace-write" | "unrestricted";
 export type NetworkPolicy = "enabled" | "disabled";
 export type CapabilitySupport = "supported" | "unsupported" | "unknown";
-export type ExecutionPolicy = {
-  approval?: ApprovalPolicy;
-  sandbox?: SandboxPolicy;
-  network?: NetworkPolicy;
-};
 export type RequestedExecutionPolicy = Required<ExecutionPolicy>;
 export type EffectiveExecutionPolicy = {
   approval: ApprovalPolicy;

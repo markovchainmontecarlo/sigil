@@ -1,30 +1,34 @@
 {
   "name": "sigil",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "description": "CLI and TypeScript toolkit for repository workflows, static YAML workflows, and TypeScript sigils over configured agents",
   "license": "MIT",
-  "types": "./src/index.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/markovchainmontecarlo/sigil.git"
+  },
+  "bugs": {
+    "url": "https://github.com/markovchainmontecarlo/sigil/issues"
+  },
+  "homepage": "https://github.com/markovchainmontecarlo/sigil#readme",
+  "types": "./dist/package/src/index.d.ts",
   "files": [
-    "LICENSE",
-    "README.md",
-    "ARCHITECTURE.md",
-    "SIGIL_USAGE.md",
-    "bun.lock",
-    "package.json",
-    "docs/explanation",
-    "docs/how-to",
-    "docs/reference",
-    "examples",
-    "src",
-    "skills",
-    "man"
+    "dist/package"
   ],
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/package/src/index.d.ts",
+      "import": "./dist/package/src/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/package/src/contracts-entry.d.ts",
+      "import": "./dist/package/src/contracts-entry.js"
+    },
+    "./server": {
+      "types": "./dist/package/src/server-entry.d.ts",
+      "import": "./dist/package/src/server-entry.js"
     }
   },
   "dependencies": {
@@ -41,9 +45,13 @@
   },
   "scripts": {
     "cli": "bun src/cli.ts",
+    "clean": "rm -rf dist/package",
+    "build": "bun scripts/build-package.ts",
+    "test:package": "bun test test/package-build.test.ts",
+    "verify:package": "bun scripts/verify-package.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun run test:all",
-    "test:fast": "bun scripts/test-suite.ts fast",
+    "test:fast": "bun scripts/test-suite.ts fast --max-concurrency 1",
     "test:integration": "bun scripts/test-suite.ts integration --max-concurrency 1",
     "test:all": "bun run test:fast && bun run test:integration",
     "preview:readme": "node scripts/preview-readme.mjs --serve",
@@ -58,6 +66,6 @@
     "typescript": "^5.9.3"
   },
   "bin": {
-    "sigil": "src/cli.ts"
+    "sigil": "dist/package/src/cli.js"
   }
 }

@@ -1,14 +1,22 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { commandHelps, renderCommandHelp } from "../src/help.js";
 
-const documents = [
+const rootDocuments = [
   "README.md",
   "SIGIL_USAGE.md",
-  "docs/reference/configuration.md",
-  "docs/reference/provider-profiles.md",
-  "docs/how-to/configure-provider-profiles.md",
 ];
+
+function markdownFiles(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return markdownFiles(path);
+    return entry.isFile() && entry.name.endsWith(".md") ? [path] : [];
+  });
+}
+
+const documents = [...rootDocuments, ...markdownFiles("docs")];
 
 function shellCommands(markdown: string): string[] {
   return [...markdown.matchAll(/```(?:sh|bash)\n([\s\S]*?)```/g)]

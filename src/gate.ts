@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 
 import { loadConfig, resolveEvalCommand } from "./config.js";
-import type { SigilAgent } from "./agents.js";
+import type { SigilAgent } from "./agent.js";
 import { extractFailureLog } from "./reports/failure-log.js";
 import { OwnedProcess, type ProcessLifecycle } from "./owned-process.js";
 

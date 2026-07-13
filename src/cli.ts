@@ -47,4 +47,4 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
 }
 
-if (import.meta.main) process.exit(await main());
+if (import.meta.main === true) process.exit(await main());

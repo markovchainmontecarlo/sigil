@@ -1,31 +1,43 @@
-import { isAbsolute, relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { isAbsolute, relative, resolve } from "node:path";
+
+import { z } from "zod";
 
 export const CONTRACT_VERSION = 1;
 
-export type FileAction = "create" | "modify" | "delete";
+export const TaskFileSchema = z.object({
+  path: z.string().min(1),
+  action: z.enum(["create", "modify", "delete"]),
+  details: z.array(z.string().min(1)).min(1),
+}).strict();
 
-export interface TaskFile {
-  path: string;
-  action: FileAction;
-  details: string[];
-}
-export interface Task {
-  id: string;
-  title: string;
-  summary: string;
-  dependencies: string[];
-  acceptanceCriteria: string[];
-  diagrams: string[];
-  files: TaskFile[];
-}
+export const TaskSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  summary: z.string().min(1),
+  dependencies: z.array(z.string().min(1)).default([]),
+  acceptanceCriteria: z.array(z.string().min(1)).min(1),
+  diagrams: z.array(z.string()).default([]),
+  files: z.array(TaskFileSchema),
+}).strict();
 
-export interface TaskGraph {
-  contractVersion: number;
-  project: string;
-  goal?: string;
-  tasks: Task[];
-}
+export const TaskGraphSchema = z.object({
+  $schema: z.string().min(1).optional(),
+  contractVersion: z.literal(CONTRACT_VERSION),
+  project: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
+  goal: z.string().min(1).optional(),
+  tasks: z.array(TaskSchema).min(1),
+}).strict();
+
+export const taskGraphJsonSchema = z.toJSONSchema(TaskGraphSchema, {
+  target: "draft-07",
+  io: "input",
+});
+
+export type FileAction = z.input<typeof TaskFileSchema>["action"];
+export type TaskFile = z.output<typeof TaskFileSchema>;
+export type Task = z.output<typeof TaskSchema>;
+export type TaskGraph = Omit<z.output<typeof TaskGraphSchema>, "$schema">;
 
 export interface TaskGraphCheckOptions {
   repoRoot?: string;
@@ -46,78 +58,72 @@ function escapesRoot(path: string, repoRoot: string): boolean {
   return rel !== "" && (rel.startsWith("..") || isAbsolute(rel));
 }
 
+function structuralErrors(error: z.ZodError): string[] {
+  return error.issues.map((issue) => {
+    const path = issue.path.length > 0 ? issue.path.join(".") : "task graph";
+    return `${path}: ${issue.message}`;
+  });
+}
+
+function normalizedGraph(document: z.output<typeof TaskGraphSchema>): TaskGraph {
+  const { $schema: _schema, ...graph } = document;
+  return graph;
+}
+
 /** Collect all contract violations without throwing. */
 export function checkTaskGraph(raw: unknown, options: TaskGraphCheckOptions = {}): TaskGraphCheck {
+  const parsed = TaskGraphSchema.safeParse(raw);
+  if (!parsed.success) return { graph: null, errors: structuralErrors(parsed.error) };
+
   const errors: string[] = [];
-  if (raw === null || typeof raw !== "object") return { graph: null, errors: ["task graph is not an object"] };
-  const g = raw as Record<string, unknown>;
-  if (g.contractVersion !== undefined && g.contractVersion !== CONTRACT_VERSION) {
-    errors.push(`unsupported task-graph contractVersion ${String(g.contractVersion)}; expected ${CONTRACT_VERSION}`);
-  }
-  if (!Array.isArray(g.tasks) || g.tasks.length === 0) {
-    errors.push("task graph has no tasks");
-    return { graph: null, errors };
-  }
-  if (typeof g.project !== "string" || !/^[a-z][a-z0-9-]{0,39}$/.test(g.project)) {
-    errors.push(`project must be a short kebab-case slug (got "${String(g.project ?? "")}")`);
-  }
-  const tasks = g.tasks as Task[];
   const resolvedRoot = options.repoRoot === undefined ? undefined : resolve(options.repoRoot);
   const ids = new Set<string>();
-  const normalizedTasks: Task[] = [];
-  for (const t of tasks) {
-    const label = typeof t.id === "string" && t.id ? t.id : "(unknown)";
-    if (typeof t.id !== "string" || !t.id) errors.push("task missing id");
-    else {
-      if (ids.has(t.id)) errors.push(`duplicate task id: ${t.id}`);
-      ids.add(t.id);
-    }
-    if (typeof t.title !== "string" || !t.title) errors.push(`task ${label} missing title`);
-    if (typeof t.summary !== "string" || !t.summary) errors.push(`task ${label} missing summary`);
-    if (!Array.isArray(t.acceptanceCriteria) || t.acceptanceCriteria.length === 0 || t.acceptanceCriteria.some((c) => typeof c !== "string" || !c)) errors.push(`task ${label} acceptanceCriteria must be a non-empty array of non-empty strings`);
-    if (!Array.isArray(t.diagrams) || t.diagrams.some((d) => typeof d !== "string")) errors.push(`task ${label} diagrams must be an array of strings`);
-    const files: TaskFile[] = [];
-    if (!Array.isArray(t.files)) errors.push(`task ${label} missing files[]`);
-    else for (const f of t.files) {
-      let path = typeof f.path === "string" ? f.path : "";
-      if (!path) {
-        errors.push(`task ${label} file path must be a non-empty string`);
-      } else if (!isAbsolute(path) && resolvedRoot === undefined) {
-        errors.push(`task ${label} file path is relative but no repo root was provided: ${path}`);
-      } else if (resolvedRoot !== undefined) {
-        path = resolveTaskPath(path, resolvedRoot);
-        if (escapesRoot(path, resolvedRoot)) errors.push(`task ${label} file path escapes repo root: ${String(f.path)}`);
+  const tasks = parsed.data.tasks.map((task) => {
+    if (ids.has(task.id)) errors.push(`duplicate task id: ${task.id}`);
+    ids.add(task.id);
+
+    const files = task.files.map((file) => {
+      const path = resolveTaskPath(file.path, resolvedRoot);
+      if (!isAbsolute(file.path) && resolvedRoot === undefined) {
+        errors.push(`task ${task.id} file path is relative but no repo root was provided: ${file.path}`);
       }
-      if (!["create", "modify", "delete"].includes(f.action)) errors.push(`task ${label} file ${String(f.path)} has invalid action: ${String(f.action)}`);
-      if (!Array.isArray(f.details) || f.details.length === 0 || f.details.some((d) => typeof d !== "string" || !d)) errors.push(`task ${label} file ${String(f.path)} details must be a non-empty array of non-empty strings`);
-      files.push({ ...f, path });
+      if (resolvedRoot !== undefined && escapesRoot(path, resolvedRoot)) {
+        errors.push(`task ${task.id} file path escapes repo root: ${file.path}`);
+      }
+      return { ...file, path };
+    });
+
+    return { ...task, files };
+  });
+
+  for (const task of tasks) {
+    for (const dependency of task.dependencies) {
+      if (!ids.has(dependency)) errors.push(`task ${task.id} depends on unknown task: ${dependency}`);
     }
-    normalizedTasks.push({ ...t, files });
   }
-  for (const t of tasks) {
-    const label = typeof t.id === "string" ? t.id : "(unknown)";
-    if (t.dependencies !== undefined && !Array.isArray(t.dependencies)) {
-      errors.push(`task ${label} dependencies must be an array`);
-      continue;
-    }
-    for (const d of t.dependencies ?? []) if (!ids.has(d)) errors.push(`task ${label} depends on unknown task: ${d}`);
-  }
-  const deps = (t: Task): string[] => (Array.isArray(t.dependencies) ? t.dependencies : []).filter((d) => ids.has(d));
-  const dep: Record<string, string[]> = Object.fromEntries(tasks.filter((t) => typeof t.id === "string").map((t) => [t.id, deps(t)]));
-  const done: Record<string, boolean> = {};
+
+  const dependencies = Object.fromEntries(tasks.map((task) => [task.id, task.dependencies.filter((id) => ids.has(id))]));
+  const done = new Set<string>();
+  const visiting = new Set<string>();
   const cycles = new Set<string>();
-  const visit = (id: string, stack: Set<string>): void => {
-    if (done[id]) return;
-    if (stack.has(id)) { cycles.add(id); return; }
-    stack.add(id);
-    for (const d of dep[id] ?? []) visit(d, stack);
-    stack.delete(id);
-    done[id] = true;
+  const visit = (id: string): void => {
+    if (done.has(id)) return;
+    if (visiting.has(id)) {
+      cycles.add(id);
+      return;
+    }
+    visiting.add(id);
+    for (const dependency of dependencies[id] ?? []) visit(dependency);
+    visiting.delete(id);
+    done.add(id);
   };
-  for (const id of ids) visit(id, new Set());
+  for (const id of ids) visit(id);
   for (const id of cycles) errors.push(`dependency cycle through task: ${id}`);
-  const graph: TaskGraph = { contractVersion: CONTRACT_VERSION, project: String(g.project ?? ""), goal: g.goal as string | undefined, tasks: normalizedTasks };
-  return { graph, errors };
+
+  return {
+    graph: { ...normalizedGraph(parsed.data), tasks },
+    errors,
+  };
 }
 
 export function validateTaskGraph(raw: unknown, options: TaskGraphCheckOptions = {}): TaskGraph {

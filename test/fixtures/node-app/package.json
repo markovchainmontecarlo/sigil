@@ -1,0 +1,14 @@
+{
+  "name": "sigil-node-consumer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "sigil": "SIGIL_TARBALL",
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}

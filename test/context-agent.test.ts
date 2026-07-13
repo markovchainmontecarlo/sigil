@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
 
-import { SchemaPromptError, type SigilAgent } from "../src/agents.js";
+import { SchemaPromptError, type SigilAgent } from "../src/agent.js";
 import type { AgentBinding } from "../src/config.js";
 import { createContext, wrapAgentForContext } from "../src/context.js";
 

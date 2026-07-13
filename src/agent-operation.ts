@@ -2,7 +2,7 @@ import type { z } from "zod";
 
 import { loadConfig, type AgentBinding } from "./config.js";
 import type { RichSigilAgent, SigilContext } from "./context.js";
-import type { AgentPromptOptions } from "./agents.js";
+import type { AgentPromptOptions } from "./agent.js";
 import { classifyProviderFailure, ProviderError, publicProviderFailure } from "./provider-failure.js";
 import {
   retryOperation,

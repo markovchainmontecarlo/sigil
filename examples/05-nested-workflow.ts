@@ -1,4 +1,4 @@
-import { sigil, softwareChange } from "../src/index.js";
+import { sigil, softwareChange } from "sigil";
 
 export const buildIssueChange = sigil(
   "build-issue-change",

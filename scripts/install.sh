@@ -163,7 +163,7 @@ fi
 
 cat > "$BIN_DIR/sigil" <<'LAUNCHER'
 #!/bin/sh
-exec env bun "${SIGIL_HOME:-$HOME/.sigil}/lib/src/cli.ts" "$@"
+exec env bun "${SIGIL_HOME:-$HOME/.sigil}/lib/src/cli.js" "$@"
 LAUNCHER
 chmod +x "$BIN_DIR/sigil"
 

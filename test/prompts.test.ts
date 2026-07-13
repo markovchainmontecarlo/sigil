@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
-import { breakdownPrompts, implementationPrompts, interpolate, planningPrompts } from "../src/index.js";
+import { breakdownPrompts, implementationPrompts, planningPrompts } from "../src/index.js";
+import { interpolate } from "../src/prompts.js";
 
 describe("prompts", () => {
   test("renders a grouped template and interpolates supplied vars", () => {
@@ -12,17 +13,14 @@ describe("prompts", () => {
   });
 
 
-  test("root export exposes owning prompt groups instead of the old grouped registry", async () => {
+  test("root export exposes supported feature-owned prompt groups", async () => {
     const api = await import("../src/index.js");
 
     expect("prompts" in api).toBe(false);
-    expect(api.planningPrompts.investigate({ INTENT: "ship it", BRIEF: "", CONTEXT: "loaded context" })).toContain("ship it");
+    expect(api.planningPrompts.investigate).toBeFunction();
     expect(api.implementationPrompts.task).toBeFunction();
     expect(api.reviewPrompts.findings).toBeFunction();
     expect(api.breakdownPrompts.cut).toBeFunction();
-    expect(api.breakdownPrompts.fixJson).toBeFunction();
-    expect(api.planningPrompts.enrichTaskGraph).toBeFunction();
-    expect(api.planningPrompts.fixJson).toBeFunction();
     expect("taskGraphPrompts" in api).toBe(false);
   });
 

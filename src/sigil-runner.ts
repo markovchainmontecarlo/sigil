@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { access, appendFile, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { createContext, type SigilContext } from "./context.js";
@@ -105,7 +105,7 @@ export async function launchTypeScriptSigil(input: RunSigilInput): Promise<RunSi
 
   await initializeRun(layout, manifest);
   const descriptor = openSync(layout.logFile, "a");
-  const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
+  const cli = siblingModule("cli");
   const child = spawn(process.execPath, [cli, "__run-sigil-worker", "--manifest", layout.manifestFile], {
     cwd: process.cwd(),
     detached: true,
@@ -286,7 +286,7 @@ async function assertWorkflowFileExists(file: string): Promise<void> {
 }
 
 function sigilImportPlugin(): Bun.BunPlugin {
-  const publicEntrypoint = fileURLToPath(new URL("./index.ts", import.meta.url));
+  const publicEntrypoint = siblingModule("index");
   return {
     name: "sigil-runner-imports",
     setup(build) {
@@ -328,10 +328,15 @@ async function bundleWorkflow(file: string): Promise<string> {
 
   const dir = await mkdtemp(join(tmpdir(), "sigil-runner-bundle-"));
   const fileName = join(dir, "workflow.mjs");
-  const publicEntrypoint = pathToFileURL(fileURLToPath(new URL("./index.ts", import.meta.url))).href;
+  const publicEntrypoint = pathToFileURL(siblingModule("index")).href;
   const source = (await output.text()).replaceAll('"sigil"', JSON.stringify(publicEntrypoint));
   await writeFile(fileName, source);
   return pathToFileURL(fileName).href;
+}
+
+function siblingModule(name: string): string {
+  const extension = extname(fileURLToPath(import.meta.url));
+  return fileURLToPath(new URL(`./${name}${extension}`, import.meta.url));
 }
 
 function resolveWorkflowExport(module: Record<string, unknown>): TypeScriptSigil | undefined {

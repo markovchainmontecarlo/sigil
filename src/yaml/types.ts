@@ -1,4 +1,4 @@
-import type { AgentBinding } from "../config.js";
+import type { AgentBinding } from "../agent-binding.js";
 
 export type YamlAgentRef = string | AgentBinding;
 

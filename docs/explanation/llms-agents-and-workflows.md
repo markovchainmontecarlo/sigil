@@ -26,6 +26,8 @@ Sigil CLI      adapts user commands to workflows and runtime services
 Skill          tells an assistant how to select or operate Sigil
 ```
 
+An **AI assistant** is the developer-facing assistant already familiar with the change, such as an assistant in an editor or terminal. It is distinct from the agent sessions Sigil starts inside a workflow. In AI-assisted development, that assistant produces the task graph from agreed requirements and repository evidence before invoking Sigil implementation.
+
 ## LLM
 
 A large language model supplies reasoning, language generation, and structured output. A raw model call does not by itself provide repository tools, file edits, shell commands, durable artifacts, gates, or workflow control flow.
@@ -102,6 +104,15 @@ A **custom workflow** is a temporary or maintained TypeScript Sigil or YAML work
 
 Workflows compose from operations and nested workflows. Avoid describing this as sigils being stitched into a different workflow layer.
 
+## AI-assisted and agentic development
+
+These terms describe who creates the validated task graph.
+
+- In **AI-assisted development**, the current developer-facing assistant translates the agreed requirements or Markdown plan directly into the task graph.
+- In **agentic development**, a Sigil planning or probing workflow produces the task graph from an intent or brief.
+
+Both paths use the same contract and implementation workflow. They are not provider settings or separate runtimes.
+
 ## Sigil CLI
 
 The Sigil CLI is the user-facing command surface. A command parses input, invokes a workflow or runtime service, formats output, and maps the outcome to an exit code. Workflow commands are thin adapters and do not own workflow state transitions.
@@ -124,6 +135,6 @@ A skill is assistant-facing operating guidance. It helps an assistant decide whe
 
 ## Why the distinctions matter
 
-The model reasons. The agent runtime provides tools and context. The agent session performs bounded judgment. The workflow owns control flow and state transitions. The caller grants authority. Deterministic code enforces boundaries and verifies effects. The CLI exposes those capabilities, and skills help assistants choose them.
+The model reasons. The agent runtime provides tools and context. The agent session performs bounded judgment. The workflow owns control flow and state transitions. The caller grants authority. Deterministic code enforces boundaries and verifies effects. The CLI exposes those capabilities, and skills help the developer-facing assistant choose them.
 
 Keeping those responsibilities separate is what makes workflows independently callable, safely composable, and able to reuse accepted artifacts without repeating finished work.

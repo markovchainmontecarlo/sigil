@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { AgentBindingSchema } from "../config.js";
+import { AgentBindingSchema } from "../agent-binding.js";
 
 const YamlAgentRefSchema = z.unknown().transform((value, context) => {
   if (typeof value === "string" && value.length > 0) return value;

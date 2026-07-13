@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { implementExitCode, reviewExitCode, softwareChangeExitCode } from "../src/commands/exit-codes.js";
+import { implementCommandWith } from "../src/commands/software-change.js";
 import { commandHelps } from "../src/help.js";
 import { DEFAULT_SIGIL_CONFIG, loadConfig } from "../src/config.js";
 import { CONTRACT_VERSION, type Task, type TaskGraph } from "../src/contracts/task-graph.js";
@@ -30,38 +31,57 @@ function text(bytes: Uint8Array): string {
 }
 
 describe("cli", () => {
-  test("validate exits 0 and prints [] for a valid task graph", () => {
+  test("task-graph validate exits 0 and prints a human result for a valid graph", () => {
     const dir = mkdtempSync(join(tmpdir(), "sigil-cli-"));
     const taskFile = join(dir, "valid.json");
     writeFileSync(taskFile, JSON.stringify(graph([task("a"), task("b", ["a"])])));
 
-    const result = run(["validate", taskFile]);
+    const result = run(["task-graph", "validate", taskFile]);
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(text(result.stdout))).toEqual([]);
+    expect(text(result.stdout)).toContain("Task graph is valid (2 tasks).");
   });
 
-  test("validate exits 1 and prints errors for an invalid task graph", () => {
+  test("task-graph validate exits 1 and prints errors for an invalid graph", () => {
     const dir = mkdtempSync(join(tmpdir(), "sigil-cli-"));
     const taskFile = join(dir, "invalid.json");
     writeFileSync(taskFile, JSON.stringify(graph([{ ...task("a"), files: [file("../outside.ts")] }])));
 
-    const result = run(["validate", "--repo", dir, taskFile]);
+    const result = run(["task-graph", "validate", "--repo", dir, taskFile]);
     const stdout = text(result.stdout);
 
     expect(result.exitCode).toBe(1);
     expect(stdout).toContain("file path escapes repo root");
   });
 
-  test("validate resolves repo-relative task paths against --repo", () => {
+  test("task-graph validate emits a stable JSON record and resolves relative paths", () => {
     const dir = mkdtempSync(join(tmpdir(), "sigil-cli-"));
     const taskFile = join(dir, "valid-relative.json");
     writeFileSync(taskFile, JSON.stringify(graph([{ ...task("a"), files: [file("src/a.ts")] }])));
 
-    const result = run(["validate", "--repo", dir, taskFile]);
+    const result = run(["task-graph", "validate", "--repo", dir, "--json", taskFile]);
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(text(result.stdout))).toEqual([]);
+    expect(JSON.parse(text(result.stdout))).toEqual({
+      version: 1,
+      kind: "task-graph-validation",
+      valid: true,
+      taskCount: 1,
+      errors: [],
+    });
+  });
+
+  test("task-graph schema prints and writes the public JSON Schema", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sigil-cli-schema-"));
+    const outFile = join(dir, "task-graph.schema.json");
+    const printed = run(["task-graph", "schema"]);
+    const written = run(["task-graph", "schema", "--out", outFile]);
+
+    expect(printed.exitCode).toBe(0);
+    expect(JSON.parse(text(printed.stdout))).toMatchObject({ type: "object" });
+    expect(written.exitCode).toBe(0);
+    expect(text(written.stdout)).toBe("");
+    expect(JSON.parse(readFileSync(outFile, "utf8"))).toEqual(JSON.parse(text(printed.stdout)));
   });
 
   test("validate-workflow exits 0 and prints [] for a valid static workflow", () => {
@@ -127,7 +147,7 @@ describe("cli", () => {
       "review",
       "breakdown",
       "dispatch",
-      "validate",
+      "task-graph",
       "validate-workflow",
       "validate-sigil",
       "run-workflow",
@@ -164,7 +184,7 @@ describe("cli", () => {
       "review",
       "breakdown",
       "dispatch",
-      "validate",
+      "task-graph",
       "validate-workflow",
       "validate-sigil",
       "run-workflow",
@@ -492,6 +512,8 @@ describe("cli", () => {
 
     expect(result.exitCode).toBe(0);
     expect(text(result.stdout)).toContain(join(dir, "sigil.config.json"));
+    expect(text(result.stdout)).toContain("create and validate a Sigil task graph");
+    expect(text(result.stdout)).toContain("docs/tutorials/first-change-with-ai-assistant.md");
     expect(loadConfig(dir)).toEqual(DEFAULT_SIGIL_CONFIG);
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("node_modules/\n/.sigil/runs/\n");
   });
@@ -534,7 +556,7 @@ describe("cli", () => {
     const result = run(["software-change", "--repo", dir, "--intent", "Use the ready graph.", "--task-file", taskFile]);
 
     expect(result.exitCode).toBe(1);
-    expect(text(result.stderr)).toContain("task graph has no tasks");
+    expect(text(result.stderr)).toContain("tasks: Too small");
   });
 
   test("software-change exit code fails on invalid result or reported issues", () => {
@@ -550,6 +572,34 @@ describe("cli", () => {
     expect(implementExitCode({ reviewBlocking: false, failedTasks: [], issues: ["gate failed"] }, published)).toBe(1);
     expect(implementExitCode({ reviewBlocking: false, failedTasks: [], issues: [] }, { push: { ok: true, log: "" }, pr: { ok: false, log: "no pr" } })).toBe(1);
     expect(implementExitCode({ reviewBlocking: false, failedTasks: [], issues: [] }, published)).toBe(0);
+    expect(implementExitCode({ reviewBlocking: false, failedTasks: [], issues: [] }, null, false)).toBe(0);
+    expect(implementExitCode({ reviewBlocking: false, failedTasks: [], issues: [] }, null, true)).toBe(1);
+  });
+
+  test("implement publishes only when the caller supplies explicit authority", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-implement-authority-"));
+    writeFileSync(join(repo, "sigil.config.json"), JSON.stringify(DEFAULT_SIGIL_CONFIG));
+    const result = {
+      branch: "feature/change",
+      prBody: "Ready",
+      reviewBlocking: false,
+      issues: [],
+      failedTasks: [],
+      noopTasks: [],
+    };
+    let publications = 0;
+    const effects = {
+      implement: async () => result,
+      publish: async () => {
+        publications += 1;
+        return { push: { ok: true, log: "" }, pr: { ok: true, log: "" } };
+      },
+    };
+
+    expect(await implementCommandWith(["--repo", repo, "--task-file", "graph.json"], effects)).toBe(0);
+    expect(publications).toBe(0);
+    expect(await implementCommandWith(["--repo", repo, "--task-file", "graph.json", "--publish"], effects)).toBe(0);
+    expect(publications).toBe(1);
   });
 
   test("review exits 1 when review reports issues without unresolved highs", () => {

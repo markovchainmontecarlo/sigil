@@ -1,4 +1,4 @@
-import { softwareChange } from "../src/index.js";
+import { softwareChange } from "sigil";
 
 export async function buildChange(
   repo: string,

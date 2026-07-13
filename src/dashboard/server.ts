@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 
+import { packageResource } from "../prompts.js";
 import { createDashboardSnapshotReader } from "./snapshot.js";
 import { createArchiveStore } from "./archive-store.js";
 import type { DashboardSnapshot } from "./types.js";
@@ -20,7 +20,6 @@ export type DashboardServer = {
   stop(): void;
 };
 
-const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), "public");
 const SECURITY_HEADERS = {
   "Cache-Control": "no-store",
   "Content-Security-Policy": "default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
@@ -165,7 +164,7 @@ function eventStream(
 }
 
 async function asset(name: string, contentType: string): Promise<Response> {
-  return response(await readFile(join(PUBLIC_DIR, name)), 200, contentType);
+  return response(await readFile(packageResource(`dashboard/public/${name}`)), 200, contentType);
 }
 
 function json(value: unknown): Response {

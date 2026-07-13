@@ -8,7 +8,8 @@ import { plan } from "../workflows/software-change/planning/index.js";
 import { review } from "../workflows/software-change/review/index.js";
 import { softwareChange } from "../workflows/software-change/workflow.js";
 import { compileYamlWorkflow } from "./compile.js";
-import { parseYamlWorkflow, validateYamlWorkflowFile } from "./validate.js";
+import { validateYamlWorkflowFile } from "./validate-file.js";
+import { parseYamlWorkflow } from "./validate.js";
 import type { CompiledYamlWorkflow, YamlRunResult, YamlStep } from "./types.js";
 
 const OUTPUT_REF = /\$([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)\.output(?:\.([a-zA-Z0-9_.-]+))?/g;
@@ -172,5 +173,6 @@ export async function runYamlWorkflowFile(file: string, repo: string, ctxOverrid
   return runCompiledWorkflow(compiled, repo, ctx);
 }
 
-export { parseYamlWorkflow, validateYamlWorkflowFile } from "./validate.js";
+export { validateYamlWorkflowFile } from "./validate-file.js";
+export { parseYamlWorkflow } from "./validate.js";
 export { compileYamlWorkflow } from "./compile.js";

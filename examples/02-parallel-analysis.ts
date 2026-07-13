@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { sigil } from "../src/index.js";
+import { sigil } from "sigil";
 
 const AnalysisReport = z.object({
   summary: z.string(),

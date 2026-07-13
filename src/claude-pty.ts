@@ -5,8 +5,7 @@ import { delimiter, join } from "node:path";
 import { z } from "zod";
 
 import type { AgentBinding } from "./config.js";
-import type { AgentOptions, AgentPromptOptions, AgentRuntimeMetadata, SigilAgent } from "./agents.js";
-import { createTextAgentFromGenerate } from "./agents.js";
+import { createTextAgentFromGenerate, type AgentOptions, type AgentPromptOptions, type AgentRuntimeMetadata, type SigilAgent } from "./agent.js";
 import { OwnedPtyProcess, type OwnedPtyProcessOptions } from "./owned-pty-process.js";
 import { ProviderError } from "./provider-failure.js";
 import { resolveExecutionPolicy } from "./provider-capabilities.js";
