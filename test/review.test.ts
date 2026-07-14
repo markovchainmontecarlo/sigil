@@ -49,7 +49,7 @@ function fixture(
     evals: {},
     workspace: {},
     context: [],
-    plan: { planners: [reviewers[0]], synthesizer: reviewers[0] },
+    plan: { planners: [reviewers[0]], synthesizer: reviewers[0], reviewer: reviewers[0], semanticReviewLimit: 2 },
     implement: { coder: "coder", sessionTaskLimit: 5, repairLimit, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers, synthesizer: reviewers.length > 1 ? "synthesizer" : reviewers[0], followUpReviews },
   }, null, 2));

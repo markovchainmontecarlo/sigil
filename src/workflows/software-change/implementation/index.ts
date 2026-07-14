@@ -4,15 +4,21 @@ import { join } from "node:path";
 import { promptAgentTurn, runFreshAgentOperation } from "../../../agent-operation.js";
 import { loadConfig, type SigilConfig } from "../../../config.js";
 import { taskGraphDigest, validateTaskGraph, type Task, type TaskGraph } from "../../../contracts/task-graph.js";
-import { changedPaths, checkoutFreshBranch, commitAll, git, isCleanTree, type CommitResult } from "../../../git.js";
-import { loadConfiguredContext, renderContextBlock, sigil, type RichSigilAgent, type SigilContext } from "../../../context.js";
+import { changedPaths, checkoutFreshBranch, commitAll, git, isCleanTree, repositoryPathsDigest, type CommitResult } from "../../../git.js";
+import { sigil, type RichSigilAgent, type SigilContext } from "../../../context.js";
 import { implementationPrompts } from "./prompts.js";
 import { CoderSessionLifecycle } from "./coder-session.js";
 import {
-  compareWithBaseline,
+  compareResultWithBaseline,
+  clearTestReport,
   establishBaseline,
+  refreshVerificationReceipt,
+  restoreBaseline,
+  runTaskVerification,
+  serializeBaseline,
   runGateSet,
   runBuildAndTest,
+  verificationMatchesCurrentState,
   type Baseline,
   type VerificationResult,
 } from "../../../verification.js";
@@ -50,16 +56,23 @@ async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
-function taskPrompt(task: Task, contextBlock: string, handoff: string): string {
+function taskPrompt(task: Task): string {
   return implementationPrompts.task({
-    PREAMBLE: implementationPrompts.preamble(),
     TASK_ID: task.id,
     TASK_TITLE: task.title,
     TASK_SUMMARY: task.summary,
-    CONTEXT: contextBlock,
-    HANDOFF: handoff,
-    DIAGRAMS: task.diagrams.join("\n"),
+    DEPENDENCIES: task.dependencies.map((dependency) => `- ${dependency}`).join("\n") || "- none",
     ACCEPTANCE: task.acceptanceCriteria.map((c) => `- ${c}`).join("\n"),
+    INTERFACES: [
+      "Produces:",
+      ...task.interfaces.produces.map((output) => `- ${output.name}: ${output.description}`),
+      "Consumes:",
+      ...task.interfaces.consumes.map((input) => `- ${input.taskId}.${input.name}: ${input.description}`),
+    ].join("\n"),
+    VERIFICATION: task.verification.map((check) => check.kind === "command"
+      ? `- command: ${check.command}\n  expected: ${check.expected}`
+      : `- manual: ${check.procedure}\n  expected: ${check.expected}\n  rationale: ${check.rationale}`).join("\n"),
+    DIAGRAMS: task.diagrams.join("\n") || "- none",
     FILES: task.files.map((f) => `- ${f.action} ${f.path}\n${f.details.map((d) => `  - ${d}`).join("\n")}`).join("\n"),
   });
 }
@@ -72,16 +85,60 @@ function coderSessionHandoff(
 ): string {
   const completed = Object.entries(checkpoint.tasks)
     .filter(([, state]) => state.status === "completed")
-    .map(([id, state]) => `- ${id}: ${state.verifiedCommit ?? "verified commit unavailable"}`)
-    .join("\n");
+    .map(([id, state]) => {
+      const task = graph.tasks.find((candidate) => candidate.id === id);
+      const outputs = task?.interfaces.produces.map((output) => output.name).join(", ") || "none";
+      return `- ${id}: ${state.verifiedCommit ?? "verified commit unavailable"}; produced interfaces: ${outputs}`;
+    });
+  if (!completed.length) return "";
 
   return implementationPrompts.sessionHandoff({
-    GOAL: graph.goal ?? graph.project,
+    GOAL: graph.goal,
     GRAPH_DIGEST: checkpoint.graphDigest,
     BRANCH: branch,
     HEAD: head,
-    COMPLETED_TASKS: completed || "- none",
+    COMPLETED_TASKS: completed.join("\n"),
   });
+}
+
+type SessionContextInput = {
+  config: SigilConfig;
+  graph: TaskGraph;
+  checkpoint: ImplementationCheckpoint;
+  branch: string;
+  head: string;
+  instructions?: string;
+};
+
+async function sessionContextPrompt(
+  ctx: SigilContext,
+  input: SessionContextInput,
+): Promise<string> {
+  const configuredContext = await ctx.renderContextBlock(input.config.context);
+  const context = implementationContextBlock(configuredContext, input.instructions);
+  const handoff = coderSessionHandoff(input.graph, input.checkpoint, input.branch, input.head);
+
+  return implementationPrompts.sessionContext({
+    PREAMBLE: implementationPrompts.preamble(),
+    GOAL: input.graph.goal,
+    ARCHITECTURE: input.graph.architecture,
+    CONSTRAINTS: input.graph.constraints.map((constraint) => `- ${constraint}`).join("\n") || "- none",
+    NON_GOALS: input.graph.nonGoals.map((nonGoal) => `- ${nonGoal}`).join("\n") || "- none",
+    CONTEXT: context,
+    HANDOFF: handoff,
+  });
+}
+
+async function coderSessionInitializationPrompt(
+  ctx: SigilContext,
+  input: SessionContextInput,
+): Promise<string> {
+  const context = await sessionContextPrompt(ctx, input);
+  return [context, implementationPrompts.taskInstructions()].join("\n\n");
+}
+
+function taskTurnPrompt(initialization: string, task: Task): string {
+  return [initialization, taskPrompt(task)].filter(Boolean).join("\n\n");
 }
 
 function runInstructionsBlock(instructions: string | undefined): string {
@@ -103,7 +160,7 @@ function implementationContextBlock(configuredContext: string, instructions: str
 
 function reviewContext(graph: TaskGraph, instructions: string | undefined): string {
   return [
-    graph.goal ?? "",
+    graph.goal,
     graph.tasks.map((t) => `${t.id}: ${t.title}`).join("\n"),
     runInstructionsBlock(instructions),
   ].filter(Boolean).join("\n\n");
@@ -154,8 +211,19 @@ async function repair(
 async function commitTask(repo: string, task: Task, issues: string[]): Promise<CommitResult> {
   const result = await commitAll(repo, `${task.id}: ${task.title}`);
   if (result.status === "failed") issues.push(`commit failed for ${task.id}: ${result.log}`);
-  if (result.hooksBypassed) issues.push(`commit for ${task.id} bypassed hooks`);
   return result;
+}
+
+async function runTaskGates(ctx: SigilContext, task: Task): Promise<VerificationResult> {
+  const focused = await runTaskVerification(ctx, task);
+  if (focused.gates.length && !focused.ok) return focused;
+
+  const global = await runBuildAndTest(ctx);
+  return {
+    ok: global.ok,
+    gates: [...focused.gates, ...global.gates],
+    evidence: [focused.evidence, global.evidence].filter(Boolean).join("\n"),
+  };
 }
 
 function noopSatisfied(text: string): boolean {
@@ -256,7 +324,7 @@ async function recoverNoop(
       "configured build/test gates",
       verdict,
     );
-    const gate = await runBuildAndTest(ctx);
+    const gate = await runTaskGates(ctx, task);
     if (!gate.ok) continue;
     const commit = await commitAll(repo, `${task.id}: ${task.title}`);
     if (commit.status === "failed") {
@@ -288,9 +356,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
     const currentBranch = (await git(input.repo, ["branch", "--show-current"])).stdout.trim();
     if (currentBranch !== branch) throw new Error(`implementation checkpoint branch mismatch: expected ${branch}, found ${currentBranch}`);
     await verifyCompletedTasks(input.repo, checkpoint);
-    const resumedBaseline = await establishBaseline(ctx, input.repo, config);
-    if ("kind" in resumedBaseline) throw new Error(`resume baseline could not be established: ${resumedBaseline.evidence}`);
-    baseline = resumedBaseline;
+    baseline = restoreBaseline(checkpoint.baseline);
     const running = Object.entries(checkpoint.tasks).find(([, state]) => state.recoveryBundle !== undefined);
     if (running) {
       const [taskId, state] = running;
@@ -323,13 +389,18 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
       return { branch, prBody: prBody(issues, true), reviewBlocking: true, issues, failedTasks: graph.tasks.map((task) => task.id), noopTasks: [] };
     }
     baseline = baselineResult;
-    checkpoint = newCheckpoint(graph, taskGraphDigest(graph), branch, baseBranch, baselineSha);
+    checkpoint = newCheckpoint(
+      graph,
+      taskGraphDigest(graph),
+      branch,
+      baseBranch,
+      baselineSha,
+      serializeBaseline(baseline),
+    );
     await writeAtomicJson(checkpointFile, checkpoint);
   }
 
   const byId = Object.fromEntries(graph.tasks.map((task) => [task.id, task]));
-  const loadedContext = await loadConfiguredContext(input.repo, config.context);
-  const contextBlock = implementationContextBlock(renderContextBlock(loadedContext), input.instructions);
   const issues: string[] = [];
   const noopTasks: string[] = [];
   let interrupted = false;
@@ -344,6 +415,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
     if (!id) break;
     const task = byId[id];
     const state = checkpoint.tasks[id];
+    const taskStarted = performance.now();
     const taskBase = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
     state.status = "running";
     state.attempts++;
@@ -356,109 +428,136 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
     let noopVerdict: string | undefined;
     const session = await coderSessions.acquire();
     const coder = session.agent;
-    const handoff = session.rotated
-      ? coderSessionHandoff(graph, checkpoint, branch, taskBase)
+    const initialization = session.newSession
+      ? await coderSessionInitializationPrompt(ctx, {
+          config,
+          graph,
+          checkpoint,
+          branch,
+          head: taskBase,
+          instructions: input.instructions,
+        })
       : "";
+    const prompt = taskTurnPrompt(initialization, task);
+    await ctx.observe("coder-prompt-prepared", {
+      task: id,
+      kind: session.newSession ? "session-task" : "task",
+      characters: String(prompt.length),
+    });
+
     try {
-          reply = await promptWithRecovery(
-            ctx,
-            coder,
-            config,
-            `task:${id}:implement`,
-            taskPrompt(task, contextBlock, handoff),
-          );
-          let gate = await runBuildAndTest(ctx);
-          for (let attempt = 0; !gate.ok && attempt < config.implement.repairLimit; attempt++) {
-            reply = await repair(ctx, coder, config, `task:${id}:gate-repair`, `Task ${id} failed build/test. Follow relevant repository dependencies while preserving task intent.`, "configured build/test gates", gate.evidence);
-            gate = await runBuildAndTest(ctx);
-          }
-          if (!gate.ok) {
-            state.status = "failed";
-            state.evidence = gate.evidence;
-            issues.push(`task ${id} failed gates: ${gate.evidence}`);
-            await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "build-test", gate.evidence);
-            await writeAtomicJson(checkpointFile, checkpoint);
-            await ctx.observe("task-failed", { task: id, stage: "build-test" });
-            await coderSessions.invalidate("task-gates-exhausted");
-            continue;
-          }
+      reply = await promptWithRecovery(
+        ctx,
+        coder,
+        config,
+        `task:${id}:implement`,
+        prompt,
+      );
+      let gate = await runTaskGates(ctx, task);
+      for (let attempt = 0; !gate.ok && attempt < config.implement.repairLimit; attempt++) {
+        reply = await repair(
+          ctx,
+          coder,
+          config,
+          `task:${id}:gate-repair`,
+          `Task ${id} failed focused verification or repository gates. Follow relevant repository dependencies while preserving task intent.`,
+          "focused task verification and configured build/test gates",
+          gate.evidence,
+        );
+        gate = await runTaskGates(ctx, task);
+      }
+      if (!gate.ok) {
+        state.status = "failed";
+        state.evidence = gate.evidence;
+        issues.push(`task ${id} failed gates: ${gate.evidence}`);
+        await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "build-test", gate.evidence);
+        await writeAtomicJson(checkpointFile, checkpoint);
+        await ctx.observe("task-failed", { task: id, stage: "build-test" });
+        await coderSessions.invalidate("task-gates-exhausted");
+        continue;
+      }
 
+      await recordTaskScopeIssues(input.repo, task, config, issues);
+      let commit = await commitTask(input.repo, task, issues);
+      if (commit.status === "nothing" && task.files.length) {
+        reply = await repair(ctx, coder, config, `task:${id}:empty-repair`, `Task ${id} changed no files. Do the work now or cite file:line evidence it is already done.`, "configured build/test gates", "no files changed");
+        gate = await runTaskGates(ctx, task);
+        if (gate.ok) {
           await recordTaskScopeIssues(input.repo, task, config, issues);
-          let commit = await commitTask(input.repo, task, issues);
-          if (commit.status === "nothing" && task.files.length) {
-            reply = await repair(ctx, coder, config, `task:${id}:empty-repair`, `Task ${id} changed no files. Do the work now or cite file:line evidence it is already done.`, "configured build/test gates", "no files changed");
-            gate = await runBuildAndTest(ctx);
-            if (gate.ok) {
-              await recordTaskScopeIssues(input.repo, task, config, issues);
-              commit = await commitTask(input.repo, task, issues);
-            }
-          }
-
-          if (commit.status === "failed") {
-            state.status = "failed";
-            state.evidence = commit.log;
-            await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "commit", commit.log);
-            await writeAtomicJson(checkpointFile, checkpoint);
-            await ctx.observe("task-failed", { task: id, stage: "commit" });
-            await coderSessions.invalidate("task-commit-failed");
-            continue;
-          }
-
-          if (commit.status === "nothing" && task.files.length) {
-            const recovered = await recoverNoop(ctx, coder, config, input.repo, task, reply);
-            reply = recovered.reply;
-            noopVerdict = recovered.verdict;
-            if (recovered.status === "satisfied") noopTasks.push(id);
-            if (recovered.status === "failed") {
-              state.status = "failed";
-              state.evidence = recovered.evidence;
-              issues.push(recovered.evidence);
-              await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "noop-recovery", recovered.evidence);
-              await ctx.observe("task-failed", { task: id, stage: "noop-recovery" });
-              await coderSessions.invalidate("task-noop-recovery-exhausted");
-            }
-          }
-          if (state.status !== "failed") {
-            state.status = "completed";
-            state.verifiedCommit = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
-            await writeAtomicJson(checkpointFile, checkpoint);
-            await ctx.observe("task-completed", { task: id });
-          }
-        } catch (error) {
-          const evidence = error instanceof Error ? error.message : String(error);
-          if (providerInterrupted(error)) {
-            try {
-              state.recoveryBundle = await captureRecoveryBundle(input.repo, ctx.artifacts.path(`implementation/recovery/${encodeURIComponent(id)}`), {
-                graphDigest: checkpoint.graphDigest, branch, baseBranch, baselineCommit: checkpoint.baselineCommit, taskId: id, taskBase,
-              });
-              state.status = "pending";
-              if (error.failure.provider?.code === "capacity_exhausted") {
-                state.attempts = Math.max(0, state.attempts - 1);
-              }
-              state.evidence = evidence;
-              await discardTaskWork(input.repo, taskBase);
-              await writeAtomicJson(checkpointFile, checkpoint);
-              interrupted = true;
-              await ctx.observe("task-interrupted", { task: id, stage: "provider" });
-            } catch (bundleError) {
-              state.status = "failed";
-              state.evidence = `provider interruption recovery capture failed: ${bundleError instanceof Error ? bundleError.message : String(bundleError)}`;
-              issues.push(`task ${id} ${state.evidence}`);
-              await writeAtomicJson(checkpointFile, checkpoint);
-            }
-            await coderSessions.invalidate("provider-interrupted");
-          } else {
-            state.status = "failed";
-            state.evidence = evidence;
-            issues.push(`task ${id} operation failed: ${evidence}`);
-            await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "operation", evidence);
-            await writeAtomicJson(checkpointFile, checkpoint);
-            await ctx.observe("task-failed", { task: id, stage: "operation" });
-            await coderSessions.invalidate("task-operation-failed");
-          }
-        } finally {
-          await persistTaskReply(ctx.artifacts.path, task, reply, noopVerdict, issues);
+          commit = await commitTask(input.repo, task, issues);
         }
+      }
+
+      if (commit.status === "failed") {
+        state.status = "failed";
+        state.evidence = commit.log;
+        await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "commit", commit.log);
+        await writeAtomicJson(checkpointFile, checkpoint);
+        await ctx.observe("task-failed", { task: id, stage: "commit" });
+        await coderSessions.invalidate("task-commit-failed");
+        continue;
+      }
+
+      if (commit.status === "nothing" && task.files.length) {
+        const recovered = await recoverNoop(ctx, coder, config, input.repo, task, reply);
+        reply = recovered.reply;
+        noopVerdict = recovered.verdict;
+        if (recovered.status === "satisfied") noopTasks.push(id);
+        if (recovered.status === "failed") {
+          state.status = "failed";
+          state.evidence = recovered.evidence;
+          issues.push(recovered.evidence);
+          await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "noop-recovery", recovered.evidence);
+          await ctx.observe("task-failed", { task: id, stage: "noop-recovery" });
+          await coderSessions.invalidate("task-noop-recovery-exhausted");
+        }
+      }
+      if (state.status !== "failed") {
+        state.status = "completed";
+        state.verifiedCommit = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
+        await writeAtomicJson(checkpointFile, checkpoint);
+        await ctx.observe("task-completed", { task: id });
+      }
+    } catch (error) {
+      const evidence = error instanceof Error ? error.message : String(error);
+      if (providerInterrupted(error)) {
+        try {
+          state.recoveryBundle = await captureRecoveryBundle(input.repo, ctx.artifacts.path(`implementation/recovery/${encodeURIComponent(id)}`), {
+            graphDigest: checkpoint.graphDigest, branch, baseBranch, baselineCommit: checkpoint.baselineCommit, taskId: id, taskBase,
+          });
+          state.status = "pending";
+          if (error.failure.provider?.code === "capacity_exhausted") {
+            state.attempts = Math.max(0, state.attempts - 1);
+          }
+          state.evidence = evidence;
+          await discardTaskWork(input.repo, taskBase);
+          await writeAtomicJson(checkpointFile, checkpoint);
+          interrupted = true;
+          await ctx.observe("task-interrupted", { task: id, stage: "provider" });
+        } catch (bundleError) {
+          state.status = "failed";
+          state.evidence = `provider interruption recovery capture failed: ${bundleError instanceof Error ? bundleError.message : String(bundleError)}`;
+          issues.push(`task ${id} ${state.evidence}`);
+          await writeAtomicJson(checkpointFile, checkpoint);
+        }
+        await coderSessions.invalidate("provider-interrupted");
+      } else {
+        state.status = "failed";
+        state.evidence = evidence;
+        issues.push(`task ${id} operation failed: ${evidence}`);
+        await preserveAndRestoreTaskFailure(ctx, input.repo, task, taskBase, "operation", evidence);
+        await writeAtomicJson(checkpointFile, checkpoint);
+        await ctx.observe("task-failed", { task: id, stage: "operation" });
+        await coderSessions.invalidate("task-operation-failed");
+      }
+    } finally {
+      await persistTaskReply(ctx.artifacts.path, task, reply, noopVerdict, issues);
+      await ctx.observe("task-finished", {
+        task: id,
+        outcome: state.status,
+        durationMs: String(Math.round(performance.now() - taskStarted)),
+      });
+    }
     if (interrupted) break;
   }
 
@@ -473,7 +572,16 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
     return { branch, prBody: prBody(issues, true), reviewBlocking: true, issues, failedTasks, noopTasks };
   }
 
-  const finalVerification = await verifyFinalWithRepair(ctx, input.repo, config, baseline, "final-verification");
+  const finalVerification = await verifyFinalWithRepair(ctx, {
+    repo: input.repo,
+    config,
+    baseline,
+    stage: "final-verification",
+    graph,
+    checkpoint,
+    branch,
+    instructions: input.instructions,
+  });
   if (!finalVerification.ok) {
     issues.push(finalVerification.evidence);
     return { branch, prBody: prBody(issues, true), reviewBlocking: true, issues, failedTasks, noopTasks };
@@ -488,7 +596,17 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
       context: reviewContext(graph, input.instructions),
     });
     issues.push(...reviewResult.issues.map((issue) => `review: ${issue}`));
-    const reviewVerification = await verifyFinalWithRepair(ctx, input.repo, config, baseline, "post-review-verification");
+    const reviewVerification = await verifyFinalWithRepair(ctx, {
+      repo: input.repo,
+      config,
+      baseline,
+      stage: "post-review-verification",
+      graph,
+      checkpoint,
+      branch,
+      instructions: input.instructions,
+      candidate: reviewResult.verification ?? finalVerification.verification,
+    });
     if (!reviewVerification.ok) issues.push(reviewVerification.evidence);
     reviewBlocking = !reviewResult.valid
       || reviewResult.issues.length > 0
@@ -508,54 +626,110 @@ async function runFinalVerification(
   config: SigilConfig,
   baseline: Baseline,
 ): Promise<VerificationResult> {
-  const regression = await compareWithBaseline(ctx, repo, config, baseline);
-  const extended = await runGateSet(ctx, ["e2e", "verify"]);
-  const gates = [...regression.gates, ...extended.gates];
-  const configured = gates.filter((gate) => !gate.result.skipped);
-  return {
-    ok: configured.length > 0 && configured.every((gate) => gate.result.ok),
-    gates,
-    evidence: [regression.evidence, extended.evidence].filter(Boolean).join("\n"),
-  };
+  await clearTestReport(config, repo);
+  const current = await runGateSet(ctx, FINAL_VERIFICATION_GATES);
+  return compareResultWithBaseline(repo, config, baseline, current);
 }
+
+const FINAL_VERIFICATION_GATES = ["build", "test", "e2e", "verify"] as const;
+
+type FinalVerificationRepairInput = {
+  repo: string;
+  config: SigilConfig;
+  baseline: Baseline;
+  stage: string;
+  graph: TaskGraph;
+  checkpoint: ImplementationCheckpoint;
+  branch: string;
+  instructions?: string;
+  candidate?: VerificationResult;
+};
 
 async function verifyFinalWithRepair(
   ctx: SigilContext,
-  repo: string,
-  config: SigilConfig,
-  baseline: Baseline,
-  stage: string,
-): Promise<{ ok: true } | { ok: false; evidence: string }> {
-  const checkpoint = (await git(repo, ["rev-parse", "HEAD"])).stdout.trim();
-  let verification = await runFinalVerification(ctx, repo, config, baseline);
+  input: FinalVerificationRepairInput,
+): Promise<{ ok: true; verification: VerificationResult } | { ok: false; evidence: string }> {
+  const repairBase = (await git(input.repo, ["rev-parse", "HEAD"])).stdout.trim();
+  let verification = input.candidate?.ok
+    && await verificationMatchesCurrentState(ctx, input.candidate, FINAL_VERIFICATION_GATES)
+    ? input.candidate
+    : await runFinalVerification(ctx, input.repo, input.config, input.baseline);
   if (verification.ok) {
-    const commit = await commitAll(repo, stage === "post-review-verification" ? "review fixes" : `${stage} repair`);
-    return commit.status === "failed" ? { ok: false, evidence: commit.log } : { ok: true };
+    return commitVerifiedResult(ctx, input, verification);
   }
 
-  await using fixer = ctx.agent(config.implement.coder);
-  for (let attempt = 1; attempt <= config.implement.repairLimit; attempt++) {
-    await ctx.observe("repair-started", { stage, attempt: String(attempt) });
+  const initialization = await sessionContextPrompt(ctx, {
+    config: input.config,
+    graph: input.graph,
+    checkpoint: input.checkpoint,
+    branch: input.branch,
+    head: repairBase,
+    instructions: input.instructions,
+  });
+  await using fixer = ctx.agent(input.config.implement.coder);
+  for (let attempt = 1; attempt <= input.config.implement.repairLimit; attempt++) {
+    const repairContext = [
+      attempt === 1 ? initialization : "",
+      "Diagnose whether each failure belongs to product code, test harness, environment, configuration, or dependencies. Fix the root cause without weakening verification.",
+    ].filter(Boolean).join("\n\n");
+    await ctx.observe("repair-started", { stage: input.stage, attempt: String(attempt) });
     await repair(
       ctx,
       fixer,
-      config,
-      `${stage}:repair`,
-      "Diagnose whether each failure belongs to product code, test harness, environment, configuration, or dependencies. Fix the root cause without weakening verification.",
+      input.config,
+      `${input.stage}:repair`,
+      repairContext,
       "configured build, test, e2e, and verify gates",
       verification.evidence,
     );
-    verification = await runFinalVerification(ctx, repo, config, baseline);
-    await ctx.observe("repair-completed", { stage, attempt: String(attempt), outcome: verification.ok ? "passed" : "failed" });
+    verification = await runFinalVerification(ctx, input.repo, input.config, input.baseline);
+    await ctx.observe("repair-completed", {
+      stage: input.stage,
+      attempt: String(attempt),
+      outcome: verification.ok ? "passed" : "failed",
+    });
     if (!verification.ok) continue;
-    const commit = await commitAll(repo, stage === "post-review-verification" ? "review fixes" : `${stage} repair`);
-    return commit.status === "failed" ? { ok: false, evidence: commit.log } : { ok: true };
+    return commitVerifiedResult(ctx, input, verification);
   }
 
-  await preserveFailedRepair(ctx, repo, stage, verification.evidence);
-  await git(repo, ["reset", "--hard", checkpoint]);
-  await git(repo, ["clean", "-fd"]);
-  return { ok: false, evidence: `${stage} failed: ${verification.evidence}` };
+  await preserveFailedRepair(ctx, input.repo, input.stage, verification.evidence);
+  await git(input.repo, ["reset", "--hard", repairBase]);
+  await git(input.repo, ["clean", "-fd"]);
+  return { ok: false, evidence: `${input.stage} failed: ${verification.evidence}` };
+}
+
+async function commitVerifiedResult(
+  ctx: SigilContext,
+  input: FinalVerificationRepairInput,
+  verification: VerificationResult,
+): Promise<{ ok: true; verification: VerificationResult } | { ok: false; evidence: string }> {
+  const paths = await changedPaths(input.repo);
+  if (!paths.length) {
+    return {
+      ok: true,
+      verification: await refreshVerificationReceipt(ctx, verification, FINAL_VERIFICATION_GATES),
+    };
+  }
+
+  const before = await repositoryPathsDigest(input.repo, paths);
+  const commit = await commitAll(
+    input.repo,
+    input.stage === "post-review-verification" ? "review fixes" : `${input.stage} repair`,
+  );
+  if (commit.status === "failed") return { ok: false, evidence: commit.log };
+
+  const committedPaths = (await git(input.repo, ["diff-tree", "--no-commit-id", "--name-only", "--find-renames", "--find-copies", "-r", "HEAD^", "HEAD"])).stdout
+    .split("\n")
+    .filter(Boolean)
+    .sort();
+  const after = await repositoryPathsDigest(input.repo, paths);
+  if (before !== after || committedPaths.join("\0") !== [...paths].sort().join("\0") || !(await isCleanTree(input.repo))) {
+    return { ok: false, evidence: `${input.stage} commit changed the verified repository contents` };
+  }
+  return {
+    ok: true,
+    verification: await refreshVerificationReceipt(ctx, verification, FINAL_VERIFICATION_GATES),
+  };
 }
 
 async function preserveAndRestoreTaskFailure(

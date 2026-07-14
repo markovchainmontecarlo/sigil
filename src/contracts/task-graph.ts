@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 
 import { z } from "zod";
 
-export const CONTRACT_VERSION = 1;
+export const CONTRACT_VERSION = 2;
 
 export const TaskFileSchema = z.object({
   path: z.string().min(1),
@@ -11,12 +11,48 @@ export const TaskFileSchema = z.object({
   details: z.array(z.string().min(1)).min(1),
 }).strict();
 
+export const ProducedInterfaceSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().min(1),
+}).strict();
+
+export const ConsumedInterfaceSchema = z.object({
+  taskId: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().min(1),
+}).strict();
+
+export const TaskInterfacesSchema = z.object({
+  produces: z.array(ProducedInterfaceSchema),
+  consumes: z.array(ConsumedInterfaceSchema),
+}).strict();
+
+export const CommandVerificationSchema = z.object({
+  kind: z.literal("command"),
+  command: z.string().min(1),
+  expected: z.string().min(1),
+}).strict();
+
+export const ManualVerificationSchema = z.object({
+  kind: z.literal("manual"),
+  procedure: z.string().min(1),
+  expected: z.string().min(1),
+  rationale: z.string().min(1),
+}).strict();
+
+export const TaskVerificationSchema = z.discriminatedUnion("kind", [
+  CommandVerificationSchema,
+  ManualVerificationSchema,
+]);
+
 export const TaskSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   summary: z.string().min(1),
   dependencies: z.array(z.string().min(1)).default([]),
+  interfaces: TaskInterfacesSchema,
   acceptanceCriteria: z.array(z.string().min(1)).min(1),
+  verification: z.array(TaskVerificationSchema).min(1),
   diagrams: z.array(z.string()).default([]),
   files: z.array(TaskFileSchema),
 }).strict();
@@ -25,7 +61,10 @@ export const TaskGraphSchema = z.object({
   $schema: z.string().min(1).optional(),
   contractVersion: z.literal(CONTRACT_VERSION),
   project: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
-  goal: z.string().min(1).optional(),
+  goal: z.string().min(1),
+  architecture: z.string().min(1),
+  constraints: z.array(z.string().min(1)),
+  nonGoals: z.array(z.string().min(1)),
   tasks: z.array(TaskSchema).min(1),
 }).strict();
 
@@ -36,6 +75,12 @@ export const taskGraphJsonSchema = z.toJSONSchema(TaskGraphSchema, {
 
 export type FileAction = z.input<typeof TaskFileSchema>["action"];
 export type TaskFile = z.output<typeof TaskFileSchema>;
+export type ProducedInterface = z.output<typeof ProducedInterfaceSchema>;
+export type ConsumedInterface = z.output<typeof ConsumedInterfaceSchema>;
+export type TaskInterfaces = z.output<typeof TaskInterfacesSchema>;
+export type CommandVerification = z.output<typeof CommandVerificationSchema>;
+export type ManualVerification = z.output<typeof ManualVerificationSchema>;
+export type TaskVerification = z.output<typeof TaskVerificationSchema>;
 export type Task = z.output<typeof TaskSchema>;
 export type TaskGraph = Omit<z.output<typeof TaskGraphSchema>, "$schema">;
 
@@ -97,8 +142,30 @@ export function checkTaskGraph(raw: unknown, options: TaskGraphCheckOptions = {}
   });
 
   for (const task of tasks) {
+    const produced = new Set<string>();
+    for (const output of task.interfaces.produces) {
+      if (produced.has(output.name)) {
+        errors.push(`task ${task.id} has duplicate produced interface: ${output.name}`);
+      }
+      produced.add(output.name);
+    }
+
     for (const dependency of task.dependencies) {
       if (!ids.has(dependency)) errors.push(`task ${task.id} depends on unknown task: ${dependency}`);
+      if (!task.interfaces.consumes.some((input) => input.taskId === dependency)) {
+        errors.push(`task ${task.id} dependency ${dependency} has no consumed interface`);
+      }
+    }
+
+    for (const input of task.interfaces.consumes) {
+      if (!task.dependencies.includes(input.taskId)) {
+        errors.push(`task ${task.id} consumes from undeclared dependency ${input.taskId}`);
+        continue;
+      }
+      const producer = tasks.find((candidate) => candidate.id === input.taskId);
+      if (producer && !producer.interfaces.produces.some((output) => output.name === input.name)) {
+        errors.push(`task ${task.id} consumes unknown interface ${input.taskId}.${input.name}`);
+      }
     }
   }
 

@@ -10,6 +10,7 @@ import {
 } from "./claude-profiles.js";
 import {
   profileLedger,
+  meteredUsage,
   readCodexProfiles,
   readCodexRoutingState,
   updateCodexProfiles,
@@ -17,7 +18,7 @@ import {
   type CodexProfile,
 } from "./codex-profiles.js";
 import { readCodexAccountStatus } from "./codex-rate-limits.js";
-import { circuitIsOpen } from "./codex-router.js";
+import { circuitIsOpen, type SubscriptionCapacity } from "./codex-router.js";
 import { CODEX_PROVIDER, loadConfig, resolveAgentBinding } from "./config.js";
 import {
   qualifiedProfileIdentity,
@@ -35,6 +36,14 @@ type CommonProfile =
   | { provider: "claude"; name: string; profile: ClaudeProfile };
 
 type OutputRecord = { version: 1; kind: string; [key: string]: unknown };
+type AvailableCapacity = Extract<SubscriptionCapacity, { kind: "available" }> & {
+  reservedPercentage: number;
+  availablePercentage: number;
+};
+type CapacityEvidence =
+  | { kind: "metered" }
+  | Exclude<SubscriptionCapacity, { kind: "available" }>
+  | AvailableCapacity;
 
 export async function runProfileCommand(args: string[]): Promise<number> {
   const [action, ...rest] = args;
@@ -191,7 +200,24 @@ async function storedState(selected: CommonProfile): Promise<Record<string, unkn
   const state = await readCodexRoutingState();
   const reservations = Object.values(state.reservations).filter((entry) => entry.profile === selected.name);
   const circuit = state.circuits[selected.name];
-  return { ledger: profileLedger(state, selected.name), activeAssignments: reservations.length, reservedHeadroomPercentage: reservations.reduce((sum, entry) => sum + (entry.reservedHeadroomPercentage ?? 0), 0), circuit: circuit ? { state: circuitIsOpen(circuit) ? "open" : "tracking", reason: circuit.reason } : { state: "closed" } };
+  const activity = profileLedger(state, selected.name);
+  const usage = selected.profile.profileClass === "metered-api"
+    ? { meteredUsage: meteredUsage(state, selected.name) }
+    : {};
+  const reservedHeadroomPercentage = reservations.reduce(
+    (sum, entry) => sum + (entry.reservedHeadroomPercentage ?? 0),
+    0,
+  );
+  const circuitState = circuit
+    ? { state: circuitIsOpen(circuit) ? "open" : "tracking", reason: circuit.reason }
+    : { state: "closed" };
+  return {
+    activity,
+    ...usage,
+    activeAssignments: reservations.length,
+    reservedHeadroomPercentage,
+    circuit: circuitState,
+  };
 }
 
 async function statusRecord(selected: CommonProfile): Promise<Record<string, unknown>> {
@@ -200,10 +226,46 @@ async function statusRecord(selected: CommonProfile): Promise<Record<string, unk
   const profile = selected.profile;
   const routing = await readCodexRoutingState();
   const reservations = Object.values(routing.reservations).filter((entry) => entry.profile === selected.name);
-  const observed = reservations.find((entry) => entry.observedRemainingPercentage !== undefined)?.observedRemainingPercentage;
   const reserved = reservations.reduce((sum, entry) => sum + (entry.reservedHeadroomPercentage ?? 0), 0);
-  const capacity = profile.profileClass === "metered-api" ? "metered" : observed === undefined ? "unknown" : observed - reserved >= (profile.reserveFloorPercentage ?? 0) ? "above-floor" : "at-or-below-floor";
-  return { profile: safeProfile(selected), state, eligibility: basicCodexEligibility(profile, routing) ? "eligible" : "ineligible", evidence: { authentication: { kind: "unknown" }, capacity: { kind: capacity } } };
+  const account = await readCodexAccountStatus(profile);
+  const capacity = capacityEvidence(profile, account.capacity, reserved);
+  const eligible = basicCodexEligibility(profile, routing)
+    && canAdmitFromCapacity(profile, capacity);
+  return {
+    profile: safeProfile(selected),
+    state,
+    eligibility: eligible ? "eligible" : "ineligible",
+    evidence: {
+      authentication: {
+        kind: account.capacity.kind === "authentication" ? "failed" : "unknown",
+      },
+      capacity,
+    },
+  };
+}
+
+function capacityEvidence(
+  profile: CodexProfile,
+  capacity: Awaited<ReturnType<typeof readCodexAccountStatus>>["capacity"],
+  reservedPercentage: number,
+): CapacityEvidence {
+  if (profile.profileClass === "metered-api") return { kind: "metered" };
+  if (capacity.kind !== "available") return capacity;
+  return {
+    ...capacity,
+    reservedPercentage,
+    availablePercentage: Math.max(0, capacity.remainingPercentage - reservedPercentage),
+  };
+}
+
+function canAdmitFromCapacity(
+  profile: CodexProfile,
+  capacity: CapacityEvidence,
+): boolean {
+  if (profile.profileClass === "metered-api") return true;
+  if (capacity.kind !== "available") return false;
+  return capacity.availablePercentage - (profile.percentageQuantum ?? 0)
+    >= (profile.reserveFloorPercentage ?? 0);
 }
 
 async function removeSelected(selected: CommonProfile): Promise<void> {
@@ -245,7 +307,8 @@ function basicCodexEligibility(profile: CodexProfile, state: Awaited<ReturnType<
   if (profile.profileClass === "metered-api") {
     if (profile.budget?.startLimit !== undefined && ledger.starts >= profile.budget.startLimit) return false;
     if (profile.budget?.runtimeLimitMs !== undefined && ledger.runtimeMs >= profile.budget.runtimeLimitMs) return false;
-    if (profile.budget?.tokenLimit !== undefined && ledger.usage.totalTokens + ledger.reservedTokens >= profile.budget.tokenLimit) return false;
+    const usage = meteredUsage(state, profile.name);
+    if (profile.budget?.tokenLimit !== undefined && usage.usage.totalTokens + usage.reservedTokens >= profile.budget.tokenLimit) return false;
   }
   const reservations = Object.values(state.reservations).filter((entry) => entry.profile === profile.name);
   if ((profile.concurrencyLimit ?? profile.budget?.concurrencyLimit) !== undefined && reservations.length >= (profile.concurrencyLimit ?? profile.budget?.concurrencyLimit)!) return false;
@@ -263,9 +326,33 @@ function output(record: OutputRecord, json: boolean): 0 {
 }
 
 function humanProfile(value: unknown): string {
-  const record = value as { profile?: SafeProfileDto; qualifiedIdentity?: string; accessClass?: string; enabled?: boolean; eligibility?: string };
+  const record = value as {
+    profile?: SafeProfileDto;
+    qualifiedIdentity?: string;
+    accessClass?: string;
+    enabled?: boolean;
+    eligibility?: string;
+    evidence?: {
+      capacity?: {
+        kind?: string;
+        remainingPercentage?: number;
+        reservedPercentage?: number;
+        availablePercentage?: number;
+      };
+    };
+  };
   const profile = record.profile ?? record;
-  return [profile.qualifiedIdentity, profile.accessClass, profile.enabled ? "enabled" : "disabled", record.eligibility].filter(Boolean).join(" ");
+  const capacity = record.evidence?.capacity;
+  const percentage = capacity?.kind === "available"
+    ? `${capacity.remainingPercentage}% remaining, ${capacity.reservedPercentage}% reserved, ${capacity.availablePercentage}% available`
+    : capacity?.kind;
+  return [
+    profile.qualifiedIdentity,
+    profile.accessClass,
+    profile.enabled ? "enabled" : "disabled",
+    record.eligibility,
+    percentage,
+  ].filter(Boolean).join(" ");
 }
 
 function parseProfileArgs(args: string[]) { return parseCommandArgs(args, { provider: { type: "string" }, class: { type: "string" }, home: { type: "string" }, "config-dir": { type: "string" }, "default-config": { type: "boolean" }, "credential-source": { type: "string" }, mode: { type: "string" }, concurrency: { type: "string" }, "token-limit": { type: "string" }, "start-limit": { type: "string" }, "runtime-limit-ms": { type: "string" }, "reservation-tokens": { type: "string" }, "admission-usd": { type: "string" }, "operation-usd": { type: "string" }, quantum: { type: "string" }, "reserve-floor": { type: "string" }, "capacity-poll-ms": { type: "string" }, "require-rearm": { type: "boolean" }, json: { type: "boolean" } }); }

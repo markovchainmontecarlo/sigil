@@ -19,12 +19,18 @@ export {
   type ExecutionPolicy,
 } from "./agent-binding.js";
 export type ContextEntry = { path: string; update: boolean };
+export type EvalDefinition = string | { command: string; covers: string[] };
 export type SigilConfig = {
   agents: Record<string, AgentBinding>;
-  evals: Record<string, string>;
+  evals: Record<string, EvalDefinition>;
   workspace: { bootstrap?: string; ready?: string };
   context: ContextEntry[];
-  plan: { planners: string[]; synthesizer: string };
+  plan: {
+    planners: string[];
+    synthesizer: string;
+    reviewer: string;
+    semanticReviewLimit: number;
+  };
   implement: {
     coder: string;
     sessionTaskLimit: number;
@@ -41,7 +47,7 @@ export type SigilConfig = {
 export type ConfigSource = "command" | "project" | "default";
 export type ConfigOverlay = {
   agents?: Record<string, Partial<AgentBinding>>;
-  evals?: Record<string, string>;
+  evals?: Record<string, EvalDefinition>;
   workspace?: Partial<SigilConfig["workspace"]>;
   context?: ContextEntry[];
   plan?: Partial<SigilConfig["plan"]>;
@@ -62,17 +68,21 @@ export const CODEX_PROVIDER: AgentProvider = "codex";
 
 export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
   agents: {
-    "sol-low": { provider: "codex", model: "gpt-5.6-sol", effort: "low" },
-    "terra-low": { provider: "codex", model: "gpt-5.6-terra", effort: "low" },
-    "luna-low": { provider: "codex", model: "gpt-5.6-luna", effort: "low" },
     "sol-medium": { provider: "codex", model: "gpt-5.6-sol", effort: "medium" },
+    "terra-medium": { provider: "codex", model: "gpt-5.6-terra", effort: "medium" },
+    "luna-medium": { provider: "codex", model: "gpt-5.6-luna", effort: "medium" },
   },
   evals: {},
   workspace: {},
   context: [],
-  plan: { planners: ["sol-low", "terra-low", "luna-low"], synthesizer: "sol-low" },
+  plan: {
+    planners: ["sol-medium", "terra-medium", "luna-medium"],
+    synthesizer: "sol-medium",
+    reviewer: "sol-medium",
+    semanticReviewLimit: 2,
+  },
   implement: {
-    coder: "sol-low",
+    coder: "sol-medium",
     sessionTaskLimit: 5,
     repairLimit: 3,
     operationTimeoutMs: 5_400_000,
@@ -81,7 +91,7 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
     branchPrefix: "sigil/",
     baseBranch: "main",
   },
-  review: { reviewers: ["sol-low", "terra-low", "luna-low"], synthesizer: "sol-low", followUpReviews: 0 },
+  review: { reviewers: ["sol-medium", "terra-medium", "luna-medium"], synthesizer: "sol-medium", followUpReviews: 0 },
 };
 
 const ContextEntrySchema = z.object({
@@ -89,15 +99,28 @@ const ContextEntrySchema = z.object({
   update: z.boolean().default(false),
 });
 
+const EvalDefinitionSchema = z.union([
+  z.string().min(1),
+  z.object({
+    command: z.string().min(1),
+    covers: z.array(z.string().min(1)).default([]),
+  }).strict(),
+]);
+
 const ConfigSchema: z.ZodType<SigilConfig> = z.object({
   agents: z.record(z.string(), AgentBindingSchema),
-  evals: z.record(z.string(), z.string().min(1)),
+  evals: z.record(z.string(), EvalDefinitionSchema),
   workspace: z.object({
     bootstrap: z.string().min(1).optional(),
     ready: z.string().min(1).optional(),
   }).default({}),
   context: z.array(ContextEntrySchema).default([]),
-  plan: z.object({ planners: z.array(z.string().min(1)), synthesizer: z.string().min(1) }),
+  plan: z.object({
+    planners: z.array(z.string().min(1)),
+    synthesizer: z.string().min(1),
+    reviewer: z.string().min(1),
+    semanticReviewLimit: z.number().int().nonnegative(),
+  }),
   implement: z.object({
     coder: z.string().min(1),
     sessionTaskLimit: z.number().int().positive(),
@@ -131,6 +154,7 @@ export function resolveConfig(rootDir = process.cwd(), commandOverlay: ConfigOve
   const parsed = ConfigSchema.safeParse(configured);
   if (!parsed.success) throw new Error(`Invalid ${path}: ${parsed.error.issues.map((issue) => issue.message).join("; ")}`);
   validateAgentReferences(parsed.data, path);
+  validateEvalReferences(parsed.data, path);
   return {
     config: parsed.data,
     configPath: path,
@@ -147,7 +171,25 @@ export function resolveAgentBinding(name: string, config = loadConfig()): AgentB
 }
 
 export function resolveEvalCommand(name: string, config = loadConfig()): string | undefined {
-  return config.evals[name];
+  const definition = config.evals[name];
+  return typeof definition === "string" ? definition : definition?.command;
+}
+
+export function resolveEvalPlan(names: readonly string[], config = loadConfig()): string[] {
+  const requested = new Set(names);
+  const covered = new Set<string>();
+  for (const name of names) collectCoveredEvals(name, config, covered);
+  return names.filter((name) => !covered.has(name) || !requested.has(name));
+}
+
+function collectCoveredEvals(name: string, config: SigilConfig, covered: Set<string>): void {
+  const definition = config.evals[name];
+  if (typeof definition === "string" || !definition) return;
+  for (const dependency of definition.covers) {
+    if (covered.has(dependency)) continue;
+    covered.add(dependency);
+    collectCoveredEvals(dependency, config, covered);
+  }
 }
 
 function findConfigPath(start: string): string | undefined {
@@ -173,6 +215,7 @@ function mergeProjectConfig(defaults: SigilConfig, project: Record<string, unkno
   const merged = mergeConfig(defaults, project) as Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(project, "agents")) merged.agents = project.agents;
   if (Object.prototype.hasOwnProperty.call(project, "evals")) merged.evals = project.evals;
+  if (Object.prototype.hasOwnProperty.call(project, "plan")) merged.plan = project.plan;
   return merged;
 }
 
@@ -230,6 +273,7 @@ function validateAgentReferences(config: SigilConfig, path: string): void {
   const refs = [
     ...config.plan.planners.map((name, i) => [`plan.planners[${i}]`, name] as const),
     ["plan.synthesizer", config.plan.synthesizer] as const,
+    ["plan.reviewer", config.plan.reviewer] as const,
     ["implement.coder", config.implement.coder] as const,
     ...config.review.reviewers.map((name, i) => [`review.reviewers[${i}]`, name] as const),
     ["review.synthesizer", config.review.synthesizer] as const,
@@ -237,5 +281,34 @@ function validateAgentReferences(config: SigilConfig, path: string): void {
   const errors = refs
     .filter(([, name]) => !config.agents[name])
     .map(([field, name]) => `${field} references unknown agent "${name}"`);
+  if (errors.length) throw new Error(`Invalid ${path}: ${errors.join("; ")}`);
+}
+
+function validateEvalReferences(config: SigilConfig, path: string): void {
+  const errors: string[] = [];
+  for (const [name, definition] of Object.entries(config.evals)) {
+    if (typeof definition === "string") continue;
+    for (const covered of definition.covers) {
+      if (covered === name) errors.push(`evals.${name}.covers cannot include itself`);
+      else if (!(covered in config.evals)) errors.push(`evals.${name}.covers references unknown eval "${covered}"`);
+    }
+  }
+  const complete = new Set<string>();
+  const active = new Set<string>();
+  const visit = (name: string): void => {
+    if (complete.has(name)) return;
+    if (active.has(name)) {
+      errors.push(`eval coverage cycle includes "${name}"`);
+      return;
+    }
+    active.add(name);
+    const definition = config.evals[name];
+    if (typeof definition !== "string") {
+      for (const covered of definition?.covers ?? []) visit(covered);
+    }
+    active.delete(name);
+    complete.add(name);
+  };
+  for (const name of Object.keys(config.evals)) visit(name);
   if (errors.length) throw new Error(`Invalid ${path}: ${errors.join("; ")}`);
 }

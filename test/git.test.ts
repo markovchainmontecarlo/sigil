@@ -89,7 +89,6 @@ describe("git helpers", () => {
     const nothing = await commitAll(dir, "nothing to commit");
 
     expect(committed.status).toBe("committed");
-    expect(committed.hooksBypassed).toBe(false);
     expect(committed.commit).toBeTruthy();
     expect(nothing.status).toBe("nothing");
   });
@@ -102,10 +101,9 @@ describe("git helpers", () => {
     const result = await commitAll(dir, "cannot add");
 
     expect(result.status).toBe("failed");
-    expect(result.hooksBypassed).toBe(false);
   });
 
-  test("commitAll reports hook bypass when final no-verify attempt succeeds", async () => {
+  test("commitAll reports a hook failure without bypassing verification", async () => {
     const dir = repo();
     const hook = join(dir, ".git", "hooks", "pre-commit");
     writeFileSync(hook, "#!/bin/sh\necho stop >&2\nexit 1\n");
@@ -114,9 +112,9 @@ describe("git helpers", () => {
 
     const result = await commitAll(dir, "bypass hook");
 
-    expect(result.status).toBe("committed");
-    expect(result.hooksBypassed).toBe(true);
+    expect(result.status).toBe("failed");
     expect(result.log).toContain("stop");
+    expect(run(dir, ["log", "-1", "--pretty=%s"]).trim()).toBe("initial");
   });
 
   test("checkoutFreshBranch resets an existing branch to the named base", async () => {

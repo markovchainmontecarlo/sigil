@@ -1,5 +1,4 @@
 import { existsSync, mkdtempSync, readFileSync, symlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
@@ -9,7 +8,7 @@ import { ProviderError } from "../src/provider-failure.js";
 import type { ServerEvent } from "../src/server/types.js";
 
 function externalRoot(): string {
-  return mkdtempSync(join(tmpdir(), "sigil-server-run-"));
+  return mkdtempSync("/tmp/sigil-server-run-");
 }
 
 function options(root: string, events: ServerEvent[] = []) {

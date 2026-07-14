@@ -91,6 +91,7 @@ describe("distribution scripts", () => {
     expect(skills).toEqual([
       "sigil",
       "sigil-authoring",
+      "sigil-brief",
       "sigil-dispatch",
       "sigil-migration",
       "sigil-refactor",

@@ -180,16 +180,16 @@ describe("src structural invariants", () => {
       expect(guidance).toContain("task graph");
       expect(guidance).toContain("explicitly");
     }
-    expect(router).toContain("Do not invoke Sigil planning merely because a plan file exists.");
+    expect(router).toContain("Do not infer this choice.");
     expect(usage).toContain("Its presence does not select `software-change --brief`.");
   });
 
-  test("explicit Sigil routing defaults to AI-assisted development without self-reference", () => {
+  test("explicit Sigil routing establishes a confirmed handoff without self-reference", () => {
     const router = readFileSync(join(process.cwd(), "skills/sigil/SKILL.md"), "utf8");
 
-    expect(router).toContain("Treat “use Sigil” or “use the Sigil skill” as a request to route the work");
-    expect(router).toContain("Default to AI-assisted development");
-    expect(router).toContain("only when that choice is genuinely unclear");
+    expect(router).toContain("Treat “use Sigil” or “use the Sigil skill” as a request to establish the brief and route the unfinished transition");
+    expect(router).toContain("show its complete contents");
+    expect(router).toContain("wait for confirmation or correction");
     expect(router).toContain("## Detailed guidance");
     expect(router).not.toContain("Use this skill");
     expect(router).not.toContain("invoking this skill");

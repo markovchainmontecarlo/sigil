@@ -1,12 +1,11 @@
-The task graph JSON file at {{FILE}} failed deterministic contract validation. Fix it. Work in this order:
+The task graph at {{FILE}} failed deterministic validation.
 
-1. Read {{FILE}} in full.
+Read the file and repository evidence needed to correct every error below. Repair structure, dependency relationships, interfaces, and verification without deleting requirements or inventing values merely to satisfy validation.
 
-2. Resolve each of these validation errors:
+ERRORS:
 {{ERRORS}}
 
-3. Read whatever repo files you need to resolve each error correctly. Do not invent a value to silence a check. Match this contract:
-
+CONTRACT:
 {{CONTRACT}}
 
-4. Write valid, parseable JSON back to {{FILE}}, preserving every task's intent and scope.
+Write valid JSON back to {{FILE}} while preserving intent and scope.

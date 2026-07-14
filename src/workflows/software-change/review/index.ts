@@ -4,7 +4,7 @@ import { runFreshAgentOperation } from "../../../agent-operation.js";
 import { loadConfig } from "../../../config.js";
 import { sigil, type SigilContext } from "../../../context.js";
 import { git } from "../../../git.js";
-import { runGateSet } from "../../../verification.js";
+import { runGateSet, type VerificationResult } from "../../../verification.js";
 import { reviewPrompts } from "./prompts.js";
 import { runReviewOperation } from "./state.js";
 
@@ -41,6 +41,7 @@ export type ReviewResult = {
   findingsFile: string;
   unresolvedHigh: number;
   fixRan: boolean;
+  verification?: VerificationResult;
   issues: string[];
 };
 
@@ -256,17 +257,14 @@ async function repairFindings(
   if (!repaired.ok) throw new Error(repaired.failure.evidence);
 }
 
-async function verifyRepair(ctx: SigilContext): Promise<string | undefined> {
-  const verification = await runReviewOperation(
+async function verifyRepair(ctx: SigilContext): Promise<VerificationResult> {
+  return runReviewOperation(
     ctx,
     "post-review-verification",
     "post-review-verification",
     { gates: ["build", "test", "e2e", "verify"] },
     () => runGateSet(ctx, ["build", "test", "e2e", "verify"]),
   );
-  const configured = verification.gates.filter((gate) => !gate.result.skipped);
-  if (!configured.length || verification.ok) return undefined;
-  return verification.evidence;
 }
 
 function exhaustedIssues(findings: ReviewFinding[], attempts: Map<string, number>, limit: number): string[] {
@@ -282,6 +280,7 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
   const encountered = new Map<string, ReviewFinding>();
   let followUpReviewsRemaining = config.review.followUpReviews;
   let fixRan = false;
+  let verification: VerificationResult | undefined;
 
   try {
     let reviewed = await collectFindings(
@@ -332,13 +331,14 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
       );
       fixRan = true;
 
-      const gateFailure = await verifyRepair(ctx);
-      if (gateFailure) {
+      verification = await verifyRepair(ctx);
+      const configured = verification.gates.filter((gate) => !gate.result.skipped);
+      if (configured.length && !verification.ok) {
         const gateFinding: ReviewFinding = {
           id: "post-review-gates",
           severity: "high",
           path: ".",
-          failureScenario: gateFailure,
+          failureScenario: verification.evidence,
           defect: "Review repair failed configured verification.",
           requiredChange: "Repair the reported gate failures without weakening verification.",
           repairRecommended: true,
@@ -383,6 +383,7 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
       findingsFile,
       unresolvedHigh: reviewed.findings.filter((finding) => finding.severity === "high").length,
       fixRan,
+      verification,
       issues: unresolved.map((finding) => `unresolved review finding ${finding.id}: ${finding.requiredChange}`),
     };
   } catch (error) {

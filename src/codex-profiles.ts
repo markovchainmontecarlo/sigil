@@ -43,13 +43,17 @@ export type CodexUsage = {
   totalTokens: number;
 };
 
+export type MeteredUsage = {
+  reservedTokens: number;
+  usage: CodexUsage;
+};
+
 export type ProfileLedger = {
   starts: number;
   active: number;
-  reservedTokens: number;
   runtimeMs: number;
-  usage: CodexUsage;
   rearmRequired: boolean;
+  metered?: MeteredUsage;
 };
 
 export type ProfileReservation = {
@@ -87,8 +91,14 @@ type RegistryFile = { version: 1; profiles: CodexProfile[] };
 type PersistedReservation = Omit<ProfileReservation, "owner"> & {
   owner?: ProcessIdentity;
 };
-type PersistedRoutingState = Omit<CodexRoutingState, "reservations"> & {
+type LegacyProfileLedger = Omit<ProfileLedger, "metered"> & {
+  reservedTokens: number;
+  usage: CodexUsage;
+};
+type PersistedLedger = ProfileLedger | LegacyProfileLedger;
+type PersistedRoutingState = Omit<CodexRoutingState, "reservations" | "ledgers"> & {
   reservations: Record<string, PersistedReservation>;
+  ledgers: Record<string, PersistedLedger>;
 };
 
 export type CodexProfileStore = {
@@ -167,13 +177,19 @@ export function profileLedger(state: CodexRoutingState, name: string): ProfileLe
   state.ledgers[name] ??= {
     starts: 0,
     active: 0,
-    reservedTokens: 0,
     runtimeMs: 0,
-    usage: { ...EMPTY_USAGE },
     rearmRequired: false,
   };
-  state.ledgers[name].reservedTokens ??= 0;
   return state.ledgers[name];
+}
+
+export function meteredUsage(state: CodexRoutingState, name: string): MeteredUsage {
+  const ledger = profileLedger(state, name);
+  ledger.metered ??= {
+    reservedTokens: 0,
+    usage: { ...EMPTY_USAGE },
+  };
+  return ledger.metered;
 }
 
 export function newReservation(profile: string, options: {
@@ -214,6 +230,7 @@ function migrateRoutingState(
   state: PersistedRoutingState,
   profiles: CodexProfile[],
 ): CodexRoutingState {
+  const ledgers = normalizeLedgers(state.ledgers, profiles);
   const reservations: Record<string, ProfileReservation> = {};
   const legacyReservations: PersistedReservation[] = [];
 
@@ -222,9 +239,33 @@ function migrateRoutingState(
     else legacyReservations.push(reservation);
   }
 
-  reconcileLegacyReservations(state.ledgers, legacyReservations, profiles);
-  normalizeRearmState(state.ledgers, profiles);
-  return { ...state, reservations };
+  reconcileLegacyReservations(ledgers, legacyReservations, profiles);
+  normalizeRearmState(ledgers, profiles);
+  return { ...state, ledgers, reservations };
+}
+
+function normalizeLedgers(
+  persisted: Record<string, PersistedLedger>,
+  profiles: CodexProfile[],
+): Record<string, ProfileLedger> {
+  return Object.fromEntries(Object.entries(persisted).map(([name, ledger]) => {
+    const profile = profiles.find((entry) => entry.name === name);
+    const activity: ProfileLedger = {
+      starts: ledger.starts,
+      active: ledger.active,
+      runtimeMs: ledger.runtimeMs,
+      rearmRequired: ledger.rearmRequired,
+    };
+    if (profile?.profileClass !== "metered-api") return [name, activity];
+    const legacy = ledger as LegacyProfileLedger;
+    return [name, {
+      ...activity,
+      metered: ("metered" in ledger ? ledger.metered : undefined) ?? {
+        reservedTokens: legacy.reservedTokens ?? 0,
+        usage: legacy.usage ?? { ...EMPTY_USAGE },
+      },
+    }];
+  }));
 }
 
 function reconcileLegacyReservations(
@@ -238,12 +279,14 @@ function reconcileLegacyReservations(
 
     ledger.active = Math.max(0, ledger.active - 1);
     const reservedTokens = reservation.reservedTokens ?? 0;
-    ledger.usage.inputTokens += reservedTokens;
-    ledger.usage.totalTokens += reservedTokens;
-    ledger.reservedTokens = Math.max(
-      0,
-      ledger.reservedTokens - reservedTokens,
-    );
+    if (ledger.metered) {
+      ledger.metered.usage.inputTokens += reservedTokens;
+      ledger.metered.usage.totalTokens += reservedTokens;
+      ledger.metered.reservedTokens = Math.max(
+        0,
+        ledger.metered.reservedTokens - reservedTokens,
+      );
+    }
     if (profileRequiresRearm(profiles, reservation.profile)) {
       ledger.rearmRequired = true;
     }
@@ -306,12 +349,14 @@ async function readValidatedJson<T>(path: string, schema: z.ZodType<T>, fallback
 }
 
 const UsageSchema = z.object({ inputTokens: z.number().nonnegative(), cachedInputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), reasoningTokens: z.number().nonnegative(), totalTokens: z.number().nonnegative() }).strict();
-const LedgerSchema = z.object({ starts: z.number().int().nonnegative(), active: z.number().int().nonnegative(), reservedTokens: z.number().nonnegative(), runtimeMs: z.number().nonnegative(), usage: UsageSchema, rearmRequired: z.boolean() }).strict();
+const MeteredUsageSchema = z.object({ reservedTokens: z.number().nonnegative(), usage: UsageSchema }).strict();
+const LedgerSchema = z.object({ starts: z.number().int().nonnegative(), active: z.number().int().nonnegative(), runtimeMs: z.number().nonnegative(), rearmRequired: z.boolean(), metered: MeteredUsageSchema.optional() }).strict();
+const LegacyLedgerSchema = z.object({ starts: z.number().int().nonnegative(), active: z.number().int().nonnegative(), reservedTokens: z.number().nonnegative(), runtimeMs: z.number().nonnegative(), usage: UsageSchema, rearmRequired: z.boolean() }).strict();
 const ReservationFileSchema = z.object({ id: z.string().min(1), profile: z.string().min(1), owner: ProcessOwnerSchema.optional(), startedAt: z.string().datetime(), startingPercentage: z.number().optional(), percentageQuantum: z.number().optional(), observedAt: z.string().optional(), observedRemainingPercentage: z.number().optional(), reservedHeadroomPercentage: z.number().optional(), reservedTokens: z.number().optional(), unresolved: z.literal(true) }).strict();
 const CircuitSchema = z.object({ reason: z.enum(["capacity", "authentication", "transient"]), openedAt: z.string(), fingerprint: z.string().optional(), failures: z.number().int().optional() }).strict();
 const ProfileSchema = z.object({ name: z.string().min(1), home: z.string().min(1), enabled: z.boolean(), profileClass: z.enum(["subscription", "metered-api"]), concurrencyLimit: z.number().int().positive().optional(), percentageQuantum: z.number().positive().optional(), reserveFloorPercentage: z.number().min(0).max(100).optional(), activeCapacityPollIntervalMs: z.number().positive().optional(), requireRearmOnCapacityExhaustion: z.boolean().optional(), meteredMode: z.enum(["manual", "overflow", "automatic"]).optional(), budget: z.object({ tokenLimit: z.number().positive().optional(), startLimit: z.number().int().positive().optional(), concurrencyLimit: z.number().int().positive().optional(), runtimeLimitMs: z.number().positive().optional(), requireRearm: z.boolean().optional(), reservationTokens: z.number().positive().optional() }).strict().optional() }).strict();
 const RegistryFileSchema = z.object({ version: z.literal(1), profiles: z.array(ProfileSchema) }).strict();
-const PersistedStateFileSchema: z.ZodType<{ version: 2; state: PersistedRoutingState }> = z.object({ version: z.literal(2), state: z.object({ roundRobin: z.number().int().nonnegative(), next: z.object({ profile: z.string(), remaining: z.number().int().positive() }).strict().optional(), reservations: z.record(z.string(), ReservationFileSchema), ledgers: z.record(z.string(), LedgerSchema), circuits: z.record(z.string(), CircuitSchema), unavailableProfiles: z.record(z.string(), z.string()) }).strict() }).strict();
+const PersistedStateFileSchema: z.ZodType<{ version: 2; state: PersistedRoutingState }> = z.object({ version: z.literal(2), state: z.object({ roundRobin: z.number().int().nonnegative(), next: z.object({ profile: z.string(), remaining: z.number().int().positive() }).strict().optional(), reservations: z.record(z.string(), ReservationFileSchema), ledgers: z.record(z.string(), z.union([LedgerSchema, LegacyLedgerSchema])), circuits: z.record(z.string(), CircuitSchema), unavailableProfiles: z.record(z.string(), z.string()) }).strict() }).strict();
 
 function validateProfiles(profiles: CodexProfile[]): void {
   const names = new Set<string>();

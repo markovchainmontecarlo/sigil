@@ -36,6 +36,8 @@ test -f "$home_dir/.sigil/lib/resources-manifest.json"
 test -f "$home_dir/.sigil/lib/schemas/task-graph.schema.json"
 test -f "$home_dir/.sigil/lib/bun.lock"
 test -f "$home_dir/.sigil/skills/sigil/SKILL.md"
+test -f "$home_dir/.sigil/skills/sigil/references/brief.md"
+test -f "$home_dir/.sigil/skills/sigil/references/task-graph.md"
 test -f "$home_dir/.sigil/skills/sigil-authoring/SKILL.md"
 test -f "$home_dir/.sigil/skills/sigil-dispatch/SKILL.md"
 test -f "$home_dir/.sigil/skills/sigil-refactor/SKILL.md"
@@ -61,7 +63,7 @@ for name in sigil-dispatch sigil-refactor sigil-migration sigil-task-graph; do
   test -L "$home_dir/.codex/skills/$name"
   test "$(readlink "$home_dir/.codex/skills/$name")" = "$home_dir/.sigil/skills/$name"
 done
-HOME="$home_dir" SIGIL_HOME="$home_dir/.sigil" "$home_dir/.local/bin/sigil" --help >"$tmp/sigil-smoke-help.txt"
+HOME="$home_dir" SIGIL_HOME="$home_dir/.sigil" "$home_dir/.local/bin/sigil" --help >/tmp/sigil-smoke-help.txt
 HOME="$home_dir" SIGIL_HOME="$home_dir/.sigil" "$home_dir/.local/bin/sigil" task-graph schema > "$tmp/installed-task-graph.schema.json"
 cmp "$tmp/installed-task-graph.schema.json" "$home_dir/.sigil/lib/schemas/task-graph.schema.json"
 (cd "$home_dir/.sigil/lib" && bun -e 'await import("sigil"); await import("sigil/contracts"); await import("sigil/server")')
@@ -83,7 +85,7 @@ HOME="$home_dir" SIGIL_HOME="$home_dir/.sigil" "$home_dir/.local/bin/sigil" run-
   --repo "$repo" \
   --file "$workflow" \
   --run-dir "$run_dir" \
-  --persistence ephemeral >"$tmp/sigil-smoke-run.txt"
+  --persistence ephemeral >/tmp/sigil-smoke-run.txt
 for _ in $(seq 1 100); do
   state="$(bun -e 'const value = await Bun.file(process.argv[1]).json(); console.log(value.state)' "$run_dir/status.json" 2>/dev/null || true)"
   [ "$state" = "succeeded" ] && break
@@ -128,6 +130,8 @@ test -f "$home_dir/.claude/skills/user-skill/SKILL.md"
 test -f "$home_dir/.codex/skills/user-skill/SKILL.md"
 grep -q '#!/usr/bin/env bun' "$home_dir/.sigil/lib/src/cli.js"
 test -f "$home_dir/.sigil/skills/sigil/SKILL.md"
+test -f "$home_dir/.sigil/skills/sigil/references/brief.md"
+test -f "$home_dir/.sigil/skills/sigil/references/task-graph.md"
 test -f "$home_dir/.sigil/skills/sigil-authoring/SKILL.md"
 test -f "$home_dir/.sigil/skills/sigil-dispatch/SKILL.md"
 test -f "$home_dir/.sigil/skills/sigil-refactor/SKILL.md"
@@ -150,6 +154,6 @@ for name in sigil-dispatch sigil-refactor sigil-migration sigil-task-graph; do
   test -L "$home_dir/.codex/skills/$name"
   test "$(readlink "$home_dir/.codex/skills/$name")" = "$home_dir/.sigil/skills/$name"
 done
-HOME="$home_dir" SIGIL_HOME="$home_dir/.sigil" "$home_dir/.local/bin/sigil" --help >"$tmp/sigil-smoke-help-after-update.txt"
+HOME="$home_dir" SIGIL_HOME="$home_dir/.sigil" "$home_dir/.local/bin/sigil" --help >/tmp/sigil-smoke-help-after-update.txt
 
 echo "distribution smoke passed"

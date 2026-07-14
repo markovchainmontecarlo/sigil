@@ -90,7 +90,7 @@ function fixtureRepo(): string {
     },
     evals: { build: "test -s app.txt", test: "test -s app.txt" },
     context: [],
-    plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst" },
+    plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst", reviewer: "analyst", semanticReviewLimit: 2 },
     implement: {
       coder: "coder",
       sessionTaskLimit: 5,
@@ -324,7 +324,7 @@ describe("migration workflow", () => {
     expect(result.valid).toBe(true);
     expect(state.migrationReviewCalls).toBe(8);
     expect(existsSync(join(runDir, "final", "round-4-architecture-review.json"))).toBe(true);
-  }, 15_000);
+  });
 
   test("diagram documents checkpoint, attempt, and final verification boundaries", () => {
     const diagram = readFileSync(join(process.cwd(), "src/workflows/migrate/workflow.mermaid"), "utf8");

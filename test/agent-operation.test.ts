@@ -3,16 +3,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
-import { runFreshAgentOperation } from "../src/agent-operation.js";
+import { promptAgentTurn, runFreshAgentOperation } from "../src/agent-operation.js";
 import type { AgentPromptOptions, SigilAgent } from "../src/agents.js";
 import { createContext } from "../src/context.js";
+import type { RichSigilAgent } from "../src/context.js";
 
 function repo(): string {
   const directory = mkdtempSync(join(tmpdir(), "sigil-agent-attempt-"));
   writeFileSync(join(directory, "sigil.config.json"), JSON.stringify({
     agents: { coder: { provider: "codex", model: "test" } },
     evals: {},
-    plan: { planners: ["coder"], synthesizer: "coder" },
+    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder", semanticReviewLimit: 2 },
     implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "x/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }));
@@ -20,6 +21,86 @@ function repo(): string {
 }
 
 describe("agent attempts", () => {
+  test("records prompt size, attempt duration, and operation duration", async () => {
+    const observations: Array<{ stage: string; details: Record<string, string> }> = [];
+    const ctx = createContext(repo(), {
+      onObserve: async (stage, details) => { observations.push({ stage, details }); },
+    });
+    const agent: SigilAgent = {
+      prompt: async () => "complete",
+      async close() {},
+      async [Symbol.asyncDispose]() {},
+    };
+
+    await promptAgentTurn(ctx, agent as RichSigilAgent, "work", {
+      stage: "measured-turn",
+      limit: 1,
+      timeoutMs: 100,
+      idleTimeoutMs: 50,
+    });
+
+    expect(observations).toContainEqual(expect.objectContaining({
+      stage: "agent-turn-prepared",
+      details: expect.objectContaining({ stage: "measured-turn", promptCharacters: "4" }),
+    }));
+    expect(observations).toContainEqual(expect.objectContaining({
+      stage: "agent-attempt-completed",
+      details: expect.objectContaining({ stage: "measured-turn", durationMs: expect.any(String) }),
+    }));
+    expect(observations).toContainEqual(expect.objectContaining({
+      stage: "agent-operation-completed",
+      details: expect.objectContaining({ stage: "measured-turn", durationMs: expect.any(String) }),
+    }));
+  });
+
+  test("retries a transient persistent-agent turn within its configured budget", async () => {
+    let calls = 0;
+    const ctx = createContext(repo());
+    const agent: SigilAgent = {
+      prompt: async () => {
+        if (++calls === 1) throw new Error("service temporarily unavailable; try again");
+        return "complete";
+      },
+      async close() {},
+      async [Symbol.asyncDispose]() {},
+    };
+
+    const result = await promptAgentTurn(ctx, agent as RichSigilAgent, "work", {
+      stage: "persistent",
+      limit: 1,
+      timeoutMs: 100,
+      idleTimeoutMs: 50,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  test("returns persistent-agent capacity failure without replaying the turn", async () => {
+    let calls = 0;
+    const ctx = createContext(repo());
+    const agent: SigilAgent = {
+      runtime: { provider: "codex", profile: "full" },
+      prompt: async () => {
+        calls++;
+        throw new Error("usage limit reached for this account");
+      },
+      async close() {},
+      async [Symbol.asyncDispose]() {},
+    };
+
+    const result = await promptAgentTurn(ctx, agent as RichSigilAgent, "work", {
+      stage: "persistent-capacity",
+      limit: 3,
+      timeoutMs: 100,
+      idleTimeoutMs: 50,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(calls).toBe(1);
+    if (!result.ok) expect(result.failure.provider?.disposition).toBe("reroute");
+  });
+
   test("closes a timed-out attempt before creating its retry", async () => {
     const events: string[] = [];
     let identity = 0;

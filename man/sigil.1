@@ -22,7 +22,7 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>] [\-\-publish]
 .br
-.B sigil review \-\-repo <dir> \-\-base <ref> [\-\-no\-autofix] [\-\-context <text>]
+.B sigil review \-\-repo <dir> \-\-base <ref> [\-\-autofix] [\-\-context <text>]
 .br
 .B sigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]
 .br
@@ -309,7 +309,7 @@ Exit codes: 0 when review is not blocking and no failed tasks or issues are repo
 .SS review
 Review the current diff against a base ref.
 .P
-Usage: \fBsigil review \-\-repo <dir> \-\-base <ref> [\-\-no\-autofix] [\-\-context <text>]\fR
+Usage: \fBsigil review \-\-repo <dir> \-\-base <ref> [\-\-autofix] [\-\-context <text>]\fR
 .P
 Arguments and flags:
 .TP
@@ -319,8 +319,8 @@ Required. Target repository.
 \fB\-\-base <ref>\fR
 Required. Base ref for the diff.
 .TP
-\fB\-\-no\-autofix\fR
-Disable the autofix pass.
+\fB\-\-autofix\fR
+Repair actionable findings in the checkout.
 .TP
 \fB\-\-context <text>\fR
 Optional review context.

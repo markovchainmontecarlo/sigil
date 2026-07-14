@@ -20,7 +20,7 @@ export async function enrichTaskGraph(
 export async function repairTaskGraphJson(
   ctx: SigilContext,
   agent: RichSigilAgent,
-  input: { taskFile: string; repo: string; contract: string; issuePrefix?: string },
+  input: { taskFile: string; repo: string; contract: string; limit: number; issuePrefix?: string },
 ): Promise<TaskGraphCheck> {
   const label = input.issuePrefix ?? "task graph";
   let checked = await readTaskGraph(input.taskFile, input.repo);
@@ -32,7 +32,7 @@ export async function repairTaskGraphJson(
     });
   }
 
-  for (let attempt = 0; checked.errors.length && attempt < 3; attempt++) {
+  for (let attempt = 0; checked.errors.length && attempt < input.limit; attempt++) {
     await agent.prompt(planningPrompts.fixJson({
       FILE: input.taskFile,
       CONTRACT: input.contract,

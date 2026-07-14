@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { git } from "../../../git.js";
 import { orderedTasks, type TaskGraph } from "../../../contracts/task-graph.js";
+import type { BaselineEvidence } from "../../../verification.js";
 
 export type ImplementationTaskStatus = "pending" | "running" | "completed" | "failed" | "blocked";
 export type ImplementationTaskState = {
@@ -15,11 +16,12 @@ export type ImplementationTaskState = {
   recoveryBundle?: string;
 };
 export type ImplementationCheckpoint = {
-  version: 1;
+  version: 2;
   graphDigest: string;
   branch: string;
   baseBranch: string;
   baselineCommit: string;
+  baseline: BaselineEvidence;
   tasks: Record<string, ImplementationTaskState>;
 };
 export type RecoveryBundle = {
@@ -45,15 +47,22 @@ export async function writeAtomicJson(path: string, value: unknown): Promise<voi
 
 export async function readCheckpoint(path: string): Promise<ImplementationCheckpoint> {
   const parsed = JSON.parse(await readFile(path, "utf8")) as ImplementationCheckpoint;
-  if (parsed.version !== 1 || !parsed.graphDigest || !parsed.branch || !parsed.baseBranch || !parsed.baselineCommit || !parsed.tasks) {
+  if (parsed.version !== 2 || !parsed.graphDigest || !parsed.branch || !parsed.baseBranch || !parsed.baselineCommit || !parsed.baseline || !parsed.tasks) {
     throw new Error("implementation checkpoint is missing required identity");
   }
   return parsed;
 }
 
-export function newCheckpoint(graph: TaskGraph, graphDigest: string, branch: string, baseBranch: string, baselineCommit: string): ImplementationCheckpoint {
+export function newCheckpoint(
+  graph: TaskGraph,
+  graphDigest: string,
+  branch: string,
+  baseBranch: string,
+  baselineCommit: string,
+  baseline: BaselineEvidence,
+): ImplementationCheckpoint {
   return {
-    version: 1, graphDigest, branch, baseBranch, baselineCommit,
+    version: 2, graphDigest, branch, baseBranch, baselineCommit, baseline,
     tasks: Object.fromEntries(orderedTasks(graph.tasks).map((task) => [task.id, { status: "pending", attempts: 0 }])),
   };
 }

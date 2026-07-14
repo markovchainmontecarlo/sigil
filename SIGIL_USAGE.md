@@ -107,7 +107,8 @@ A representative config shape is:
   },
   "evals": {
     "build": "<non-interactive build command>",
-    "test": "<non-interactive test command>"
+    "test": "<non-interactive test command>",
+    "verify": { "command": "<complete verification command>", "covers": ["test"] }
   },
   "workspace": {
     "bootstrap": "bun install --frozen-lockfile"
@@ -118,7 +119,9 @@ A representative config shape is:
   ],
   "plan": {
     "planners": ["explorer", "implementer"],
-    "synthesizer": "explorer"
+    "synthesizer": "explorer",
+    "reviewer": "reviewer",
+    "semanticReviewLimit": 2
   },
   "implement": {
     "coder": "implementer",
@@ -137,11 +140,11 @@ A representative config shape is:
 Config sections:
 
 - `agents`: named provider and model bindings. Supported providers are `codex`, `claude`, and `copilot`. Claude transport selection is local rather than a separate project provider. When `effort` is omitted, the binding defaults to `medium`.
-- `evals`: named shell commands. Commands run under the target repo and must be non-interactive. Missing eval names are skipped.
+- `evals`: named non-interactive shell commands. A string defines one command. An object may also declare `covers`, listing configured gates whose successful work is included in that command. When covered and covering gates are requested together, Sigil runs only the covering gate.
 - `workspace.bootstrap`: optional deterministic preparation command run before implementation or refactor baseline gates. It must leave tracked files unchanged.
-- `context`: repo-relative files loaded at run start. Paths cannot escape the repo.
-- `plan`: planner agent names and one synthesizer agent name.
-- `implement`: coder agent, live-session task limit, repair limit, branch prefix, base branch, and optional test report settings. Consecutive tasks reuse one coder session until the limit rotates it with a checkpoint-backed handoff; pull-request completion closes the session.
+- `context`: repo-relative files loaded when a workflow or coder session needs orientation. Paths cannot escape the repo.
+- `plan`: planner agent names, one synthesizer, one independent planning reviewer, and a bounded semantic review repair limit.
+- `implement`: coder agent, live-session task limit, repair limit, branch prefix, base branch, and optional test report settings. A new coder receives graph context, current configured context, and any checkpoint-backed handoff with its first task. Consecutive tasks reuse that session and receive only their task contracts. Rotation, invalidation, and resume initialize the replacement from current repository and checkpoint state. The checkpoint retains the original baseline evidence for resumed verification. Retryable turn failures use the bounded session retry budget; capacity failures return to implementation recovery before another provider can be selected. Pull-request completion closes the session.
 - `review`: reviewer agent and the number of fresh reviews allowed after repair. `followUpReviews` defaults to `0`; repairs still run configured verification gates.
 
 Configured context is orientation, not proof. Verify important claims against source or observed behavior before relying on them. `update: true` marks a drift-controlled write-back target. `update: false` marks read-only context unless the task explicitly declares that file as an output. Missing configured context files are skipped and reported in the rendered context block.
@@ -181,7 +184,7 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 | `sigil task-graph validate [--repo <dir>] [--json] <task-file>` | Validate an assistant-authored or agentically produced task graph. | The graph satisfies structural, dependency, and repository-path rules. |
 | `sigil task-graph schema [--out <file>]` | Print or write the public task-graph JSON Schema. | The schema was produced. |
 | `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>] [--publish]` | Apply and review an accepted task graph locally, with optional explicit publication. | Local implementation succeeds; when `--publish` is supplied, publication also succeeds. |
-| `sigil review --repo <dir> --base <ref> [--no-autofix] [--context <text>]` | Review the current diff. | There are no unresolved high findings and no issues. |
+| `sigil review --repo <dir> --base <ref> [--autofix] [--context <text>]` | Review the current diff without editing by default. Add `--autofix` to repair actionable findings in the checkout. | There are no unresolved high findings and no issues. |
 | `sigil breakdown --repo <dir> --mission <text> [--out <file>]` | Turn a mission into a backlog. | The produced backlog is valid. |
 | `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch --run-dir <dir>` | Start durable backlog delivery through main or an accumulating integration branch. | Dispatch finished without stopping. |
 | `sigil dispatch --resume <dir>` | Resume the recorded operation after repository and process ownership checks. | Dispatch finished without stopping. |
@@ -203,6 +206,8 @@ env -u CLAUDECODE sigil software-change \
 ```
 
 Use `--brief <file>` when Sigil planning should read requirements or constraints from a file. In AI-assisted development, the current assistant translates an active Markdown plan directly into a task graph instead. Use `--instructions <file>` for implementation-only guidance and `--task-file <file>` to skip planning and run the unified workflow from an existing typed task graph.
+
+A brief states outcomes and boundaries, not mechanisms. A strong brief carries the outcome as one testable scenario; the decision hierarchy that orders competing solutions; named non-goals so settled decisions are not replanned; and completion as observable checks. Attach verified findings and any prior plan as referenced context: planners may correct referenced context with evidence, but not cross the stated boundaries. Choose `--brief` when planning must still discover file-level truth; choose `--task-file` when the caller already holds it. The `sigil-brief` skill authors this shape from an accepted conversation.
 
 ### Single changes, detached execution, and dispatch
 
@@ -241,6 +246,8 @@ preserving `software-change` semantics.
 
 Use the stage commands when the stage boundary is the object you need to inspect or compose. `plan` writes a task graph. `implement` consumes a task graph, requires a clean target working tree, owns one local implementation branch, runs configured gates and review, and returns a PR body. The CLI keeps the result local by default and publishes only with explicit `--publish`. `review` can also be run by itself against an existing diff.
 
+Agentic `plan` runs independent planners in parallel. Each planner investigates scope, architecture, file responsibilities, task interfaces, acceptance, and verification. Synthesis builds a requirements crosswalk, verifies repository claims, resolves disagreements, writes and enriches the graph, and applies deterministic validation. A fresh configured reviewer then returns typed semantic findings without editing the graph. Supported findings enter a bounded fresh-synthesis repair and review loop.
+
 ```sh
 env -u CLAUDECODE sigil plan --repo /path/to/repo --intent "<change intent>" --out /path/to/repo/.sigil/runs/task-graph.json
 env -u CLAUDECODE sigil task-graph validate --repo /path/to/repo /path/to/repo/.sigil/runs/task-graph.json
@@ -257,11 +264,13 @@ env -u CLAUDECODE sigil software-change --repo /path/to/repo --intent "<same int
 
 For a larger mission with delivery policy, use backlog decomposition and dispatch. `breakdown` writes the backlog contract. Start dispatch with a durable `--run-dir`, then use `--resume` after interruption. Resume validates the repository, backlog, policy, delivery base, active branch, and process ownership before allowing mutation. A live dispatcher blocks resume. For an abandoned child, resume terminates the recorded process group, escalates from `SIGTERM` to `SIGKILL` when required, confirms that its descendants are gone, and then removes the lease. Completed items are not replayed, and expected in-progress repair edits are preserved rather than reset. Use `integrationBranch` to accumulate item pull requests away from main. The default final action opens one final pull request. `--final-action mergeWhenGreen` also merges that pull request, and `--production-gate <name>` verifies the configured deployment gate afterward.
 
-Provider profiles are user-local routing configuration. Use `profile list` for safe registry summaries, `profile inspect <selector>` for one stored policy and state record, and `profile status` for current eligibility and provider evidence. Selectors are provider-qualified, such as `codex:pro` or `claude:pro`; a bare name works only when globally unique. Human output is the default and `--json` returns distinct versioned records. Neither form exposes provider-local paths, credential-source names or values, environment data, or account identity.
+Provider profiles are user-local routing configuration. Use `profile list` for safe registry summaries, `profile inspect <selector>` for one stored policy and state record, and `profile status` for current eligibility and provider evidence. Codex subscription status reports live remaining, reserved, and available percentages. Token usage is reported only for bounded metered profiles. Selectors are provider-qualified, such as `codex:pro` or `claude:pro`; a bare name works only when globally unique. Human output is the default and `--json` returns distinct versioned records. Neither form exposes provider-local paths, credential-source names or values, environment data, or account identity.
 
 Codex subscription admission subtracts active reserved headroom and the new assignment quantum from observed capacity, then refuses assignments that would cross `--reserve-floor`. `profile next` records only a bounded one-shot selection and cannot bypass disabled state, circuits, rearm requirements, capacity floors, or metered budgets. `profile prime` is an explicit Codex subscription operation. Claude returns a typed unsupported result, and read operations and dispatch never prime profiles. Metered profiles require explicit routing mode, bounded admission, and a hard per-operation limit.
 
 Agent attempts have total, idle, and cancellation-settlement bounds. When a total or idle deadline expires, Sigil requests provider cancellation and waits through the configured cancellation grace. Cleanup must settle before a retry starts. If a provider ignores cancellation, Sigil returns the classified timeout without starting overlapping work; a later provider rejection remains observed rather than becoming an unhandled rejection.
+
+Implementation events record task, agent operation, attempt, and gate durations. Agent turns record prompt character counts and structured versus text output. Provider events add usage when the adapter supplies it. Final verification carries a receipt bound to the repository state, configured gate plan, and runtime environment. Sigil reuses that result only while all three remain unchanged.
 
 Claude PTY creates one Claude session identity per Sigil agent and starts a new PTY process for each turn, resuming that session after the first turn. Claude's transcript is the authority for matching the submitted prompt to a completed assistant turn; terminal output contributes only startup classification and payload-free provider progress. Closing or cancelling a turn terminates its owned process group and publishes the stopped lifecycle state before another attempt may start. Recovery owns total and idle deadlines and may retry only after that cleanup settles.
 
@@ -295,9 +304,9 @@ Every migration item attempt owns its events, status, plan, reviews, result or e
 
 ## Task graph contract
 
-The task graph is the public contract between agreed requirements and implementation. It may be authored by the developer's current assistant or produced by `plan` or `probe`. It has `contractVersion`, `project`, optional `goal`, and ordered `tasks`. Each task has `id`, `title`, `summary`, `dependencies`, `acceptanceCriteria`, `diagrams`, and `files`.
+The task graph is the public contract between agreed requirements and implementation. It may be authored by the developer's current assistant or produced by `plan` or `probe`. It records a required goal, selected architecture, constraints, non-goals, and ordered tasks. Each task records identity, summary, dependencies, produced and consumed interfaces, observable acceptance criteria, focused verification, diagrams, and evidence-backed file guidance.
 
-Acceptance criteria should describe observable outcomes, not mechanism mandates. `implement` should satisfy the intended behavior even when a prescribed mechanism is stale. Task order is dependency-driven. `implement` skips a task when one of its dependencies has already failed.
+Acceptance criteria describe observable outcomes, not mechanism mandates. Verification describes how to check those outcomes and supplements configured gates. Produced and consumed interfaces explain dependency edges. `implement` should satisfy the intended behavior even when file guidance is stale. Task order is dependency-driven, and a failed task blocks its dependents.
 
 Use `sigil task-graph schema` to inspect the machine-readable structural contract and `sigil task-graph validate --repo <dir> <file>` before implementation. Repository-relative file paths are resolved against `--repo`. File entries describe the expected changes, but implementation may change additional files when they are required to complete the task correctly.
 

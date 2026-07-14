@@ -26,6 +26,7 @@ export async function runFreshAgentOperation<T>(
   return runAgentOperation(
     ctx,
     options,
+    "fresh-agent",
     (controls) => ctx.withAgent(
       binding,
       async (agent) => {
@@ -120,9 +121,15 @@ export async function promptAgentTurn<T>(
 ): Promise<RecoveryResult<T | string>> {
   const schema = maybeOptions ? schemaOrOptions as z.ZodType<T> : undefined;
   const options = maybeOptions ?? schemaOrOptions as AgentOperationOptions;
+  await ctx.observe("agent-turn-prepared", {
+    stage: options.stage,
+    promptCharacters: String(prompt.length),
+    schema: schema ? "structured" : "text",
+  });
   return runAgentOperation<T | string>(
     ctx,
-    { ...options, limit: 0 },
+    options,
+    "persistent-agent",
     async (controls) => {
       const promptOptions = {
         signal: controls.signal,
@@ -141,12 +148,19 @@ export async function promptAgentTurn<T>(
 async function runAgentOperation<T>(
   ctx: SigilContext,
   options: AgentOperationOptions,
+  agentLifecycle: "fresh-agent" | "persistent-agent",
   operation: (controls: import("./recovery/index.js").OperationAttemptControls) => Promise<T>,
 ): Promise<RecoveryResult<T>> {
+  const operationStarted = performance.now();
   const failures: WorkflowFailure[] = [];
   const capacityProfiles = new Set<string>();
   let chargedFailures = 0;
+  await ctx.observe("agent-operation-started", {
+    stage: options.stage,
+    lifecycle: agentLifecycle,
+  });
   for (;;) {
+    const attemptStarted = performance.now();
     const result = await retryOperation({
       limit: 0,
       timeoutMs: options.timeoutMs,
@@ -161,11 +175,26 @@ async function runAgentOperation<T>(
         false,
       ),
     });
-    if (result.ok) return { ...result, attempts: chargedFailures + 1, failures };
+    await ctx.observe("agent-attempt-completed", {
+      stage: options.stage,
+      attempt: String(chargedFailures + 1),
+      outcome: result.ok ? "passed" : "failed",
+      durationMs: String(Math.round(performance.now() - attemptStarted)),
+    });
+    if (result.ok) {
+      await ctx.observe("agent-operation-completed", {
+        stage: options.stage,
+        outcome: "passed",
+        attempts: String(chargedFailures + 1),
+        durationMs: String(Math.round(performance.now() - operationStarted)),
+      });
+      return { ...result, attempts: chargedFailures + 1, failures };
+    }
     const provider = result.failure.provider;
     const profile = provider?.evidence.account;
     const rerouteKey = profile ?? provider?.fingerprint;
-    const canReroute = provider?.disposition === "reroute"
+    const canReroute = agentLifecycle === "fresh-agent"
+      && provider?.disposition === "reroute"
       && rerouteKey !== undefined
       && !capacityProfiles.has(rerouteKey);
     const canRetry = provider?.disposition === "retry" && chargedFailures < options.limit;
@@ -183,6 +212,12 @@ async function runAgentOperation<T>(
       chargedFailures++;
       continue;
     }
+    await ctx.observe("agent-operation-completed", {
+      stage: options.stage,
+      outcome: "failed",
+      attempts: String(chargedFailures + 1),
+      durationMs: String(Math.round(performance.now() - operationStarted)),
+    });
     return { ok: false, failure, attempts: chargedFailures + 1, failures };
   }
 }

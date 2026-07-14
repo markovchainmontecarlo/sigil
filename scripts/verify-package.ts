@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
 const root = process.cwd();
@@ -10,7 +9,7 @@ if (process.argv[2] === "--check-record") {
   process.exit(0);
 }
 const dist = join(root, "dist", "verified-package");
-const temporary = mkdtempSync(join(tmpdir(), "sigil-package-verification-"));
+const temporary = mkdtempSync("/tmp/sigil-package-verification-");
 const packageManifest = JSON.parse(readFileSync("package.json", "utf8")) as { name: string; version: string };
 const registry = join(dist, `${packageManifest.name}-${packageManifest.version}-registry.tgz`);
 const installer = join(dist, `${packageManifest.name}-${packageManifest.version}-installer.tgz`);
@@ -77,7 +76,7 @@ writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
 console.log(JSON.stringify({ verification: relative(root, recordPath), ...record }));
 
 function run(name: string, command: string[], cwd = root): void {
-  const result = Bun.spawnSync({ cmd: command, cwd, env: { ...process.env, TMPDIR: tmpdir() }, stdout: "pipe", stderr: "pipe" });
+  const result = Bun.spawnSync({ cmd: command, cwd, env: { ...process.env, TMPDIR: "/tmp" }, stdout: "pipe", stderr: "pipe" });
   if (result.exitCode === 0) return;
   throw new Error(`${name} failed\n${result.stdout}\n${result.stderr}`);
 }
@@ -150,7 +149,7 @@ function checkVerificationRecord(path: string): void {
     throw new Error("verified installer artifact is missing or recomposed");
   }
 
-  const checkRoot = mkdtempSync(join(tmpdir(), "sigil-publication-record-"));
+  const checkRoot = mkdtempSync("/tmp/sigil-publication-record-");
   run("extract publication artifact", ["tar", "-xzf", registryPath, "-C", checkRoot]);
   const packageRoot = join(checkRoot, "package");
   const manifest = readFileSync(join(packageRoot, "package.json"));

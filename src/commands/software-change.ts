@@ -92,18 +92,24 @@ export async function implementCommandWith(args: string[], effects: ImplementCom
 }
 
 export async function reviewCommand(args: string[]): Promise<number> {
+  return reviewCommandWith(args, review);
+}
+
+type ReviewCommandEffect = (input: Parameters<typeof review>[0]) => ReturnType<typeof review>;
+
+export async function reviewCommandWith(args: string[], effect: ReviewCommandEffect): Promise<number> {
   const parsed = parseCommandArgs(args, {
     repo: { type: "string" },
     base: { type: "string" },
-    "no-autofix": { type: "boolean" },
+    autofix: { type: "boolean" },
     context: { type: "string" },
   });
   rejectPositionals(parsed);
 
-  const result = await review({
+  const result = await effect({
     repo: requireValue(parsed, "repo"),
     base: requireValue(parsed, "base"),
-    autofix: !parsed.values["no-autofix"],
+    autofix: parsed.values.autofix === true,
     context: value(parsed, "context"),
   });
   printJson(result);

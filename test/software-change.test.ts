@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { createContext, type SigilContext } from "../src/context.js";
+import { CONTRACT_VERSION } from "../src/contracts/task-graph.js";
 import { implement, type ImplementInput, type ImplementResult } from "../src/workflows/software-change/implementation/index.js";
 import { plan, type PlanInput, type PlanResult } from "../src/workflows/software-change/planning/index.js";
 import { softwareChange } from "../src/workflows/software-change/workflow.js";
@@ -116,8 +117,10 @@ describe("softwareChange", () => {
     const checkpointFile = join(repo, ".sigil", "checkpoint.json");
     const calls: string[] = [];
     const graph = {
-      contractVersion: 1, project: "resume", tasks: [{
-        id: "a", title: "A", summary: "A", dependencies: [], acceptanceCriteria: ["a"], diagrams: [], files: [],
+      contractVersion: CONTRACT_VERSION, project: "resume", goal: "Resume implementation",
+      architecture: "One task owns the resumed behavior.", constraints: [], nonGoals: [], tasks: [{
+        id: "a", title: "A", summary: "A", dependencies: [], interfaces: { produces: [], consumes: [] },
+        acceptanceCriteria: ["a"], verification: [{ kind: "command", command: "true", expected: "success" }], diagrams: [], files: [],
       }],
     };
     await Bun.write(taskFile, JSON.stringify(graph));

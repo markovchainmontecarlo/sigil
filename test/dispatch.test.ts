@@ -29,7 +29,7 @@ function tempRepo(evals: Record<string, string> = {}): string {
       reviewer: { provider: "codex", model: "gpt-5.5" },
     },
     evals,
-    plan: { planners: ["planner"], synthesizer: "planner" },
+    plan: { planners: ["planner"], synthesizer: "planner", reviewer: "planner", semanticReviewLimit: 2 },
     implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
@@ -59,12 +59,17 @@ function taskGraph(repo: string, id: string): TaskGraph {
     contractVersion: CONTRACT_VERSION,
     project: "fixture",
     goal: id,
+    architecture: "Each dispatched item owns one independent implementation task.",
+    constraints: [],
+    nonGoals: [],
     tasks: [{
       id: `${id}-task`,
       title: `Task ${id}`,
       summary: `Do ${id}`,
       dependencies: [],
+      interfaces: { produces: [], consumes: [] },
       acceptanceCriteria: ["works"],
+      verification: [{ kind: "command", command: "test -f result", expected: "result exists" }],
       diagrams: [],
       files: [{ path: join(repo, `${id}.txt`), action: "modify", details: ["update fixture"] }],
     }],
@@ -564,11 +569,14 @@ describe("dispatch", () => {
         writeFileSync(changeInput.outFile, JSON.stringify(graph));
         writeFileSync(changeInput.canonicalGraphFile, JSON.stringify(graph));
         writeFileSync(changeInput.checkpointFile, JSON.stringify({
-          version: 1,
+          version: 2,
           graphDigest: "digest",
           branch: changeInput.branch,
           baseBranch: changeInput.baseBranch,
           baselineCommit: "baseline",
+          baseline: {
+            verification: { ok: true, gates: [], evidence: "baseline passed" },
+          },
           tasks: {
             "base-task": {
               status: "completed",

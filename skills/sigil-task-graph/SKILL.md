@@ -17,12 +17,15 @@ Treat the discussion and plan as intent, not proof. Verify concrete claims about
 
 ## Author the task graph
 
-1. Choose a short kebab-case project name and state the overall goal.
-2. Divide the change into coherent, independently verifiable tasks.
-3. Give every task a stable identifier, title, summary, real dependencies, and observable acceptance criteria.
-4. List evidence-backed file actions and details. These files are starting points rather than a restrictive allowlist; implementation may follow justified dependencies.
-5. Keep acceptance criteria about outcomes. Do not preserve a stale mechanism merely because it appeared in the discussion or plan.
-6. Write the graph under the ignored `<repo>/.sigil/runs/` directory unless the user supplies another durable path.
+1. Confirm the intent is one cohesive change and define its scope.
+2. Map relevant files to their responsibilities and trace ownership, state flow, callers, tests, configuration, and gates.
+3. Record the observable goal, selected architecture, constraints, and non-goals.
+4. Divide the change into the smallest cohesive tasks worth implementing, verifying, committing, and reviewing independently.
+5. Give every dependency explicit produced and consumed interfaces.
+6. Keep acceptance criteria about observable outcomes. Add focused command checks or justified manual checks without replacing configured gates.
+7. List evidence-backed file guidance anchored to stable symbols. Implementation may follow justified dependencies beyond those starting points.
+8. Check requirement coverage, placeholders, task size, and cross-task name consistency.
+9. Write the graph under the ignored `<repo>/.sigil/runs/` directory unless the user supplies another durable path.
 
 Use the public schema when the contract is uncertain:
 

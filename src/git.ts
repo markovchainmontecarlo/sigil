@@ -1,8 +1,11 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { lstat, readFile, readlink } from "node:fs/promises";
+import { join } from "node:path";
 import { extractFailureLog } from "./reports/failure-log.js";
 
 export type CommandResult = { code: number | null; stdout: string; stderr: string; log: string };
-export type CommitResult = { status: "committed" | "nothing" | "failed"; commit?: string; hooksBypassed: boolean; log: string };
+export type CommitResult = { status: "committed" | "nothing" | "failed"; commit?: string; log: string };
 export type PullRequestEvidence = {
   number: number;
   head: string;
@@ -61,6 +64,49 @@ export async function changedPaths(repo: string): Promise<string[]> {
 
 export async function isCleanTree(repo: string): Promise<boolean> {
   return (await changedPaths(repo)).length === 0;
+}
+
+export async function repositoryStateDigest(repo: string): Promise<string> {
+  const head = await git(repo, ["rev-parse", "HEAD"]);
+  if (head.code !== 0) throw new Error(head.log || "git rev-parse HEAD failed");
+  const diff = await git(repo, ["diff", "--binary", "HEAD", "--"]);
+  if (diff.code !== 0) throw new Error(diff.log || "git diff HEAD failed");
+  const untracked = await git(repo, ["ls-files", "--others", "--exclude-standard", "-z"]);
+  if (untracked.code !== 0) throw new Error(untracked.log || "git ls-files failed");
+
+  const digest = createHash("sha256");
+  digest.update(head.stdout.trim()).update("\0").update(diff.stdout).update("\0");
+  for (const path of untracked.stdout.split("\0").filter(Boolean).sort()) {
+    digest.update(path).update("\0");
+    const absolute = join(repo, path);
+    const stat = await lstat(absolute);
+    digest.update(String(stat.mode)).update("\0");
+    digest.update(stat.isSymbolicLink() ? await readlink(absolute) : await readFile(absolute));
+    digest.update("\0");
+  }
+  return digest.digest("hex");
+}
+
+export async function repositoryPathsDigest(repo: string, paths: readonly string[]): Promise<string> {
+  const digest = createHash("sha256");
+  for (const path of [...paths].sort()) {
+    digest.update(path).update("\0");
+    const absolute = join(repo, path);
+    try {
+      const stat = await lstat(absolute);
+      digest.update(String(stat.mode)).update("\0");
+      if (stat.isSymbolicLink()) digest.update(await readlink(absolute));
+      else if (stat.isDirectory()) {
+        const head = await git(absolute, ["rev-parse", "HEAD"]);
+        digest.update(head.code === 0 ? head.stdout.trim() : "directory");
+      } else digest.update(await readFile(absolute));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      digest.update("deleted");
+    }
+    digest.update("\0");
+  }
+  return digest.digest("hex");
 }
 
 export async function checkoutFreshBranch(repo: string, branch: string, base: string): Promise<void> {
@@ -140,25 +186,24 @@ export async function checkoutIntegrationBranch(
 }
 
 export async function commitAll(repo: string, message: string): Promise<CommitResult> {
-  if (await isCleanTree(repo)) return { status: "nothing", hooksBypassed: false, log: "" };
+  if (await isCleanTree(repo)) return { status: "nothing", log: "" };
   const add = await git(repo, ["add", "--", "."]);
-  if (add.code !== 0) return { status: "failed", hooksBypassed: false, log: add.log };
+  if (add.code !== 0) return { status: "failed", log: add.log };
   const staged = await git(repo, ["diff", "--cached", "--name-only"]);
-  if (staged.code !== 0) return { status: "failed", hooksBypassed: false, log: staged.log };
-  if (!staged.stdout.trim()) return { status: "nothing", hooksBypassed: false, log: "" };
+  if (staged.code !== 0) return { status: "failed", log: staged.log };
+  if (!staged.stdout.trim()) return { status: "nothing", log: "" };
 
-  let firstLog = "";
-  for (const bypass of [false, true]) {
-    const args = ["commit", "-m", message];
-    if (bypass) args.push("--no-verify");
-    const commit = await git(repo, args);
-    if (commit.code === 0) {
-      const rev = await git(repo, ["rev-parse", "HEAD"]);
-      return { status: "committed", commit: rev.stdout.trim() || undefined, hooksBypassed: bypass, log: [firstLog, commit.log].filter(Boolean).join("\n") };
-    }
-    firstLog = [firstLog, commit.log].filter(Boolean).join("\n");
+  const commit = await git(repo, ["commit", "-m", message]);
+  if (commit.code !== 0) {
+    return { status: "failed", log: commit.log };
   }
-  return { status: "failed", hooksBypassed: true, log: firstLog };
+
+  const rev = await git(repo, ["rev-parse", "HEAD"]);
+  return {
+    status: "committed",
+    commit: rev.stdout.trim() || undefined,
+    log: commit.log,
+  };
 }
 
 async function retry(times: number, action: () => Promise<CommandResult>): Promise<AttemptResult> {

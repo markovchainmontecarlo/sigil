@@ -31,10 +31,10 @@ class StubAgent implements SigilAgent {
 function tempRepo(planners = ["planner-a"], synthesizer = "synthesizer", context: Array<{ path: string; update?: boolean }> = []): string {
   const dir = mkdtempSync(join(tmpdir(), "sigil-plan-test-"));
   writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
-    agents: Object.fromEntries([...planners, synthesizer].map((name) => [name, { provider: "codex", model: "gpt-5.5" }])),
+    agents: Object.fromEntries([...planners, synthesizer, "planning-reviewer"].map((name) => [name, { provider: "codex", model: "gpt-5.5" }])),
     evals: {},
     context,
-    plan: { planners, synthesizer },
+    plan: { planners, synthesizer, reviewer: "planning-reviewer", semanticReviewLimit: 2 },
     implement: { coder: planners[0], sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: [synthesizer], synthesizer: synthesizer },
   }, null, 2));
@@ -46,12 +46,17 @@ function validGraph(repo: string): object {
     contractVersion: CONTRACT_VERSION,
     project: "fixture",
     goal: "change fixture",
+    architecture: "The fixture file remains the owner of the changed behavior.",
+    constraints: [],
+    nonGoals: [],
     tasks: [{
       id: "task-a",
       title: "Task A",
       summary: "Modify app.txt.",
       dependencies: [],
+      interfaces: { produces: [], consumes: [] },
       acceptanceCriteria: ["app.txt is updated"],
+      verification: [{ kind: "command", command: "grep updated app.txt", expected: "updated text is present" }],
       diagrams: [],
       files: [{ path: join(repo, "app.txt"), action: "modify", details: ["Update line 1 in app.txt"] }],
     }],
@@ -84,49 +89,63 @@ function synthAgent(repo: string, opts: { invalidFirst?: boolean; repairs?: bool
     divergence: "DIVERGENCE CONTENT",
     convergenceVerified: "CONVERGENCE VERIFIED CONTENT",
     divergenceVerified: "DIVERGENCE VERIFIED CONTENT",
+    crosswalk: "REQUIREMENTS CROSSWALK CONTENT",
+    crosswalkVerified: "REQUIREMENTS CROSSWALK VERIFIED CONTENT",
     resolved: "RESOLVED DIVERGENCE CONTENT",
   };
-  const agent = new StubAgent((call, prompt) => {
-    if (call === 1) {
+  const agent = new StubAgent((_call, prompt) => {
+    if (prompt.includes("Write the convergence report")) {
       files.convergence = firstPathAfter(prompt, "convergence report");
       files.divergence = firstPathAfter(prompt, "divergence report");
+      files.crosswalk = firstPathAfter(prompt, "Write the requirements crosswalk");
       writeFileSync(files.convergence, contents.convergence);
       writeFileSync(files.divergence, contents.divergence);
+      writeFileSync(files.crosswalk, contents.crosswalk);
     }
-    if (call === 2) {
+    if (prompt.includes("Write convergence verification")) {
       files.convergenceVerified = firstPathAfter(prompt, "convergence verification");
       files.divergenceVerified = firstPathAfter(prompt, "divergence verification");
+      files.crosswalkVerified = firstPathAfter(prompt, "crosswalk verification");
       writeFileSync(files.convergenceVerified, contents.convergenceVerified);
       writeFileSync(files.divergenceVerified, contents.divergenceVerified);
+      writeFileSync(files.crosswalkVerified, contents.crosswalkVerified);
     }
-    if (call === 3) {
-      files.resolved = firstPathAfter(prompt, "resolution report");
+    if (prompt.includes("Write the resolution report")) {
+      files.resolved = firstPathAfter(prompt, "report to");
       writeFileSync(files.resolved, contents.resolved);
     }
-    if (call === 4) {
-      files.task = firstPathAfter(prompt, "to");
+    if (prompt.includes("Build the task graph")) {
+      files.task = firstPathAfter(prompt, "JSON to");
       writeFileSync(files.task, JSON.stringify(opts.invalidFirst ? invalidGraph(repo) : validGraph(repo), null, 2));
     }
-    if (call === 6 && opts.repairs !== false) writeFileSync(files.task, JSON.stringify(validGraph(repo), null, 2));
+    if (prompt.includes("failed deterministic validation") && opts.repairs !== false) {
+      writeFileSync(files.task, JSON.stringify(validGraph(repo), null, 2));
+    }
   });
   return { agent, files };
 }
 
 function fastPathSynthAgent(repo: string, opts: { invalidFirst?: boolean } = {}): { agent: StubAgent; files: Record<string, string> } {
   const files: Record<string, string> = {};
-  const agent = new StubAgent((call, prompt) => {
-    if (call === 1) {
-      files.task = firstPathAfter(prompt, "to");
+  const agent = new StubAgent((_call, prompt) => {
+    if (prompt.includes("Build the task graph")) {
+      files.task = firstPathAfter(prompt, "JSON to");
       writeFileSync(files.task, JSON.stringify(opts.invalidFirst ? invalidGraph(repo) : validGraph(repo), null, 2));
     }
-    if (call === 3) writeFileSync(files.task, JSON.stringify(validGraph(repo), null, 2));
+    if (prompt.includes("failed deterministic validation")) {
+      writeFileSync(files.task, JSON.stringify(validGraph(repo), null, 2));
+    }
   });
   return { agent, files };
 }
 
 function testContext(repo: string, agents: Record<string, StubAgent>, observations: Array<{ stage: string; details: Record<string, string> }> = []) {
   return createContext(repo, {
-    createAgent: (binding) => agents[binding as string],
+    createAgent: (binding) => agents[binding as string] ?? ({
+      prompt: async () => ({ valid: true, findings: [] }),
+      close: async () => {},
+      [Symbol.asyncDispose]: async () => {},
+    } as unknown as SigilAgent),
     onObserve: async (stage, details) => {
       observations.push({ stage, details });
     },
@@ -149,9 +168,12 @@ describe("plan", () => {
     expect(result.taskCount).toBeGreaterThan(0);
     expect(validateTaskGraph(JSON.parse(await readFile(result.taskFile, "utf8"))).tasks).toHaveLength(1);
     expect(synth.agent.calls[1]).toContain("CONVERGENCE CONTENT");
+    expect(synth.agent.calls[1]).toContain("REQUIREMENTS CROSSWALK CONTENT");
     expect(synth.agent.calls[1]).not.toContain(synth.files.convergence);
     expect(synth.agent.calls[2]).toContain("DIVERGENCE VERIFIED CONTENT");
     expect(synth.agent.calls[2]).not.toContain(synth.files.divergenceVerified);
+    expect(synth.agent.calls[3]).toContain("REQUIREMENTS CROSSWALK VERIFIED CONTENT");
+    expect(synth.agent.calls[3]).not.toContain(synth.files.crosswalkVerified);
   });
 
   test("defaults every artifact inside ignored local run storage", async () => {

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
-import { AgentBindingSchema, loadConfig } from "../src/config.js";
+import { AgentBindingSchema, loadConfig, resolveEvalCommand, resolveEvalPlan } from "../src/config.js";
 
 function tempRepo(): string {
   return mkdtempSync(join(tmpdir(), "sigil-config-test-"));
@@ -19,7 +19,12 @@ const validConfig = {
     reviewer: { provider: "codex", model: "gpt-5.5" },
   },
   evals: { build: "bun run typecheck", test: "bun test" },
-  plan: { planners: ["explorer", "implementer"], synthesizer: "explorer" },
+  plan: {
+    planners: ["explorer", "implementer"],
+    synthesizer: "explorer",
+    reviewer: "reviewer",
+    semanticReviewLimit: 2,
+  },
   implement: { coder: "implementer", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
   review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };
@@ -38,8 +43,47 @@ describe("loadConfig", () => {
     expect(config.evals.build).toBe("bun run typecheck");
     expect(config.context).toEqual([]);
     expect(config.plan.planners).toEqual(["explorer", "implementer"]);
+    expect(config.plan.reviewer).toBe("reviewer");
+    expect(config.plan.semanticReviewLimit).toBe(2);
     expect(config.review.followUpReviews).toBe(0);
     expect(config.implement.idleTimeoutMs).toBePositive();
+  });
+
+  test("structured evals declare which earlier gates they cover", () => {
+    const root = tempRepo();
+    writeConfig(root, {
+      ...validConfig,
+      evals: {
+        build: "bun run typecheck",
+        test: "bun run test:fast",
+        verify: { command: "bun run test:all", covers: ["test"] },
+      },
+    });
+
+    const config = loadConfig(root);
+
+    expect(resolveEvalCommand("verify", config)).toBe("bun run test:all");
+    expect(resolveEvalPlan(["build", "test", "verify"], config))
+      .toEqual(["build", "verify"]);
+  });
+
+  test("eval coverage rejects cycles and unknown gates", () => {
+    const cyclic = tempRepo();
+    writeConfig(cyclic, {
+      ...validConfig,
+      evals: {
+        test: { command: "test", covers: ["verify"] },
+        verify: { command: "verify", covers: ["test"] },
+      },
+    });
+    const unknown = tempRepo();
+    writeConfig(unknown, {
+      ...validConfig,
+      evals: { verify: { command: "verify", covers: ["test"] } },
+    });
+
+    expect(() => loadConfig(cyclic)).toThrow("cycle");
+    expect(() => loadConfig(unknown)).toThrow("unknown eval");
   });
 
   test("session task limit must be a positive integer", () => {
@@ -164,5 +208,15 @@ describe("loadConfig", () => {
     writeConfig(root, { ...validConfig, plan: { ...validConfig.plan, planners: ["missing-planner"] } });
 
     expect(() => loadConfig(root)).toThrow("missing-planner");
+  });
+
+  test("planning reviewer must exist and semantic review limit must be nonnegative", () => {
+    const missing = tempRepo();
+    writeConfig(missing, { ...validConfig, plan: { ...validConfig.plan, reviewer: "missing-reviewer" } });
+    expect(() => loadConfig(missing)).toThrow("missing-reviewer");
+
+    const invalidLimit = tempRepo();
+    writeConfig(invalidLimit, { ...validConfig, plan: { ...validConfig.plan, semanticReviewLimit: -1 } });
+    expect(() => loadConfig(invalidLimit)).toThrow();
   });
 });

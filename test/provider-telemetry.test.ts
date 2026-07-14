@@ -11,7 +11,7 @@ function repo(): string {
   const path = mkdtempSync(join(tmpdir(), "sigil-telemetry-"));
   writeFileSync(join(path, "sigil.config.json"), JSON.stringify({
     agents: { coder: { provider: "codex", model: "model" } }, evals: {}, context: [],
-    plan: { planners: ["coder"], synthesizer: "coder" },
+    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder", semanticReviewLimit: 2 },
     implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "x/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }));

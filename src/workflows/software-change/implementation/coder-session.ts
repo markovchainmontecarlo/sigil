@@ -2,7 +2,7 @@ import type { RichSigilAgent, SigilContext } from "../../../context.js";
 
 export type CoderSession = {
   agent: RichSigilAgent;
-  rotated: boolean;
+  newSession: boolean;
 };
 
 export class CoderSessionLifecycle implements AsyncDisposable {
@@ -19,10 +19,12 @@ export class CoderSessionLifecycle implements AsyncDisposable {
   async acquire(): Promise<CoderSession> {
     const taskLimitReached = this.agent !== undefined && this.tasks >= this.taskLimit;
     if (taskLimitReached) await this.close("task-limit");
-    if (!this.agent) await this.open();
+
+    const newSession = this.agent === undefined;
+    if (newSession) await this.open();
 
     this.tasks++;
-    return { agent: this.agent!, rotated: this.generation > 1 };
+    return { agent: this.agent!, newSession };
   }
 
   async invalidate(reason: string): Promise<void> {
