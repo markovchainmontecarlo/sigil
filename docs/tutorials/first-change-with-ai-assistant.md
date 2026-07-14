@@ -55,7 +55,7 @@ You do not need to edit JSON by hand. Ask the assistant to correct the graph if 
 Start from a clean repository. Then run:
 
 ```sh
-sigil implement --repo /path/to/repo --task-file /path/to/repo/.sigil/runs/my-change/task-graph.json
+sigil implement --repo /path/to/repo --task-file /path/to/repo/.sigil/runs/my-change/task-graph.json --brief /path/to/repo/.sigil/runs/my-change/brief.md
 ```
 
 Sigil validates the graph again, creates an implementation branch, implements tasks in dependency order, commits verified work, runs configured checks, and reviews the complete change.
@@ -67,7 +67,7 @@ Inspect the branch, commits, Git diff, failed checks, and review findings before
 When you are ready to push the branch and open a pull request, add `--publish`:
 
 ```sh
-sigil implement --repo /path/to/repo --task-file /path/to/repo/.sigil/runs/my-change/task-graph.json --publish
+sigil implement --repo /path/to/repo --task-file /path/to/repo/.sigil/runs/my-change/task-graph.json --brief /path/to/repo/.sigil/runs/my-change/brief.md --publish
 ```
 
 Without `--publish`, the branch remains local.

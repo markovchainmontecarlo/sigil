@@ -50,13 +50,13 @@ Present a concise summary of the tasks, dependency order, and important authorit
 When implementation is authorized, run:
 
 ```sh
-sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json
+sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --brief /path/to/brief.md
 ```
 
 Implementation requires a clean repository, creates a branch, commits verified tasks, runs configured gates, and reviews the result. It remains local unless publication is explicitly requested:
 
 ```sh
-sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --publish
+sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --brief /path/to/brief.md --publish
 ```
 
 Publication requires explicit authority. Do not infer it from permission to edit, implement, commit, or review.

@@ -64,6 +64,7 @@ function implementInput(input: SoftwareChangeInput, planned: PlanResult): Implem
     taskFile: planned.taskFile,
     branch: input.branch,
     baseBranch: input.baseBranch,
+    brief: input.brief,
     instructions: input.instructions,
     canonicalGraphFile: input.canonicalGraphFile,
     checkpointFile: input.checkpointFile,

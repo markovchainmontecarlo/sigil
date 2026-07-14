@@ -67,6 +67,7 @@ export async function implementCommandWith(args: string[], effects: ImplementCom
     repo: { type: "string" },
     "task-file": { type: "string" },
     branch: { type: "string" },
+    brief: { type: "string" },
     instructions: { type: "string" },
     publish: { type: "boolean" },
   });
@@ -77,6 +78,7 @@ export async function implementCommandWith(args: string[], effects: ImplementCom
     repo,
     taskFile: requireValue(parsed, "task-file"),
     branch: value(parsed, "branch"),
+    brief: await readOptionalFile(value(parsed, "brief")),
     instructions: await readOptionalFile(value(parsed, "instructions")),
   });
   const base = loadConfig(repo).implement.baseBranch;

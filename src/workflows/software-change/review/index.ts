@@ -238,6 +238,7 @@ async function collectFindings(
 async function repairFindings(
   ctx: SigilContext,
   findings: ReviewFinding[],
+  context: string | undefined,
   coder: string,
   limit: number,
   timeoutMs: number,
@@ -246,12 +247,15 @@ async function repairFindings(
     ctx,
     "review/repair",
     "repair",
-    { findings },
+    { context: context ?? "", findings },
     () => runFreshAgentOperation(
       ctx,
       coder,
       { stage: "software-change:review-repair", limit, timeoutMs },
-      (agent) => agent.prompt(reviewPrompts.fix({ FINDINGS: JSON.stringify(findings, null, 2) })),
+      (agent) => agent.prompt(reviewPrompts.fix({
+        CONTEXT: context ?? "",
+        FINDINGS: JSON.stringify(findings, null, 2),
+      })),
     ),
   );
   if (!repaired.ok) throw new Error(repaired.failure.evidence);
@@ -325,6 +329,7 @@ export const review = sigil<ReviewInput, ReviewResult>("review", async (ctx, inp
       await repairFindings(
         ctx,
         current,
+        input.context,
         config.implement.coder,
         config.implement.repairLimit,
         config.implement.operationTimeoutMs,

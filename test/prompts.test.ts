@@ -31,6 +31,10 @@ describe("prompts", () => {
     const compare = planningPrompts.comparePlans({ INTENT: "goal", PLANS: "plans", CONVERGE_FILE: "convergence", DIVERGE_FILE: "divergence", CROSSWALK_FILE: "crosswalk", RUBRIC: "rubric" });
 
     expect(investigate).toMatch(/scope|ownership|state flow|callers|tests|configuration|verified|falsified|unresolved/i);
+    expect(investigate).toMatch(/confirmed development handoff/i);
+    expect(investigate).toMatch(/preserve.*intent.*acceptance criteria.*decisions.*architecture.*constraints.*non-goals/is);
+    expect(investigate).toMatch(/repository.*claims.*hypotheses.*verified/is);
+    expect(investigate).not.toMatch(/brief contains non-authoritative leads/i);
     expect(writePlan).toMatch(/architecture|constraints|non-goals|produced|consumed|verification|self-review/i);
     expect(compare).toMatch(/requirements crosswalk|task boundaries|interfaces|verification|omission/i);
     expect(`${investigate}\n${writePlan}\n${compare}`).not.toMatch(/\{\{\w+\}\}/);
@@ -87,6 +91,7 @@ ${taskGraphRepair}`).not.toMatch(/\{\{\w+\}\}/);
       ARCHITECTURE: "architecture",
       CONSTRAINTS: "- none",
       NON_GOALS: "- none",
+      CONFIRMED_BRIEF: "Confirmed outcome and boundaries",
       HANDOFF: "handoff",
       CONTEXT: "context block",
     });
@@ -104,6 +109,10 @@ ${taskGraphRepair}`).not.toMatch(/\{\{\w+\}\}/);
     });
 
     expect(session).toContain("context block");
+    expect(session).toContain("## Confirmed brief");
+    expect(session).toContain("Confirmed outcome and boundaries");
+    expect(session).toMatch(/intent.*acceptance criteria.*decisions.*architecture.*constraints.*non-goals/is);
+    expect(session).toMatch(/verify repository descriptions.*claims/is);
     expect(instructions).toContain("configured `update: true` context files");
     expect(instructions).toContain("Treat `update: false` context as read-only");
     expect(task).not.toContain("context block");

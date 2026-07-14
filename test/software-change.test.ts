@@ -75,7 +75,7 @@ describe("softwareChange", () => {
 
     expect(calls).toEqual([
       { stage: "plan", input: { repo, intent: "Make the change.", brief: "Preserve behavior.", outFile: "/tmp/requested-task-graph.json" } },
-      { stage: "implement", input: { repo, taskFile: "/tmp/typed-task-graph.json", branch: "sigil/requested", instructions: "Read the architecture note first." } },
+      { stage: "implement", input: { repo, taskFile: "/tmp/typed-task-graph.json", branch: "sigil/requested", brief: "Preserve behavior.", instructions: "Read the architecture note first." } },
     ]);
     expect(result.stage).toBe("implementation");
     expect(result.taskFile).toBe("/tmp/typed-task-graph.json");

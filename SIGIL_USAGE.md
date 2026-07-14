@@ -183,7 +183,7 @@ Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed r
 | `sigil software-change --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--task-file <file>] [--branch <name>] [--instructions <file>]` | Run the unified local single-change workflow without publishing. | The workflow result is valid and reports no issues. |
 | `sigil task-graph validate [--repo <dir>] [--json] <task-file>` | Validate an assistant-authored or agentically produced task graph. | The graph satisfies structural, dependency, and repository-path rules. |
 | `sigil task-graph schema [--out <file>]` | Print or write the public task-graph JSON Schema. | The schema was produced. |
-| `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>] [--publish]` | Apply and review an accepted task graph locally, with optional explicit publication. | Local implementation succeeds; when `--publish` is supplied, publication also succeeds. |
+| `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--brief <file>] [--instructions <file>] [--publish]` | Apply and review an accepted task graph locally, with optional confirmed context and explicit publication. | Local implementation succeeds; when `--publish` is supplied, publication also succeeds. |
 | `sigil review --repo <dir> --base <ref> [--autofix] [--context <text>]` | Review the current diff without editing by default. Add `--autofix` to repair actionable findings in the checkout. | There are no unresolved high findings and no issues. |
 | `sigil breakdown --repo <dir> --mission <text> [--out <file>]` | Turn a mission into a backlog. | The produced backlog is valid. |
 | `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch --run-dir <dir>` | Start durable backlog delivery through main or an accumulating integration branch. | Dispatch finished without stopping. |
@@ -205,7 +205,7 @@ env -u CLAUDECODE sigil software-change \
   --out /path/to/repo/.sigil/runs/task-graph.json
 ```
 
-Use `--brief <file>` when Sigil planning should read requirements or constraints from a file. In AI-assisted development, the current assistant translates an active Markdown plan directly into a task graph instead. Use `--instructions <file>` for implementation-only guidance and `--task-file <file>` to skip planning and run the unified workflow from an existing typed task graph.
+Use `--brief <file>` when Sigil planning should read confirmed requirements or constraints from a file. Carry that same brief into implementation so coder and review sessions retain the confirmed handoff. In AI-assisted development, the current assistant translates an active Markdown plan directly into a task graph and passes the confirmed brief alongside it. Use `--instructions <file>` for implementation-only guidance and `--task-file <file>` to skip planning and run the unified workflow from an existing typed task graph.
 
 A brief states outcomes and boundaries, not mechanisms. A strong brief carries the outcome as one testable scenario; the decision hierarchy that orders competing solutions; named non-goals so settled decisions are not replanned; and completion as observable checks. Attach verified findings and any prior plan as referenced context: planners may correct referenced context with evidence, but not cross the stated boundaries. Choose `--brief` when planning must still discover file-level truth; choose `--task-file` when the caller already holds it. The `sigil-brief` skill authors this shape from an accepted conversation.
 
@@ -251,7 +251,7 @@ Agentic `plan` runs independent planners in parallel. Each planner investigates 
 ```sh
 env -u CLAUDECODE sigil plan --repo /path/to/repo --intent "<change intent>" --out /path/to/repo/.sigil/runs/task-graph.json
 env -u CLAUDECODE sigil task-graph validate --repo /path/to/repo /path/to/repo/.sigil/runs/task-graph.json
-env -u CLAUDECODE sigil implement --repo /path/to/repo --task-file /path/to/repo/.sigil/runs/task-graph.json
+env -u CLAUDECODE sigil implement --repo /path/to/repo --task-file /path/to/repo/.sigil/runs/task-graph.json --brief /path/to/repo/.sigil/runs/brief.md
 env -u CLAUDECODE sigil review --repo /path/to/repo --base main
 ```
 
