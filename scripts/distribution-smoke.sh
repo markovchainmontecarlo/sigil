@@ -69,6 +69,29 @@ cmp "$tmp/installed-task-graph.schema.json" "$home_dir/.sigil/lib/schemas/task-g
 (cd "$home_dir/.sigil/lib" && bun -e 'await import("sigil"); await import("sigil/contracts"); await import("sigil/server")')
 ! grep -R 'src/cli\.ts\|src/index\.ts' "$home_dir/.local/bin/sigil" "$home_dir/.sigil/lib/src" >/dev/null
 
+installed_prompts="$home_dir/.sigil/lib/.installed-prompts.mjs"
+cat > "$installed_prompts" <<'PROMPTS'
+import {
+  breakdownPrompts,
+  implementationPrompts,
+  planningPrompts,
+  reviewPrompts,
+} from "sigil";
+import { dispatchPrompts } from "./src/workflows/dispatch/prompts.js";
+
+for (const render of [
+  planningPrompts.investigate,
+  implementationPrompts.task,
+  reviewPrompts.findings,
+  breakdownPrompts.cut,
+  dispatchPrompts.repair,
+]) {
+  if (typeof render() !== "string") throw new Error("installed prompt did not render");
+}
+PROMPTS
+(cd "$home_dir/.sigil/lib" && bun "$installed_prompts")
+rm "$installed_prompts"
+
 repo="$tmp/repo"
 run_dir="$tmp/detached-run"
 workflow="$tmp/workflow.ts"
