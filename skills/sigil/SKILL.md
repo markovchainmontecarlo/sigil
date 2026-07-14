@@ -47,7 +47,7 @@ When an active Markdown plan exists, verify that the file exists and read it in 
 After the brief is confirmed, present exactly these routes:
 
 - **Replan and implement**: pass the confirmed brief and complete plan through `software-change --brief`. Sigil may reconsider implementation choices and correct repository claims, but it must preserve the confirmed outcome, decisions, constraints, and non-goals.
-- **Convert and implement locally**: use `sigil-task-graph` to translate the confirmed brief and complete plan directly, validate the graph, and run local implementation without another planning round.
+- **Convert and implement locally**: use `sigil-task-graph` to translate the confirmed brief and complete plan directly, validate the graph, and pass both the graph and confirmed brief to local implementation without another planning round.
 
 Do not infer this choice. A validated task graph is accepted implementation state and uses `implement` directly.
 

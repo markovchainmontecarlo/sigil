@@ -21,10 +21,12 @@ Implementation requires a clean working tree and a configured base branch. Commi
 Run:
 
 ```sh
-sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json
+sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --brief /path/to/brief.md
 ```
 
-Sigil validates the graph, saves a normalized copy, creates the implementation branch, establishes a baseline, and executes tasks in dependency order. The coder receives graph architecture, constraints, non-goals, current task interfaces, acceptance criteria, focused verification, and file guidance. Produced interfaces and acceptance criteria are authoritative boundaries. Focused verification supplements the configured gates. Each completed task receives a verified commit. Final gates and review run after all tasks complete.
+Sigil validates the graph, saves a normalized copy, creates the implementation branch, establishes a baseline, and executes tasks in dependency order. Each new coder session receives the confirmed brief once, together with graph architecture, constraints, non-goals, current task interfaces, acceptance criteria, focused verification, and file guidance. Produced interfaces and acceptance criteria are authoritative boundaries. Repository claims and proposed mechanisms remain subject to current evidence. Focused verification supplements the configured gates. Each completed task receives a verified commit. Final gates and review run after all tasks complete.
+
+Omit `--brief` only when no confirmed brief exists, such as a standalone externally produced task graph.
 
 Inspect the branch, commits, Git diff, failed checks, and review findings before publishing.
 
@@ -33,7 +35,7 @@ Inspect the branch, commits, Git diff, failed checks, and review findings before
 Use `--instructions` for execution guidance that should not change the accepted task graph:
 
 ```sh
-sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --instructions /path/to/instructions.md
+sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --brief /path/to/brief.md --instructions /path/to/instructions.md
 ```
 
 Instructions are orientation rather than proof. Implementation verifies important claims against the repository.
@@ -43,7 +45,7 @@ Instructions are orientation rather than proof. Implementation verifies importan
 When publication is authorized, add `--publish`:
 
 ```sh
-sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --publish
+sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json --brief /path/to/brief.md --publish
 ```
 
 Publication occurs only after implementation and review succeed. Without `--publish`, the command succeeds or fails based only on the local implementation and review.

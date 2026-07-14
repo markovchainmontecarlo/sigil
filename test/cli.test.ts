@@ -623,6 +623,44 @@ describe("cli", () => {
     expect(publications).toBe(1);
   });
 
+  test("implement reads and forwards a confirmed brief", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-implement-brief-"));
+    const briefFile = join(repo, "brief.md");
+    writeFileSync(join(repo, "sigil.config.json"), JSON.stringify(DEFAULT_SIGIL_CONFIG));
+    writeFileSync(briefFile, "Confirmed implementation context.\n");
+    let implementationInput: unknown;
+    const effects = {
+      implement: async (input: unknown) => {
+        implementationInput = input;
+        return {
+          branch: "feature/change",
+          prBody: "Ready",
+          reviewBlocking: false,
+          issues: [],
+          failedTasks: [],
+          noopTasks: [],
+        };
+      },
+      publish: async () => ({ push: { ok: true, log: "" }, pr: { ok: true, log: "" } }),
+    };
+
+    expect(await implementCommandWith([
+      "--repo",
+      repo,
+      "--task-file",
+      "graph.json",
+      "--brief",
+      briefFile,
+    ], effects as never)).toBe(0);
+    expect(implementationInput).toEqual({
+      repo,
+      taskFile: "graph.json",
+      branch: undefined,
+      brief: "Confirmed implementation context.\n",
+      instructions: undefined,
+    });
+  });
+
   test("review exits 1 when review reports issues without unresolved highs", () => {
     expect(reviewExitCode({ valid: false, unresolvedHigh: 0, issues: ["git diff failed"] })).toBe(1);
   });

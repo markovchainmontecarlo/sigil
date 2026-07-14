@@ -43,6 +43,7 @@ export type ImplementInput = {
   repo: string;
   branch?: string;
   baseBranch?: string;
+  brief?: string;
   instructions?: string;
   canonicalGraphFile?: string;
   checkpointFile?: string;
@@ -107,6 +108,7 @@ type SessionContextInput = {
   checkpoint: ImplementationCheckpoint;
   branch: string;
   head: string;
+  brief?: string;
   instructions?: string;
 };
 
@@ -124,6 +126,7 @@ async function sessionContextPrompt(
     ARCHITECTURE: input.graph.architecture,
     CONSTRAINTS: input.graph.constraints.map((constraint) => `- ${constraint}`).join("\n") || "- none",
     NON_GOALS: input.graph.nonGoals.map((nonGoal) => `- ${nonGoal}`).join("\n") || "- none",
+    CONFIRMED_BRIEF: input.brief?.trim() || "No confirmed brief was supplied for this standalone task graph.",
     CONTEXT: context,
     HANDOFF: handoff,
   });
@@ -158,10 +161,50 @@ function implementationContextBlock(configuredContext: string, instructions: str
   return [configuredContext, runInstructionsBlock(instructions)].filter(Boolean).join("\n\n");
 }
 
-function reviewContext(graph: TaskGraph, instructions: string | undefined): string {
+function reviewTaskContract(task: Task): string {
   return [
+    `### ${task.id}: ${task.title}`,
+    "",
+    task.summary,
+    "",
+    "Acceptance criteria:",
+    task.acceptanceCriteria.map((criterion) => `- ${criterion}`).join("\n"),
+    "",
+    "Produces:",
+    task.interfaces.produces.map((output) => `- ${output.name}: ${output.description}`).join("\n") || "- none",
+    "",
+    "Consumes:",
+    task.interfaces.consumes.map((input) => `- ${input.taskId}.${input.name}: ${input.description}`).join("\n") || "- none",
+  ].join("\n");
+}
+
+function reviewContext(
+  graph: TaskGraph,
+  brief: string | undefined,
+  instructions: string | undefined,
+): string {
+  return [
+    "# Confirmed change contract",
+    "",
+    "Preserve confirmed intent, acceptance criteria, decisions, architecture, constraints, and non-goals. Verify repository descriptions, current-behavior claims, affected-file expectations, and proposed mechanisms against current source and observed behavior. Report conflicts instead of silently changing a confirmed requirement.",
+    "",
+    "## Confirmed brief",
+    brief?.trim() || "No confirmed brief was supplied for this standalone task graph.",
+    "",
+    "## Goal",
     graph.goal,
-    graph.tasks.map((t) => `${t.id}: ${t.title}`).join("\n"),
+    "",
+    "## Architecture",
+    graph.architecture,
+    "",
+    "## Constraints",
+    graph.constraints.map((constraint) => `- ${constraint}`).join("\n") || "- none",
+    "",
+    "## Non-goals",
+    graph.nonGoals.map((nonGoal) => `- ${nonGoal}`).join("\n") || "- none",
+    "",
+    "## Acceptance criteria and interfaces",
+    graph.tasks.map(reviewTaskContract).join("\n\n"),
     runInstructionsBlock(instructions),
   ].filter(Boolean).join("\n\n");
 }
@@ -435,6 +478,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
           checkpoint,
           branch,
           head: taskBase,
+          brief: input.brief,
           instructions: input.instructions,
         })
       : "";
@@ -580,6 +624,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
     graph,
     checkpoint,
     branch,
+    brief: input.brief,
     instructions: input.instructions,
   });
   if (!finalVerification.ok) {
@@ -593,7 +638,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
       repo: input.repo,
       base: baseBranch,
       autofix: true,
-      context: reviewContext(graph, input.instructions),
+      context: reviewContext(graph, input.brief, input.instructions),
     });
     issues.push(...reviewResult.issues.map((issue) => `review: ${issue}`));
     const reviewVerification = await verifyFinalWithRepair(ctx, {
@@ -604,6 +649,7 @@ export const implement = sigil<ImplementInput, ImplementResult>("implement", asy
       graph,
       checkpoint,
       branch,
+      brief: input.brief,
       instructions: input.instructions,
       candidate: reviewResult.verification ?? finalVerification.verification,
     });
@@ -641,6 +687,7 @@ type FinalVerificationRepairInput = {
   graph: TaskGraph;
   checkpoint: ImplementationCheckpoint;
   branch: string;
+  brief?: string;
   instructions?: string;
   candidate?: VerificationResult;
 };
@@ -664,6 +711,7 @@ async function verifyFinalWithRepair(
     checkpoint: input.checkpoint,
     branch: input.branch,
     head: repairBase,
+    brief: input.brief,
     instructions: input.instructions,
   });
   await using fixer = ctx.agent(input.config.implement.coder);

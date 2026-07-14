@@ -20,7 +20,7 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>]
 .br
-.B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>] [\-\-publish]
+.B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-brief <file>] [\-\-instructions <file>] [\-\-publish]
 .br
 .B sigil review \-\-repo <dir> \-\-base <ref> [\-\-autofix] [\-\-context <text>]
 .br
@@ -286,7 +286,7 @@ Exit codes: 0 when the workflow result is valid and reports no issues; 1 otherwi
 .SS implement
 Apply a task graph, commit verified tasks, run gates, and review locally.
 .P
-Usage: \fBsigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-instructions <file>] [\-\-publish]\fR
+Usage: \fBsigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-brief <file>] [\-\-instructions <file>] [\-\-publish]\fR
 .P
 Arguments and flags:
 .TP
@@ -298,6 +298,9 @@ Required. Task graph JSON file.
 .TP
 \fB\-\-branch <name>\fR
 Optional branch name.
+.TP
+\fB\-\-brief <file>\fR
+Optional confirmed development brief.
 .TP
 \fB\-\-instructions <file>\fR
 Optional run\-specific implementation instructions.

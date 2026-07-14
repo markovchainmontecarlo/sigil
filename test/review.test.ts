@@ -129,16 +129,23 @@ describe("structured software-change review", () => {
   test("repairs a high finding without a follow-up review by default", async () => {
     const { repo, base } = fixture();
     changeApp(repo);
+    let repairPrompt = "";
     const actions: AgentAction[] = [
       () => ({ findings: [finding()] }),
-      () => {
+      (prompt) => {
+        repairPrompt = prompt;
         writeFileSync(join(repo, "app.txt"), "atomic\n");
         return "fixed";
       },
     ];
 
     const ctx = context(repo, actions);
-    const result = await review({ repo, base, autofix: true }, ctx);
+    const result = await review({
+      repo,
+      base,
+      autofix: true,
+      context: "Confirmed review contract.",
+    }, ctx);
     const operations = JSON.parse(readFileSync(ctx.artifacts.path("review/operations.json"), "utf8")) as {
       operations: Array<{ type: string; status: string; inputArtifact: string; outputArtifact?: string }>;
     };
@@ -156,6 +163,7 @@ describe("structured software-change review", () => {
     expect(operations.operations.every((operation) => operation.status === "completed")).toBe(true);
     expect(operations.operations.every((operation) => operation.inputArtifact && operation.outputArtifact)).toBe(true);
     expect(readFileSync(ctx.artifacts.path("review/dispositions.json"), "utf8")).toContain("resolved");
+    expect(repairPrompt).toContain("Confirmed review contract.");
   });
 
   test("runs the configured number of follow-up reviews", async () => {

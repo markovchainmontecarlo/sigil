@@ -139,11 +139,12 @@ export const commandHelps = [
   {
     name: "implement",
     summary: "Apply a task graph, commit verified tasks, run gates, and review locally.",
-    usage: "sigil implement --repo <dir> --task-file <file> [--branch <name>] [--instructions <file>] [--publish]",
+    usage: "sigil implement --repo <dir> --task-file <file> [--branch <name>] [--brief <file>] [--instructions <file>] [--publish]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--task-file <file>", description: "Required. Task graph JSON file." },
       { name: "--branch <name>", description: "Optional branch name." },
+      { name: "--brief <file>", description: "Optional confirmed development brief." },
       { name: "--instructions <file>", description: "Optional run-specific implementation instructions." },
       { name: "--publish", description: "After local success, push the branch and open a pull request." },
     ],

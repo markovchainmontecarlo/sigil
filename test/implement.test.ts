@@ -248,7 +248,12 @@ describe("implement", () => {
     const coders: StubAgent[] = [];
     const promptEvents: Array<Record<string, string>> = [];
 
-    const result = await implement({ repo, taskFile, branch: "impl/happy" }, stubContext(repo,
+    const result = await implement({
+      repo,
+      taskFile,
+      branch: "impl/happy",
+      brief: "Confirmed context survives session rotation.",
+    }, stubContext(repo,
       {
       evalGate: okEval,
       createAgent: () => {
@@ -276,14 +281,18 @@ describe("implement", () => {
     expect(coders[0].calls[0]).toContain("Tasks modify fixture files through explicit dependency interfaces.");
     expect(coders[0].calls[0]).toContain("Produces:\n- a-result");
     expect(coders[0].calls[0]).toContain("focused verification");
+    expect(coders[0].calls[0]).toContain("Confirmed context survives session rotation.");
     expect(coders[0].calls[1]).not.toContain("# Agent Operating Principles");
+    expect(coders[0].calls[1]).not.toContain("Confirmed context survives session rotation.");
     expect(coders[0].calls[1]).not.toContain("Tasks modify fixture files through explicit dependency interfaces.");
     expect(coders[0].calls[1]).toContain("Produces:\n- b-result");
     expect(coders[1].calls[0]).toContain("## Coder session handoff");
     expect(coders[1].calls[0]).toContain("- a:");
     expect(coders[1].calls[0]).toContain("- b:");
     expect(coders[1].calls[0]).toContain("produced interfaces: a-result");
+    expect(coders[1].calls[0]).toContain("Confirmed context survives session rotation.");
     expect(coders[1].calls[1]).not.toContain("# Agent Operating Principles");
+    expect(coders[1].calls[1]).not.toContain("Confirmed context survives session rotation.");
     expect(coders[1].calls[1]).not.toContain("## Coder session handoff");
     expect(coders[1].calls[1]).toContain("Produces:\n- d-result");
     expect(promptEvents.map((event) => event.kind)).toEqual(["session-task", "task", "session-task", "task"]);
@@ -319,6 +328,39 @@ describe("implement", () => {
     expect(coder.calls[0]).toContain("Before editing, read README.md and ARCHITECTURE.md.");
     expect(reviewContext).toContain("## Run instructions");
     expect(reviewContext).toContain("Before editing, read README.md and ARCHITECTURE.md.");
+  });
+
+  test("preserves the confirmed brief in implementation and complete review context", async () => {
+    const initial = fixture([]).repo;
+    const tasks = [task(initial, "a")];
+    const { repo, taskFile } = fixture(tasks);
+    const coder = new StubAgent((_call, prompt) => {
+      const id = prompt.match(/## Your task: (\w+)/)?.[1];
+      if (id) writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+    });
+    let reviewContext = "";
+
+    await implement({
+      repo,
+      taskFile,
+      branch: "impl/confirmed-brief",
+      brief: "The confirmed outcome must remain visible.",
+    }, stubContext(repo, {
+      evalGate: okEval,
+      createAgent: () => coder,
+      review: async (input) => {
+        reviewContext = input.context ?? "";
+        return { valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] };
+      },
+    }));
+
+    expect(coder.calls[0]).toContain("## Confirmed brief");
+    expect(coder.calls[0]).toContain("The confirmed outcome must remain visible.");
+    expect(reviewContext).toContain("## Confirmed brief");
+    expect(reviewContext).toContain("The confirmed outcome must remain visible.");
+    expect(reviewContext).toMatch(/preserve confirmed intent.*verify repository descriptions/is);
+    expect(reviewContext).toContain("## Architecture");
+    expect(reviewContext).toContain("## Acceptance criteria and interfaces");
   });
 
   test("implements a graph with repo-relative file paths", async () => {
@@ -513,7 +555,12 @@ describe("implement", () => {
     let buildCalls = 0;
     let finalRepairPrompt = "";
 
-    await implement({ repo, taskFile, branch: "impl/final-repair-context" }, stubContext(repo, {
+    await implement({
+      repo,
+      taskFile,
+      branch: "impl/final-repair-context",
+      brief: "Preserve the confirmed repair boundary.",
+    }, stubContext(repo, {
       evalGate: async (name) => name === "build" && ++buildCalls === 3
         ? { ok: false, log: "final verification red" }
         : { ok: true, log: "ok" },
@@ -528,6 +575,7 @@ describe("implement", () => {
     expect(finalRepairPrompt).toContain("# Agent Operating Principles");
     expect(finalRepairPrompt).toContain("Tasks modify fixture files through explicit dependency interfaces.");
     expect(finalRepairPrompt).toContain("Repair architecture context");
+    expect(finalRepairPrompt).toContain("Preserve the confirmed repair boundary.");
   });
 
   test("reply artifact write failures are issues and do not abort the run", async () => {

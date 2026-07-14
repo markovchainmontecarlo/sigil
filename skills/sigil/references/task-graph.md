@@ -7,4 +7,4 @@ Use this reference when the developer chooses **Convert and implement locally**.
 3. Preserve the confirmed outcome, decisions, constraints, and non-goals. Correct repository claims when the current source or observed behavior disproves them.
 4. Write the complete source-agnostic task graph under the ignored run directory.
 5. Run `sigil task-graph validate --file <task-graph.json>` and repair contract errors before execution.
-6. Run `sigil implement --task-file <task-graph.json>` for local implementation. Do not publish unless the developer separately authorizes a delivery workflow.
+6. Run `sigil implement --task-file <task-graph.json> --brief <brief.md>` for local implementation. Do not publish unless the developer separately authorizes a delivery workflow.

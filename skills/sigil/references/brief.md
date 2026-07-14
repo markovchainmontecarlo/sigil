@@ -40,4 +40,10 @@ List the complete plan, task graph, source files, design documents, or runtime e
 
 ## Storage and authority
 
-Store the brief beneath the ignored `<repo>/.sigil/runs/` directory. Do not track it. Intent, acceptance criteria, decisions, constraints, and non-goals are confirmed inputs. Repository context and claims remain subject to verification.
+Store the brief beneath the ignored `<repo>/.sigil/runs/` directory. Do not track it.
+
+Intent, acceptance criteria, decisions, architecture, constraints, and non-goals are confirmed inputs when they record choices the developer accepted. Repository context and claims to verify remain subject to current source and observed behavior. References are supporting material unless the brief explicitly assigns them stronger authority.
+
+Repository evidence may correct descriptions of the current system, feasibility claims, affected-file expectations, and proposed mechanisms. It does not independently authorize changing the confirmed outcome or accepted boundaries. Report an infeasible or internally inconsistent confirmed input instead of silently rewriting it.
+
+Only record a desired architecture under Architecture after the developer accepts it. Describe the current architecture under Repository context, and place a proposed or uncertain architecture under Claims to verify.
