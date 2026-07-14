@@ -9,9 +9,15 @@ export {
 } from "./contracts/backlog.js";
 export {
   CONTRACT_VERSION,
+  CommandVerificationSchema,
+  ConsumedInterfaceSchema,
+  ManualVerificationSchema,
+  ProducedInterfaceSchema,
   TaskFileSchema,
   TaskGraphSchema,
+  TaskInterfacesSchema,
   TaskSchema,
+  TaskVerificationSchema,
   canonicalTaskGraph,
   checkTaskGraph,
   orderedTasks,
@@ -19,11 +25,17 @@ export {
   taskGraphJsonSchema,
   validateTaskGraph,
   type FileAction,
+  type CommandVerification,
+  type ConsumedInterface,
+  type ManualVerification,
+  type ProducedInterface,
   type Task,
   type TaskFile,
   type TaskGraph,
   type TaskGraphCheck,
   type TaskGraphCheckOptions,
+  type TaskInterfaces,
+  type TaskVerification,
 } from "./contracts/task-graph.js";
 export {
   YamlJobSchema,

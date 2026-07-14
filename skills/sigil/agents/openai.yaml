@@ -1,4 +1,4 @@
 interface:
   display_name: "Sigil Router"
-  short_description: "Route work to the right Sigil workflow"
-  default_prompt: "Route the request with $sigil. Default to AI-assisted development when the current assistant already has the requirements or active plan. Use agentic development only for explicitly requested Sigil-owned planning or orchestration."
+  short_description: "Confirm a brief and route Sigil work"
+  default_prompt: "Route the request with $sigil. Create and confirm one confirmed structured brief before state-changing work, preserve accepted state, and default to local implementation. Use Sigil-owned planning or external delivery only when the developer explicitly chooses it."

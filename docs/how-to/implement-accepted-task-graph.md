@@ -10,7 +10,7 @@ Always validate against the target repository:
 sigil task-graph validate --repo /path/to/repo /path/to/task-graph.json
 ```
 
-Validation resolves repository-relative paths and rejects paths that escape the target repository. It also rejects malformed tasks, unknown dependencies, and dependency cycles.
+Validation resolves repository-relative paths and rejects paths that escape the target repository. It also rejects malformed tasks, unknown dependencies, dependency cycles, invalid interface relationships, and missing verification.
 
 ## Prepare the repository
 
@@ -24,7 +24,7 @@ Run:
 sigil implement --repo /path/to/repo --task-file /path/to/task-graph.json
 ```
 
-Sigil validates the graph, saves a normalized copy, creates the implementation branch, establishes a baseline, and executes tasks in dependency order. Each completed task receives a verified commit. Final gates and review run after all tasks complete.
+Sigil validates the graph, saves a normalized copy, creates the implementation branch, establishes a baseline, and executes tasks in dependency order. The coder receives graph architecture, constraints, non-goals, current task interfaces, acceptance criteria, focused verification, and file guidance. Produced interfaces and acceptance criteria are authoritative boundaries. Focused verification supplements the configured gates. Each completed task receives a verified commit. Final gates and review run after all tasks complete.
 
 Inspect the branch, commits, Git diff, failed checks, and review findings before publishing.
 

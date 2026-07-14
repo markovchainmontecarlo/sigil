@@ -22,12 +22,17 @@ flowchart TD
     Synthesizer["configured synthesizer role"]
     MultiplePlans{"more than one planner output?"}
     SinglePlan["use single planner output directly"]
-    Compare["compare plans into convergence and divergence"]
-    VerifyClaims["verify convergence and divergence claims"]
+    Compare["compare plans and build requirements crosswalk"]
+    VerifyClaims["verify claims, interfaces, and requirement coverage"]
     Resolve["resolve verified divergences"]
     BuildGraph["build typed task graph artifact"]
     Enrich["enrich task graph"]
-    RepairGraph["repair and validate task graph JSON"]
+    RepairGraph["repair and deterministically validate task graph"]
+    CloseSynthesis["close synthesis session"]
+    PlanningReview["fresh configured semantic reviewer"]
+    ReviewValid{"semantic review valid?"}
+    ReviewRepair["fresh synthesizer repairs typed findings"]
+    ReviewLimit{"semantic repair limit exhausted?"}
     PlanResult["PlanResult"]
 
     PlanConfig --> Planners
@@ -44,7 +49,14 @@ flowchart TD
     Resolve --> BuildGraph
     BuildGraph --> Enrich
     Enrich --> RepairGraph
-    RepairGraph --> PlanResult
+    RepairGraph --> CloseSynthesis
+    CloseSynthesis --> PlanningReview
+    PlanningReview --> ReviewValid
+    ReviewValid -->|yes| PlanResult
+    ReviewValid -->|no| ReviewLimit
+    ReviewLimit -->|no| ReviewRepair
+    ReviewRepair --> RepairGraph
+    ReviewLimit -->|yes| PlanResult
   end
 
   PlanResult --> PlanValid{"planning result valid?"}
@@ -62,10 +74,12 @@ flowchart TD
     TaskLoop{"next pending task in deterministic runnable frontier"}
     DependencyGate{"dependencies completed?"}
     Running["checkpoint task running before prompt"]
+    NewCoder{"new coder session?"}
+    SessionContext["load graph context, current configured context, and checkpoint handoff"]
     ProviderInterruption{"provider interrupted?"}
     RecoveryBundle["preserve tracked and untracked recovery bundle"]
     Coder["configured coder role implements task"]
-    TaskGate{"configured build/test gates pass?"}
+    TaskGate{"task command verification and configured build/test gates pass?"}
     TaskRepair["same coder repairs task"]
     CommitTask["commit task change"]
     CommitResult{"task commit result?"}
@@ -104,7 +118,10 @@ flowchart TD
     TaskLoop -->|task| DependencyGate
     DependencyGate -->|incomplete dependency: blocked| TaskLoop
     DependencyGate -->|ready| Running
-    Running --> Coder
+    Running --> NewCoder
+    NewCoder -->|yes| SessionContext
+    NewCoder -->|no| Coder
+    SessionContext --> Coder
     Coder --> ProviderInterruption
     ProviderInterruption -->|yes| RecoveryBundle
     RecoveryBundle --> IncompleteResult
@@ -155,8 +172,8 @@ flowchart TD
   classDef artifact fill:#ecfdf5,stroke:#059669,color:#064e3b;
   classDef boundary fill:#f3e8ff,stroke:#7c3aed,color:#3b0764;
   classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
-  class Planners,Synthesizer,Coder,TaskRepair,NoChangeRepair,NoopVerdict,FinalRepair,ReviewStage agent;
-  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,PlanValid,ResumeGate,CleanGate,BaselineGate,DependencyGate,ProviderInterruption,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,AllCompleted,FinalGates,FinalRepairCommitResult,StrongestGate gate;
+  class Planners,Synthesizer,PlanningReview,ReviewRepair,Coder,TaskRepair,NoChangeRepair,NoopVerdict,FinalRepair,ReviewStage agent;
+  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,ReviewValid,ReviewLimit,PlanValid,ResumeGate,CleanGate,BaselineGate,DependencyGate,NewCoder,ProviderInterruption,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,AllCompleted,FinalGates,FinalRepairCommitResult,StrongestGate gate;
   class PlannerArtifacts,BuildGraph,ImplementationCheckpoint,RecoveryBundle,ReplyArtifact,TaskCommitIssue,RetryCommitIssue,FinalRepairCommit,FinalRepairCommitIssue artifact;
   class Delivery boundary;
   class SuppliedGraphFailure,CleanFailure failure;

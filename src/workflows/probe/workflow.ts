@@ -58,14 +58,22 @@ const ProbeListSchema = z.object({ probes: z.array(ProbeSpecSchema).min(1).max(1
 const contract = JSON.stringify({
   contractVersion: CONTRACT_VERSION,
   project: "short-kebab-slug",
-  goal: "string optional",
+  goal: "observable outcome",
+  architecture: "ownership boundary, state flow, dependency direction, and selected approach",
+  constraints: ["requirements every task preserves"],
+  nonGoals: ["explicitly excluded work"],
   tasks: [
     {
       id: "short-stable-id",
       title: "one-line title",
       summary: "what changes and why",
       dependencies: ["earlier-task-id"],
+      interfaces: {
+        produces: [{ name: "stable-output-name", description: "behavior guaranteed to dependents" }],
+        consumes: [{ taskId: "producer-task-id", name: "stable-output-name", description: "how this task uses it" }],
+      },
       acceptanceCriteria: ["observable check"],
+      verification: [{ kind: "command", command: "focused command", expected: "expected result" }],
       diagrams: ["optional ASCII diagram"],
       files: [
       {
@@ -240,6 +248,7 @@ async function synthesizeTaskGraph(
     taskFile,
     repo: input.repo,
     contract,
+    limit: config.implement.repairLimit,
     issuePrefix: "probe task graph",
   });
 }

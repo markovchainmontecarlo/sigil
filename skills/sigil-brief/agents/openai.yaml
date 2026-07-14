@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sigil Brief"
+  short_description: "Turn accepted context into agentic planning input"
+  default_prompt: "Use $sigil-brief to write a concise brief for Sigil planning from what we have agreed."

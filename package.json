@@ -1,6 +1,6 @@
 {
   "name": "sigil",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "CLI and TypeScript toolkit for repository workflows, static YAML workflows, and TypeScript sigils over configured agents",

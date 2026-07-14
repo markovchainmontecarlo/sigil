@@ -1,10 +1,10 @@
-Verify these claims against the actual repository at the cwd. Base every verdict on the code you read. Work in this order:
+Verify the reports and requirements crosswalk against the repository. Read complete affected files and trace stable symbols, callers, dependency direction, configuration ownership, tests, and proposed commands.
 
-1. Read the full files named anywhere in the convergence report and the divergence report.
+Write convergence verification to {{CONVERGE_VERIFY_FILE}}. For every claim, provide repository evidence and a VERIFIED or FALSIFIED verdict with the correction when falsified.
 
-2. Write the convergence verification as markdown to {{CONVERGE_VERIFY_FILE}}. For each point of agreement, write: the claim; the evidence in the code at file:line; a verdict of VERIFIED or FALSIFIED; and if FALSIFIED, what the code actually shows and the correction the claim needs.
+Write divergence verification to {{DIVERGE_VERIFY_FILE}}. Verify every position, task boundary, produced and consumed interface, dependency claim, and verification strategy.
 
-3. Write the divergence verification as markdown to {{DIVERGE_VERIFY_FILE}}. For each point of disagreement, and for each position within it, write: the position and which planner holds it; the evidence in the code at file:line; a verdict of VERIFIED or FALSIFIED for that position; and if FALSIFIED, what the code actually shows.
+Write crosswalk verification to {{CROSSWALK_VERIFY_FILE}}. Verify every requirement, constraint, and non-goal against the intent and brief, and confirm that the mapped tasks actually cover it.
 
 GOAL / INTENT:
 {{INTENT}}
@@ -14,3 +14,6 @@ CONVERGENCE REPORT:
 
 DIVERGENCE REPORT:
 {{DIVERGENCE}}
+
+REQUIREMENTS CROSSWALK:
+{{CROSSWALK}}

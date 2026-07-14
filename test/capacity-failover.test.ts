@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 
 import { runFreshAgentOperation } from "../src/agent-operation.js";
 import { codexProfileStore, readCodexRoutingState, writeCodexProfiles, type CodexProfile } from "../src/codex-profiles.js";
-import { releaseCodexProfile, reserveCodexProfile, TRANSIENT_CIRCUIT_THRESHOLD } from "../src/codex-router.js";
+import { releaseCodexProfile, reserveCodexProfile } from "../src/codex-router.js";
 import { classifyProviderFailure, ProviderError } from "../src/provider-failure.js";
 import type { RichSigilAgent, SigilContext } from "../src/context.js";
 
@@ -46,21 +46,18 @@ describe("capacity failover", () => {
     expect(events).toEqual(["start:a", "close:a", "start:b", "close:b"]);
   });
 
-  test("authentication is terminal and transient circuits open only at the threshold", async () => {
+  test("authentication is terminal and transient failures remain operation-local", async () => {
     const store = codexProfileStore(mkdtempSync(join(tmpdir(), "sigil-failover-")));
     await writeCodexProfiles([profile("a")], store);
     const auth = assigned(await reserveCodexProfile(capacity(80), store));
     await releaseCodexProfile(auth.reservation.id, undefined, classifyProviderFailure(new ProviderError("auth", { code: "authentication_failed" })), store);
     expect((await readCodexRoutingState(store)).circuits.a?.reason).toBe("authentication");
 
-    for (let count = 1; count <= TRANSIENT_CIRCUIT_THRESHOLD; count++) {
-      await Bun.write(store.stateFile, count === 1 ? JSON.stringify({ version: 2, state: { roundRobin: 0, reservations: {}, ledgers: {}, circuits: {}, unavailableProfiles: {} } }) : await Bun.file(store.stateFile).text());
-      const admission = assigned(await reserveCodexProfile(capacity(80), store));
-      await releaseCodexProfile(admission.reservation.id, undefined, classifyProviderFailure(new ProviderError("temporary", { code: "transient" })), store);
-      const circuit = (await readCodexRoutingState(store)).circuits.a;
-      if (count < TRANSIENT_CIRCUIT_THRESHOLD) expect(circuit?.failures).toBe(count);
-      else expect(circuit?.failures).toBe(TRANSIENT_CIRCUIT_THRESHOLD);
-    }
+    await Bun.write(store.stateFile, JSON.stringify({ version: 2, state: { roundRobin: 0, reservations: {}, ledgers: {}, circuits: {}, unavailableProfiles: {} } }));
+    const admission = assigned(await reserveCodexProfile(capacity(80), store));
+    await releaseCodexProfile(admission.reservation.id, undefined, classifyProviderFailure(new ProviderError("temporary", { code: "transient" })), store);
+
+    expect((await readCodexRoutingState(store)).circuits.a).toBeUndefined();
   });
 
   test("only a fresh above-floor probe automatically closes a capacity circuit", async () => {

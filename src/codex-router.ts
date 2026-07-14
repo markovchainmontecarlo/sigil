@@ -1,5 +1,6 @@
 import {
   newReservation,
+  meteredUsage,
   profileLedger,
   readCodexRoutingState,
   readCodexProfiles,
@@ -20,8 +21,6 @@ import {
 } from "./provider-profiles.js";
 
 export const CAPACITY_FRESHNESS_MS = 30_000;
-export const TRANSIENT_CIRCUIT_THRESHOLD = 3;
-
 export type CodexCapacityTelemetry = {
   profile: string;
   capacityClass: "above-floor" | "at-or-below-floor" | SubscriptionCapacity["kind"];
@@ -255,7 +254,9 @@ function reserveProfile(
   const ledger = profileLedger(state, profile.name);
   ledger.active++;
   ledger.starts++;
-  ledger.reservedTokens += reservedTokens ?? 0;
+  if (reservedTokens !== undefined) {
+    meteredUsage(state, profile.name).reservedTokens += reservedTokens;
+  }
   state.reservations[reservation.id] = reservation;
   return reservation;
 }
@@ -315,7 +316,9 @@ function applyProbeCircuits(
     const aboveFloor = isFreshAvailable(capacity)
       && capacity.remainingPercentage - reserved >= (configured?.reserveFloorPercentage ?? 0);
     const rearmRequired = profileLedger(state, profile).rearmRequired;
-    if ((state.circuits[profile]?.reason === "capacity" || state.circuits[profile]?.reason === "authentication")
+    if ((state.circuits[profile]?.reason === "capacity"
+      || state.circuits[profile]?.reason === "authentication"
+      || state.circuits[profile]?.reason === "transient")
       && aboveFloor
       && !rearmRequired) {
       delete state.circuits[profile];
@@ -340,35 +343,20 @@ function transitionCircuit(
   }
   const reason = circuitReason(outcome);
   if (!reason) return;
-  if (reason === "transient") {
-    const previous = state.circuits[profile];
-    const failures = previous?.reason === "transient" ? (previous.failures ?? 0) + 1 : 1;
-    if (failures < TRANSIENT_CIRCUIT_THRESHOLD) {
-      state.circuits[profile] = {
-        reason,
-        openedAt: new Date().toISOString(),
-        fingerprint: outcome?.fingerprint,
-        failures,
-      };
-      return;
-    }
-  }
   state.circuits[profile] = {
     reason,
     openedAt: new Date().toISOString(),
     fingerprint: outcome?.fingerprint,
-    failures: reason === "transient" ? TRANSIENT_CIRCUIT_THRESHOLD : undefined,
   };
 }
 
 export function circuitIsOpen(circuit: CodexRoutingState["circuits"][string] | undefined): boolean {
-  return Boolean(circuit && (circuit.reason !== "transient" || (circuit.failures ?? TRANSIENT_CIRCUIT_THRESHOLD) >= TRANSIENT_CIRCUIT_THRESHOLD));
+  return Boolean(circuit && circuit.reason !== "transient");
 }
 
 function circuitReason(outcome: ProviderFailure | undefined): CodexCircuitReason | undefined {
   if (outcome?.code === "capacity_exhausted") return "capacity";
   if (outcome?.code === "authentication_failed") return "authentication";
-  if (outcome?.code === "transient" || outcome?.code === "operation_timeout" || outcome?.code === "idle_timeout") return "transient";
   return undefined;
 }
 
@@ -380,11 +368,14 @@ function settleReservation(
 ): void {
   const profile = profiles.find((entry) => entry.name === reservation.profile);
   const ledger = profileLedger(state, reservation.profile);
-  const charged = usage ?? conservativeUsage(reservation.reservedTokens);
   ledger.active = Math.max(0, ledger.active - 1);
-  ledger.reservedTokens = Math.max(0, ledger.reservedTokens - (reservation.reservedTokens ?? 0));
   ledger.runtimeMs += Math.max(0, Date.now() - Date.parse(reservation.startedAt));
-  addUsage(ledger.usage, charged);
+  if (profile?.profileClass === "metered-api") {
+    const metered = meteredUsage(state, reservation.profile);
+    const charged = usage ?? conservativeUsage(reservation.reservedTokens);
+    metered.reservedTokens = Math.max(0, metered.reservedTokens - (reservation.reservedTokens ?? 0));
+    addUsage(metered.usage, charged);
+  }
   if (profile?.budget?.requireRearm) ledger.rearmRequired = true;
   delete state.reservations[reservation.id];
 }
@@ -398,8 +389,8 @@ function atConcurrencyLimit(profile: CodexProfile, state: CodexRoutingState): bo
 function remainingTokenBudget(profile: CodexProfile, state: CodexRoutingState): number | undefined {
   const limit = profile.budget?.tokenLimit;
   if (limit === undefined) return undefined;
-  const ledger = profileLedger(state, profile.name);
-  return Math.max(0, limit - ledger.usage.totalTokens - ledger.reservedTokens);
+  const metered = meteredUsage(state, profile.name);
+  return Math.max(0, limit - metered.usage.totalTokens - metered.reservedTokens);
 }
 
 function reservationTokenAmount(profile: CodexProfile, state: CodexRoutingState): number | undefined {

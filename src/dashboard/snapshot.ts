@@ -87,7 +87,7 @@ function currentRuns(runs: RunSummary[]): RunSummary[] {
   }
 
   const activeKeys = new Set<string>();
-  const active = runs.filter((run) => ["running", "waiting"].includes(run.health.state))
+  const active = runs.filter((run) => ["running", "waiting"].includes(run.health.state) || recentlyActiveUnknown(run))
     .map((run) => {
       const key = runGroupKey(run);
       activeKeys.add(key);
@@ -104,6 +104,14 @@ function currentRuns(runs: RunSummary[]): RunSummary[] {
     .slice(0, 5)
     .map((run) => ({ ...run, category: "recent" as const }));
   return [...active, ...attention, ...recent];
+}
+
+const RECENT_UNKNOWN_ACTIVITY_MS = 10 * 60 * 1000;
+
+function recentlyActiveUnknown(run: RunSummary): boolean {
+  if (run.health.state !== "unknown") return false;
+  if (run.lastActivity === undefined) return false;
+  return Date.now() - Date.parse(run.lastActivity) < RECENT_UNKNOWN_ACTIVITY_MS;
 }
 
 function runGroupKey(run: RunSummary): string {

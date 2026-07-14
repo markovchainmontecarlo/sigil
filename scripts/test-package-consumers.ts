@@ -1,12 +1,11 @@
 #!/usr/bin/env bun
 import { cpSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const tarball = resolve(process.argv[2] ?? "");
 if (!process.argv[2]) throw new Error("usage: test-package-consumers.ts <tarball>");
 
-const root = mkdtempSync(join(tmpdir(), "sigil-package-consumers-"));
+const root = mkdtempSync("/tmp/sigil-package-consumers-");
 const nodeApp = join(root, "node-app");
 const browserApp = join(root, "browser-app");
 installDependencies(root);
@@ -76,7 +75,7 @@ function run(phase: string, command: string[], cwd: string): void {
   const result = Bun.spawnSync({
     cmd: command,
     cwd,
-    env: { ...process.env, TMPDIR: tmpdir() },
+    env: { ...process.env, TMPDIR: "/tmp" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -88,7 +87,7 @@ function expectRejected(phase: string, command: string[], cwd: string): void {
   const result = Bun.spawnSync({
     cmd: command,
     cwd,
-    env: { ...process.env, TMPDIR: tmpdir() },
+    env: { ...process.env, TMPDIR: "/tmp" },
     stdout: "pipe",
     stderr: "pipe",
   });

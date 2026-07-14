@@ -52,7 +52,7 @@ class ProbeStubAgent implements SigilAgent {
       writeFileSync(taskFile, JSON.stringify(this.opts.invalidFirst ? invalidGraph() : validGraph(), null, 2));
     }
 
-    if (this.taskFile && prompt.includes("failed deterministic contract validation") && this.opts.repairs !== false) {
+    if (this.taskFile && prompt.includes("failed deterministic validation") && this.opts.repairs !== false) {
       writeFileSync(this.taskFile, JSON.stringify(validGraph(), null, 2));
     }
 
@@ -69,7 +69,7 @@ function tempGitRepo(): string {
     agents: { planner: { provider: "codex", model: "gpt-5.5" }, synthesizer: { provider: "codex", model: "gpt-5.5" } },
     evals: {},
     context: [],
-    plan: { planners: ["planner"], synthesizer: "synthesizer" },
+    plan: { planners: ["planner"], synthesizer: "synthesizer", reviewer: "synthesizer", semanticReviewLimit: 2 },
     implement: { coder: "planner", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["synthesizer"], synthesizer: "synthesizer" },
   }, null, 2));
@@ -87,12 +87,17 @@ function validGraph(): object {
     contractVersion: CONTRACT_VERSION,
     project: "probe-plan",
     goal: "improve probing",
+    architecture: "Probe evidence informs one repository-owned behavior change.",
+    constraints: ["Preserve the target working tree"],
+    nonGoals: [],
     tasks: [{
       id: "task-a",
       title: "Task A",
       summary: "Modify app.txt based on confirmed probe findings.",
       dependencies: [],
+      interfaces: { produces: [], consumes: [] },
       acceptanceCriteria: ["app.txt reflects the confirmed behavior"],
+      verification: [{ kind: "command", command: "grep confirmed app.txt", expected: "confirmed behavior is present" }],
       diagrams: [],
       files: [{ path: "app.txt", action: "modify", details: ["Update app.txt based on probe findings"] }],
     }],

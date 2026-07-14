@@ -1,5 +1,4 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { beforeAll, describe, expect, test } from "bun:test";
@@ -112,9 +111,15 @@ const rootDeclarations = [
 const contractsRuntime = [
   "BACKLOG_CONTRACT_VERSION",
   "CONTRACT_VERSION",
+  "CommandVerificationSchema",
+  "ConsumedInterfaceSchema",
+  "ManualVerificationSchema",
+  "ProducedInterfaceSchema",
   "TaskFileSchema",
   "TaskGraphSchema",
+  "TaskInterfacesSchema",
   "TaskSchema",
+  "TaskVerificationSchema",
   "YamlJobSchema",
   "YamlStageSchema",
   "YamlStepSchema",
@@ -140,12 +145,18 @@ const contractsDeclarations = [
   "CompiledYamlDeterministicJob",
   "CompiledYamlStage",
   "CompiledYamlWorkflow",
+  "CommandVerification",
+  "ConsumedInterface",
   "FileAction",
+  "ManualVerification",
+  "ProducedInterface",
   "Task",
   "TaskFile",
   "TaskGraph",
   "TaskGraphCheck",
   "TaskGraphCheckOptions",
+  "TaskInterfaces",
+  "TaskVerification",
   "WorkItem",
   "YamlAgentRef",
   "YamlAgentStep",
@@ -188,7 +199,7 @@ function declarationExports(specifier: string): string[] {
 beforeAll(() => {
   const built = run(["bun", "run", "build"]);
   expect(built.exitCode, built.stderr.toString()).toBe(0);
-  consumer = mkdtempSync(join(tmpdir(), "sigil-public-exports-"));
+  consumer = mkdtempSync("/tmp/sigil-public-exports-");
   const temporary = join(consumer, "tmp");
   mkdirSync(temporary);
   writeFileSync(join(consumer, "package.json"), '{"private":true,"type":"module"}\n');

@@ -7,11 +7,24 @@ const task = (id: string, dependencies: string[] = []): Task => ({
   title: `Task ${id}`,
   summary: `Summary ${id}`,
   dependencies,
+  interfaces: {
+    produces: [{ name: `${id}-result`, description: `${id} behavior is available` }],
+    consumes: dependencies.map((taskId) => ({ taskId, name: `${taskId}-result`, description: `uses ${taskId}` })),
+  },
   acceptanceCriteria: ["works"],
+  verification: [{ kind: "command", command: "bun test", expected: "tests pass" }],
   diagrams: [],
   files: [file(`/repo/src/${id}.ts`)],
 });
-const graph = (tasks: Task[]): TaskGraph => ({ contractVersion: CONTRACT_VERSION, project: "fixture", tasks });
+const graph = (tasks: Task[]): TaskGraph => ({
+  contractVersion: CONTRACT_VERSION,
+  project: "fixture",
+  goal: "Deliver the fixture behavior",
+  architecture: "Each task exposes an explicit result to its dependents.",
+  constraints: [],
+  nonGoals: [],
+  tasks,
+});
 
 describe("task graph contract", () => {
   test("valid graph has no errors and validates", () => {
@@ -54,16 +67,23 @@ describe("task graph contract", () => {
     expect(checkTaskGraph(slugProject).errors.filter((error) => error.includes("project"))).toEqual([]);
   });
 
-  test("assistant-authored graphs normalize optional arrays and validate goal and unknown fields", () => {
+  test("assistant-authored graphs require complete planning context and reject unknown fields", () => {
     const minimal = {
       contractVersion: CONTRACT_VERSION,
       project: "assistant-change",
       goal: "Ship the accepted behavior.",
+      architecture: "The existing owner exposes the behavior through one public boundary.",
+      constraints: [],
+      nonGoals: [],
       tasks: [{
         id: "change",
         title: "Make the change",
         summary: "Implement the accepted outcome.",
+        dependencies: [],
+        interfaces: { produces: [], consumes: [] },
         acceptanceCriteria: ["The accepted behavior is observable."],
+        verification: [{ kind: "manual", procedure: "Exercise the behavior", expected: "The outcome is visible", rationale: "The interaction requires visual judgment" }],
+        diagrams: [],
         files: [{ path: "src/change.ts", action: "modify", details: ["Implement the behavior."] }],
       }],
     };
@@ -71,8 +91,31 @@ describe("task graph contract", () => {
     const normalized = validateTaskGraph(minimal, { repoRoot: "/repo" });
     expect(normalized.tasks[0].dependencies).toEqual([]);
     expect(normalized.tasks[0].diagrams).toEqual([]);
-    expect(checkTaskGraph({ ...minimal, goal: 42 }, { repoRoot: "/repo" }).errors.join("\n")).toContain("goal");
+    expect(checkTaskGraph({ ...minimal, architecture: undefined }, { repoRoot: "/repo" }).errors.join("\n")).toContain("architecture");
     expect(checkTaskGraph({ ...minimal, typo: true }, { repoRoot: "/repo" }).errors.join("\n")).toContain("Unrecognized key");
+  });
+
+  test("interfaces explain every dependency and reference produced outputs", () => {
+    const missingConsumption = graph([task("a"), { ...task("b", ["a"]), interfaces: { produces: [], consumes: [] } }]);
+    const unknownOutput = graph([task("a"), {
+      ...task("b", ["a"]),
+      interfaces: { produces: [], consumes: [{ taskId: "a", name: "missing", description: "uses it" }] },
+    }]);
+    const undeclaredDependency = graph([task("a"), {
+      ...task("b"),
+      interfaces: { produces: [], consumes: [{ taskId: "a", name: "a-result", description: "uses it" }] },
+    }]);
+
+    expect(checkTaskGraph(missingConsumption).errors.join("\n")).toContain("dependency a has no consumed interface");
+    expect(checkTaskGraph(unknownOutput).errors.join("\n")).toContain("unknown interface a.missing");
+    expect(checkTaskGraph(undeclaredDependency).errors.join("\n")).toContain("consumes from undeclared dependency a");
+  });
+
+  test("produced interface names are unique within a task", () => {
+    const duplicate = task("a");
+    duplicate.interfaces.produces.push({ name: "a-result", description: "duplicate" });
+
+    expect(checkTaskGraph(graph([duplicate])).errors.join("\n")).toContain("duplicate produced interface: a-result");
   });
 
   test("repoRoot option resolves relative paths and rejects paths outside the repo", () => {

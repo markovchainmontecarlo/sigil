@@ -5,7 +5,7 @@ description: "Route Sigil work by user intent, accepted state, and the unfinishe
 
 # Sigil router
 
-Decide whether Sigil adds value, choose between AI-assisted development and agentic development, then select the narrowest workflow that owns the unfinished transition.
+Decide whether Sigil adds value, establish the confirmed handoff, then select the narrowest workflow that owns the unfinished transition.
 
 ## Decide whether orchestration helps
 
@@ -13,17 +13,19 @@ Use Sigil when agents, typed handoffs, artifacts, deterministic gates, repair, d
 
 Answer or edit directly when the request is a quick factual check, short explanation, or simple one-shot change that does not need orchestration.
 
-## Choose the development mode
+## Establish the confirmed handoff
 
-Use **AI-assisted development** by default when the developer is already discussing a bounded change with a capable code assistant. The current assistant turns the agreed requirements or Markdown plan into a validated task graph. Sigil then implements that graph without planning again.
+Before planning or implementation, inspect the conversation and repository, then write `brief.md` beneath the ignored run directory using the [brief reference](./references/brief.md), show its complete contents, and wait for confirmation or correction. The confirmation establishes the outcome, accepted decisions, and effects boundary. It is not a checkpoint before every internal repair.
 
-Use **agentic development** when the user explicitly asks Sigil to investigate, plan, replan, probe uncertain behavior, decompose a mission, or run unattended delivery. In this mode a Sigil workflow owns the transition from intent or brief to a validated task graph or backlog.
+Use **AI-assisted development** when the current assistant turns confirmed requirements or a settled Markdown plan into a validated task graph. Sigil then implements that graph without planning again.
+
+Use **agentic development** when Sigil should investigate, plan, replan, probe uncertain behavior, decompose a mission, or run unattended delivery. In this mode a Sigil workflow owns the transition from the confirmed brief to a validated task graph or backlog.
 
 These are entry paths, not runtime flags. Both paths converge on the same task-graph contract and implementation workflow.
 
-Treat “use Sigil” or “use the Sigil skill” as a request to route the work, not as a request for agentic planning. Default to AI-assisted development when the current assistant already has the agreed requirements or active plan. Ask who should perform planning only when that choice is genuinely unclear.
+For AI-assisted development, turn the agreed requirements and repository evidence into a task graph with `sigil-task-graph`. Confirm cohesive scope, map file responsibilities and state flow, record architecture, constraints, and non-goals, and name produced and consumed interfaces between tasks. Keep acceptance observable and verification focused. Validate and repair the graph, show a concise task summary when approval is still needed, and run `implement` when authorized. Keep the result local unless publication is explicitly authorized.
 
-For AI-assisted development, turn the agreed requirements and repository evidence into a task graph with `sigil-task-graph`. Validate and repair the graph, show a concise task summary when approval is still needed, and run `implement` when authorized. Keep the result local unless publication is explicitly authorized.
+Treat “use Sigil” or “use the Sigil skill” as a request to establish the brief and route the unfinished transition. Do not treat it as implicit authority for agentic planning, publication, merging, or deployment.
 
 ## Inspect accepted state
 
@@ -40,20 +42,25 @@ Before choosing a workflow, inspect the state the user already accepts:
 
 Do not repeat planning, implementation, review, or delivery work merely because a higher-level workflow normally includes it.
 
-When the user asks to implement an active Markdown plan, verify that the plan file exists and read it in full. Resolve an omitted filename against the active or most recently accepted plan in the conversation. If more than one plan could be meant, ask which one. In AI-assisted development, use the plan, agreed requirements, and verified repository evidence to author the task graph directly. Validate the graph, repair validation errors, and pass it to `implement`. Do not invoke Sigil planning merely because a plan file exists.
+When an active Markdown plan exists, verify that the file exists and read it in full. Resolve an omitted filename against the active or most recently accepted plan in the conversation. If more than one plan could be meant, ask which one.
 
-Pass a Markdown plan through `software-change --brief` only when the user explicitly asks Sigil to plan or replan agentically. A validated task graph is accepted implementation state and uses `--task-file` or `implement` directly.
+After the brief is confirmed, present exactly these routes:
+
+- **Replan and implement**: pass the confirmed brief and complete plan through `software-change --brief`. Sigil may reconsider implementation choices and correct repository claims, but it must preserve the confirmed outcome, decisions, constraints, and non-goals.
+- **Convert and implement locally**: use `sigil-task-graph` to translate the confirmed brief and complete plan directly, validate the graph, and run local implementation without another planning round.
+
+Do not infer this choice. A validated task graph is accepted implementation state and uses `implement` directly.
 
 ## Route the unfinished transition
 
-- **Bounded change already discussed with the current assistant**: use the `sigil-task-graph` skill to author and validate the graph, then run `implement` when authorized.
-- **Active Markdown plan in AI-assisted development**: read the complete plan and translate it directly into a validated task graph. Do not run `plan` or `software-change --brief`.
-- **User explicitly requests Sigil-owned planning for one change**: use `software-change`; pass relevant context through `--brief`.
+- **Bounded change already discussed with the current assistant**: confirm the brief, use the `sigil-task-graph` skill to author and validate the graph, then run `implement` when authorized.
+- **Active Markdown plan**: confirm the brief, then ask whether to replan and implement or convert and implement locally.
+- **User explicitly requests Sigil-owned planning for one change**: use `software-change`; pass relevant context through `--brief`. When the planning input does not exist yet, author it with the `sigil-brief` skill first.
 - **One ordinary software change requiring detached execution or a custom authority boundary**: use a temporary TypeScript Sigil that composes `softwareChange`; do not promote it to dispatch unless delivery policy is required.
 - **Planning is the requested output**: use `plan`.
 - **The correct change requires safe behavioral experiments**: use `probe`, then reuse its task graph through `software-change --task-file` or `implement` according to the requested boundary.
 - **Accepted task graph**: skip planning and use `implement`. Use `software-change --task-file` only when its combined result shape or composition boundary is specifically needed.
-- **Existing diff or branch change**: use `review` without replanning or reimplementation.
+- **Existing diff or branch change**: use the real `review` workflow without replanning or reimplementation. There is no separate review skill. For a read-only request, run `review` with `autofix: false`. When the developer explicitly requests review and repair, disclose that the workflow may edit the existing checkout and run `review` with `autofix: true`.
 - **Backlog delivery requiring publication, merge, delivery-base verification, or resumable delivery state**: use the `sigil-dispatch` skill. A one-item backlog is appropriate only when those dispatch-owned effects are required.
 - **One bounded behavior-preserving structural change**: use the `sigil-refactor` skill.
 - **Repository-wide structural migration**: use the `sigil-migration` skill.

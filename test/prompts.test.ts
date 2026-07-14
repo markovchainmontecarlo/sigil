@@ -6,10 +6,34 @@ import { interpolate } from "../src/prompts.js";
 
 describe("prompts", () => {
   test("renders a grouped template and interpolates supplied vars", () => {
-    const rendered = planningPrompts.investigate({ INTENT: "ship it", BRIEF: "", CONTEXT: "loaded context" });
+    const rendered = planningPrompts.investigate({ INTENT: "ship it", BRIEF: "", CONTEXT: "loaded context", RUBRIC: "planning rubric" });
     expect(rendered).toContain("ship it");
     expect(rendered).toContain("loaded context");
     expect(rendered).not.toMatch(/\{\{\w+\}\}/);
+  });
+
+  test("planning rubrics divide independent authoring from synthesis", () => {
+    const planner = planningPrompts.plannerRubric();
+    const synthesis = planningPrompts.synthesisRubric();
+
+    for (const phrase of ["cohesive change", "file responsibility", "produced", "consumed", "acceptance", "verification", "placeholder", "self-review"]) {
+      expect(planner.toLowerCase()).toContain(phrase);
+    }
+    for (const phrase of ["supported unique", "requirements crosswalk", "task boundaries", "interface ownership", "verification conflicts", "hidden conversation context"]) {
+      expect(synthesis.toLowerCase()).toContain(phrase);
+    }
+    expect(`${planner}\n${synthesis}`).not.toMatch(/superpowers|subagent|\.codex|execution handoff/i);
+  });
+
+  test("planning stages request complete, repository-grounded plan evidence", () => {
+    const investigate = planningPrompts.investigate({ INTENT: "goal", BRIEF: "brief", CONTEXT: "context", RUBRIC: "rubric" });
+    const writePlan = planningPrompts.writePlan({ OUT_FILE: "/tmp/plan.md", RUBRIC: "rubric" });
+    const compare = planningPrompts.comparePlans({ INTENT: "goal", PLANS: "plans", CONVERGE_FILE: "convergence", DIVERGE_FILE: "divergence", CROSSWALK_FILE: "crosswalk", RUBRIC: "rubric" });
+
+    expect(investigate).toMatch(/scope|ownership|state flow|callers|tests|configuration|verified|falsified|unresolved/i);
+    expect(writePlan).toMatch(/architecture|constraints|non-goals|produced|consumed|verification|self-review/i);
+    expect(compare).toMatch(/requirements crosswalk|task boundaries|interfaces|verification|omission/i);
+    expect(`${investigate}\n${writePlan}\n${compare}`).not.toMatch(/\{\{\w+\}\}/);
   });
 
 
@@ -56,23 +80,34 @@ describe("prompts", () => {
 ${taskGraphRepair}`).not.toMatch(/\{\{\w+\}\}/);
   });
 
-  test("implement task prompt includes generalized configured write-back rule", () => {
-    const rendered = implementationPrompts.task({
+  test("implementation prompts separate session context and task data", () => {
+    const session = implementationPrompts.sessionContext({
       PREAMBLE: "preamble",
+      GOAL: "goal",
+      ARCHITECTURE: "architecture",
+      CONSTRAINTS: "- none",
+      NON_GOALS: "- none",
+      HANDOFF: "handoff",
+      CONTEXT: "context block",
+    });
+    const instructions = implementationPrompts.taskInstructions();
+    const task = implementationPrompts.task({
       TASK_ID: "a",
       TASK_TITLE: "Task A",
       TASK_SUMMARY: "summary",
+      DEPENDENCIES: "- none",
       DIAGRAMS: "",
-      HANDOFF: "",
-      CONTEXT: "context block",
       ACCEPTANCE: "- works",
+      INTERFACES: "Produces:\n- output: behavior\nConsumes:\n- none",
+      VERIFICATION: "- command: bun test\n  expected: pass",
       FILES: "- modify /tmp/a.txt",
     });
 
-    expect(rendered).toContain("context block");
-    expect(rendered).toContain("configured context file is marked `update: true`");
-    expect(rendered).toContain("Files marked `update: false` are read-only context");
-    expect(rendered).not.toMatch(/\{\{\w+\}\}/);
+    expect(session).toContain("context block");
+    expect(instructions).toContain("configured `update: true` context files");
+    expect(instructions).toContain("Treat `update: false` context as read-only");
+    expect(task).not.toContain("context block");
+    expect(`${session}\n${instructions}\n${task}`).not.toMatch(/\{\{\w+\}\}/);
   });
 
 

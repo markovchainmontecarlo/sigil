@@ -152,11 +152,11 @@ export const commandHelps = [
   {
     name: "review",
     summary: "Review the current diff against a base ref.",
-    usage: "sigil review --repo <dir> --base <ref> [--no-autofix] [--context <text>]",
+    usage: "sigil review --repo <dir> --base <ref> [--autofix] [--context <text>]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--base <ref>", description: "Required. Base ref for the diff." },
-      { name: "--no-autofix", description: "Disable the autofix pass." },
+      { name: "--autofix", description: "Repair actionable findings in the checkout." },
       { name: "--context <text>", description: "Optional review context." },
     ],
     exitCode: "0 when there are no unresolved high findings and no reported issues; 1 otherwise.",

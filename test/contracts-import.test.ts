@@ -1,11 +1,10 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "bun:test";
 
 test("contracts import evaluates only contract modules", () => {
-  const directory = mkdtempSync(join(tmpdir(), "sigil-contract-import-"));
+  const directory = mkdtempSync("/tmp/sigil-contract-import-");
   const log = join(directory, "modules.log");
   const loader = join(directory, "loader.mjs");
   writeFileSync(log, "");

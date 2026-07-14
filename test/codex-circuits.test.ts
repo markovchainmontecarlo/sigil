@@ -61,6 +61,21 @@ describe("Codex routing circuits", () => {
     expect((await readCodexRoutingState(store)).circuits.subscription).toBeUndefined();
   });
 
+  test("transient provider failures do not create persistent capacity state", async () => {
+    const store = fixture();
+    await writeCodexProfiles([profile], store);
+    const admission = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 80 }), store);
+    const failure = classifyProviderFailure(new ProviderError("idle timeout", {
+      code: "idle_timeout",
+    }));
+
+    await releaseCodexProfile(assigned(admission).reservation.id, undefined, failure, store);
+    const next = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 70 }), store);
+
+    expect(next.status).toBe("assigned");
+    expect((await readCodexRoutingState(store)).circuits.subscription).toBeUndefined();
+  });
+
   test("unsupported state versions fail closed", async () => {
     const store = fixture();
     await writeCodexProfiles([profile], store);

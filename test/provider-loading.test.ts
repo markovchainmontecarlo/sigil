@@ -1,5 +1,4 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 
@@ -42,7 +41,7 @@ test("closing an unused lazy agent does not initialize it", async () => {
 
 test("Node imports and constructs without evaluating provider adapters", () => {
   expect(Bun.spawnSync({ cmd: ["bun", "run", "build"], stdout: "pipe", stderr: "pipe" }).exitCode).toBe(0);
-  const directory = mkdtempSync(join(tmpdir(), "sigil-provider-loading-"));
+  const directory = mkdtempSync("/tmp/sigil-provider-loading-");
   const log = join(directory, "modules.log");
   const loader = join(directory, "loader.mjs");
   writeFileSync(log, "");

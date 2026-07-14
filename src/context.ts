@@ -254,6 +254,7 @@ export function createContext(
       return runShell(command, repo, options.signal, options.processLifecycle);
     },
     async evals(name) {
+      const started = performance.now();
       await ctx.observe("gate-started", { gate: name });
       const result = await evalGate(name, {
         cwd: repo,
@@ -265,6 +266,7 @@ export function createContext(
         outcome: result.skipped ? "skipped" : result.ok ? "passed" : "failed",
         command: result.command ?? "not-configured",
         exitCode: result.exitCode === undefined ? "not-run" : String(result.exitCode),
+        durationMs: String(Math.round(performance.now() - started)),
       });
       return result;
     },
@@ -542,7 +544,7 @@ export function renderContextBlock(context: LoadedContext): string {
   const lines = [
     "## Configured run context",
     "",
-    "These files were loaded at the start of the run. Use them as orientation, then verify their claims against source files and runtime behavior before relying on them.",
+    "These files were loaded as workflow context. Use them as orientation, then verify their claims against source files and runtime behavior before relying on them.",
     "`update: true` marks a drift-controlled write-back target. Keep that file true with the smallest in-place edit when this run makes one of its statements false.",
     "`update: false` marks read-only context unless the task explicitly declares that file as an output.",
   ];

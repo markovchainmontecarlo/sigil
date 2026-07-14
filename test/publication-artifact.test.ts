@@ -1,6 +1,4 @@
 import { readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
@@ -31,12 +29,7 @@ describe("publication artifacts", () => {
   });
 
   test("rejects absent publication evidence and exposes no independent npm publisher", () => {
-    const checked = run([
-      "bun",
-      "scripts/verify-package.ts",
-      "--check-record",
-      join(tmpdir(), "missing-sigil-verification.json"),
-    ]);
+    const checked = run(["bun", "scripts/verify-package.ts", "--check-record", "/tmp/missing-sigil-verification.json"]);
     const manifest = JSON.parse(readFileSync("package.json", "utf8"));
     const release = readFileSync(".github/workflows/release.yml", "utf8");
     const scripts = Object.values(manifest.scripts).join("\n");

@@ -34,7 +34,7 @@ function tempRepo(planners = ["planner-a"], synthesizer = "synthesizer"): string
   writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
     agents: Object.fromEntries([...planners, synthesizer].map((name) => [name, { provider: "codex", model: "gpt-5.5" }])),
     evals: {},
-    plan: { planners, synthesizer },
+    plan: { planners, synthesizer, reviewer: synthesizer, semanticReviewLimit: 2 },
     implement: { coder: planners[0], sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: [synthesizer], synthesizer: synthesizer },
   }, null, 2));

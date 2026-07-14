@@ -8,6 +8,23 @@ const emptyClaudeState = { version: 1, state: { reservations: {}, ledgers: {}, c
 
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "sigil-profile-cli-"));
+  const bin = join(home, "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "codex"), `#!/usr/bin/env node
+const readline = require("node:readline");
+const remaining = process.env.CODEX_HOME?.includes("other") ? 100 : 69;
+const lines = readline.createInterface({ input: process.stdin });
+lines.on("line", (line) => {
+  const request = JSON.parse(line);
+  const result = request.method === "account/read"
+    ? { account: { type: process.env.CODEX_HOME?.includes("other") ? "apiKey" : "chatgpt" } }
+    : request.method === "account/rateLimits/read"
+      ? { rateLimits: { primary: { usedPercent: 100 - remaining } } }
+      : {};
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\\n");
+});
+`);
+  chmodSync(join(bin, "codex"), 0o755);
   writePrivate(home, "codex-profiles/registry.json", { version: 1, profiles: [
     { name: "shared", home: "/seeded/private/codex", enabled: true, profileClass: "subscription", percentageQuantum: 10, reserveFloorPercentage: 20 },
     { name: "codex-only", home: "/seeded/private/other", enabled: true, profileClass: "metered-api", meteredMode: "manual", budget: { startLimit: 2, reservationTokens: 100 } },
@@ -29,7 +46,7 @@ function writePrivate(home: string, relative: string, value: unknown) {
 }
 
 function run(home: string, args: string[]) {
-  return Bun.spawnSync({ cmd: ["bun", "src/cli.ts", "profile", ...args], cwd: process.cwd(), env: { ...process.env, SIGIL_HOME: home }, stdout: "pipe", stderr: "pipe" });
+  return Bun.spawnSync({ cmd: ["bun", "src/cli.ts", "profile", ...args], cwd: process.cwd(), env: { ...process.env, PATH: `${join(home, "bin")}:${process.env.PATH}`, SIGIL_HOME: home }, stdout: "pipe", stderr: "pipe" });
 }
 
 function text(bytes: Uint8Array) { return new TextDecoder().decode(bytes); }
@@ -58,6 +75,23 @@ describe("profile CLI", () => {
     });
     expect(claudeStatus.profiles[0].eligibility).toBe("eligible");
     expect(text(status.stdout)).not.toContain("percentage");
+  });
+
+  test("subscription status reports live percentage capacity instead of token usage", () => {
+    const home = fixture();
+    const status = run(home, ["status", "--provider", "codex", "--json"]);
+    const human = run(home, ["status", "--provider", "codex"]);
+    const subscription = JSON.parse(text(status.stdout)).profiles[0];
+
+    expect(status.exitCode).toBe(0);
+    expect(subscription.evidence.capacity).toMatchObject({
+      kind: "available",
+      remainingPercentage: 69,
+      reservedPercentage: 0,
+      availablePercentage: 69,
+    });
+    expect(subscription.state).not.toHaveProperty("ledger.usage");
+    expect(text(human.stdout)).toContain("69% remaining");
   });
 
   test("qualified and unique bare selectors work while ambiguous selectors do not mutate", () => {
@@ -140,7 +174,16 @@ describe("profile CLI", () => {
     const updated = JSON.parse(readFileSync(join(home, "codex-profiles/routing-state.json"), "utf8")).state;
 
     expect(updated.reservations).toEqual(state.reservations);
-    expect(updated.ledgers["codex-only"]).toEqual({ ...state.ledgers["codex-only"], rearmRequired: false });
+    expect(updated.ledgers["codex-only"]).toEqual({
+      starts: 2,
+      active: 1,
+      runtimeMs: 12,
+      rearmRequired: false,
+      metered: {
+        reservedTokens: 100,
+        usage: state.ledgers["codex-only"].usage,
+      },
+    });
     expect(updated.circuits["codex-only"]).toBeUndefined();
   });
 

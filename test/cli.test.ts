@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import { implementExitCode, reviewExitCode, softwareChangeExitCode } from "../src/commands/exit-codes.js";
-import { implementCommandWith } from "../src/commands/software-change.js";
+import { implementCommandWith, reviewCommandWith } from "../src/commands/software-change.js";
 import { commandHelps } from "../src/help.js";
 import { DEFAULT_SIGIL_CONFIG, loadConfig } from "../src/config.js";
 import { CONTRACT_VERSION, type Task, type TaskGraph } from "../src/contracts/task-graph.js";
@@ -16,11 +16,24 @@ const task = (id: string, dependencies: string[] = []): Task => ({
   title: `Task ${id}`,
   summary: `Summary ${id}`,
   dependencies,
+  interfaces: {
+    produces: [{ name: `${id}-result`, description: `${id} is complete` }],
+    consumes: dependencies.map((taskId) => ({ taskId, name: `${taskId}-result`, description: `uses ${taskId}` })),
+  },
   acceptanceCriteria: ["works"],
+  verification: [{ kind: "command", command: "bun test", expected: "tests pass" }],
   diagrams: [],
   files: [file(`/repo/src/${id}.ts`)],
 });
-const graph = (tasks: Task[]): TaskGraph => ({ contractVersion: CONTRACT_VERSION, project: "fixture", tasks });
+const graph = (tasks: Task[]): TaskGraph => ({
+  contractVersion: CONTRACT_VERSION,
+  project: "fixture",
+  goal: "Exercise the CLI",
+  architecture: "The CLI validates one explicit task graph contract.",
+  constraints: [],
+  nonGoals: [],
+  tasks,
+});
 
 function run(args: string[], env: NodeJS.ProcessEnv = {}) {
   return Bun.spawnSync({ cmd: ["bun", "src/cli.ts", ...args], cwd: process.cwd(), env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" });
@@ -466,7 +479,7 @@ describe("cli", () => {
     writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
       agents: { claudeReviewer: { provider: "claude", model: "private-model" } },
       evals: {}, context: [],
-      plan: { planners: ["claudeReviewer"], synthesizer: "claudeReviewer" },
+      plan: { planners: ["claudeReviewer"], synthesizer: "claudeReviewer", reviewer: "claudeReviewer", semanticReviewLimit: 2 },
       implement: { coder: "claudeReviewer", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
       review: { reviewers: ["claudeReviewer"], synthesizer: "claudeReviewer" },
     }));
@@ -551,7 +564,15 @@ describe("cli", () => {
   test("software-change task-file mode validates the supplied graph before planning", () => {
     const dir = mkdtempSync(join(tmpdir(), "sigil-cli-software-change-"));
     const taskFile = join(dir, "invalid-task-graph.json");
-    writeFileSync(taskFile, JSON.stringify({ contractVersion: CONTRACT_VERSION, project: "fixture", tasks: [] }));
+    writeFileSync(taskFile, JSON.stringify({
+      contractVersion: CONTRACT_VERSION,
+      project: "fixture",
+      goal: "Use the ready graph",
+      architecture: "The supplied graph owns planning state.",
+      constraints: [],
+      nonGoals: [],
+      tasks: [],
+    }));
 
     const result = run(["software-change", "--repo", dir, "--intent", "Use the ready graph.", "--task-file", taskFile]);
 
@@ -604,6 +625,18 @@ describe("cli", () => {
 
   test("review exits 1 when review reports issues without unresolved highs", () => {
     expect(reviewExitCode({ valid: false, unresolvedHigh: 0, issues: ["git diff failed"] })).toBe(1);
+  });
+
+  test("review is read-only unless the caller explicitly enables repair", async () => {
+    const inputs: Array<{ autofix?: boolean }> = [];
+    const effect = async (input: { autofix?: boolean }) => {
+      inputs.push(input);
+      return { valid: true, findings: [], unresolvedHigh: 0, issues: [] };
+    };
+
+    expect(await reviewCommandWith(["--repo", ".", "--base", "HEAD"], effect as never)).toBe(0);
+    expect(await reviewCommandWith(["--repo", ".", "--base", "HEAD", "--autofix"], effect as never)).toBe(0);
+    expect(inputs.map((input) => input.autofix)).toEqual([false, true]);
   });
 
   test("review subcommand exits 1 when diff setup fails", () => {

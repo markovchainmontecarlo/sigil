@@ -54,6 +54,27 @@ describe("Codex profile routing", () => {
     expect((await readCodexRoutingState(files)).ledgers.b?.active).toBe(1);
   });
 
+  test("subscription completion does not accumulate token usage", async () => {
+    const files = store();
+    await writeCodexProfiles([profile("subscription")], files);
+    const admission = await reserveCodexProfile(
+      async () => ({ available: true, remainingPercentage: 80 }),
+      files,
+    );
+
+    await releaseCodexProfile(assignment(admission).reservation.id, {
+      inputTokens: 10,
+      cachedInputTokens: 0,
+      outputTokens: 5,
+      reasoningTokens: 0,
+      totalTokens: 15,
+    }, files);
+    const state = await readCodexRoutingState(files);
+
+    expect(state.ledgers.subscription).not.toHaveProperty("usage");
+    expect(state.ledgers.subscription).not.toHaveProperty("reservedTokens");
+  });
+
   test("holds an immutable reservation until agent close", async () => {
     const files = store();
     await writeCodexProfiles([{ ...profile("only"), concurrencyLimit: 1 }], files);
@@ -82,7 +103,7 @@ describe("Codex profile routing", () => {
 
     expect(assignment(overflow).profile.name).toBe("api");
     expect(exhausted.status).toBe("capacity-blocked");
-    expect((await readCodexRoutingState(files)).ledgers.api?.usage.totalTokens).toBe(100);
+    expect((await readCodexRoutingState(files)).ledgers.api?.metered?.usage.totalTokens).toBe(100);
   });
 
   test("serializes normal concurrent reservations without lock failures", async () => {
@@ -178,7 +199,7 @@ describe("Codex profile routing", () => {
 
     expect(assignment(first).reservation.reservedTokens).toBe(100);
     expect(blocked.status).toBe("capacity-blocked");
-    expect(state.ledgers.api?.usage.totalTokens).toBe(0);
+    expect(state.ledgers.api?.metered?.usage.totalTokens).toBe(0);
     expect(state.ledgers.api?.active).toBe(1);
   });
 
@@ -324,8 +345,8 @@ describe("Codex profile routing", () => {
 
     expect(state.reservations).toEqual({});
     expect(state.ledgers.pro?.active).toBe(0);
-    expect(state.ledgers.pro?.reservedTokens).toBe(0);
-    expect(state.ledgers.pro?.usage.totalTokens).toBe(25);
+    expect(state.ledgers.pro?.metered?.reservedTokens).toBe(0);
+    expect(state.ledgers.pro?.metered?.usage.totalTokens).toBe(25);
     expect(state.ledgers.pro?.rearmRequired).toBe(true);
   });
 
@@ -368,5 +389,7 @@ describe("Codex profile routing", () => {
 
     expect(admission.status).toBe("assigned");
     expect(state.ledgers.pro?.rearmRequired).toBe(false);
+    expect(state.ledgers.pro).not.toHaveProperty("usage");
+    expect(state.ledgers.pro).not.toHaveProperty("reservedTokens");
   });
 });

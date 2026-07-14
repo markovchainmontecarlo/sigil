@@ -1,16 +1,16 @@
 {
   "agents": {
-    "sol-low": {
+    "sol-medium": {
       "provider": "codex",
       "model": "gpt-5.6-sol",
       "effort": "medium"
     },
-    "luna-medium": {
+    "terra-medium": {
       "provider": "codex",
-      "model": "gpt-5.6-luna",
+      "model": "gpt-5.6-terra",
       "effort": "medium"
     },
-    "luna-high": {
+    "luna-medium": {
       "provider": "codex",
       "model": "gpt-5.6-luna",
       "effort": "medium"
@@ -19,7 +19,12 @@
   "evals": {
     "build": "bun run typecheck",
     "test": "bun run test:fast",
-    "verify": "bun run test:all"
+    "verify": {
+      "command": "bun run test:all",
+      "covers": [
+        "test"
+      ]
+    }
   },
   "context": [
     {
@@ -33,14 +38,16 @@
   ],
   "plan": {
     "planners": [
-      "sol-low",
-      "luna-high",
+      "sol-medium",
+      "terra-medium",
       "luna-medium"
     ],
-    "synthesizer": "sol-low"
+    "synthesizer": "sol-medium",
+    "reviewer": "luna-medium",
+    "semanticReviewLimit": 2
   },
   "implement": {
-    "coder": "sol-low",
+    "coder": "sol-medium",
     "sessionTaskLimit": 5,
     "repairLimit": 3,
     "operationTimeoutMs": 5400000,
@@ -49,11 +56,11 @@
   },
   "review": {
     "reviewers": [
-      "sol-low",
-      "luna-high",
+      "sol-medium",
+      "terra-medium",
       "luna-medium"
     ],
-    "synthesizer": "sol-low",
+    "synthesizer": "sol-medium",
     "followUpReviews": 0
   }
 }

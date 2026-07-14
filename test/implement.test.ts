@@ -10,7 +10,9 @@ import { createContext, type SigilContext } from "../src/context.js";
 import type { EvalGateResult } from "../src/gate.js";
 import { review, type ReviewInput, type ReviewResult } from "../src/workflows/software-change/review/index.js";
 import { CONTRACT_VERSION, type Task, type TaskGraph } from "../src/contracts/task-graph.js";
+import { CoderSessionLifecycle } from "../src/workflows/software-change/implementation/coder-session.js";
 import { implement } from "../src/workflows/software-change/implementation/index.js";
+import { runGateSet } from "../src/verification.js";
 
 class StubAgent implements SigilAgent {
   calls: string[] = [];
@@ -36,7 +38,12 @@ function task(repo: string, id: string, dependencies: string[] = []): Task {
     title: `Task ${id}`,
     summary: `Change ${id}.`,
     dependencies,
+    interfaces: {
+      produces: [{ name: `${id}-result`, description: `${id} is complete` }],
+      consumes: dependencies.map((taskId) => ({ taskId, name: `${taskId}-result`, description: `uses ${taskId}` })),
+    },
     acceptanceCriteria: [`${id} works`],
+    verification: [{ kind: "command", command: "true", expected: "command succeeds" }],
     diagrams: [],
     files: [{ path: join(repo, `${id}.txt`), action: "modify", details: [`Update ${id}.txt line 1`] }],
   };
@@ -55,11 +62,19 @@ function fixture(tasks: Task[], opts: { sessionTaskLimit?: number; baseBranch?: 
     evals: opts.evals ?? { build: "build", test: "test", verify: "verify" },
     workspace: opts.bootstrap ? { bootstrap: opts.bootstrap } : {},
     context: opts.context ?? [],
-    plan: { planners: ["coder"], synthesizer: "coder" },
+    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder", semanticReviewLimit: 2 },
     implement: { coder: "coder", sessionTaskLimit: opts.sessionTaskLimit ?? 2, repairLimit: 2, branchPrefix: "impl/", baseBranch: opts.baseBranch ?? "master" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
-  const graph: TaskGraph = { contractVersion: CONTRACT_VERSION, project: "fixture", goal: "test goal", tasks: repoTasks };
+  const graph: TaskGraph = {
+    contractVersion: CONTRACT_VERSION,
+    project: "fixture",
+    goal: "test goal",
+    architecture: "Tasks modify fixture files through explicit dependency interfaces.",
+    constraints: [],
+    nonGoals: [],
+    tasks: repoTasks,
+  };
   const taskFile = join(repo, "task-graph.json");
   writeFileSync(taskFile, JSON.stringify(graph, null, 2));
   run(repo, ["add", "."]);
@@ -74,12 +89,14 @@ type StubContextOptions = {
   createAgent: (binding?: Parameters<SigilContext["agent"]>[0]) => SigilAgent;
   evalGate?: (name: string) => Promise<EvalGateResult>;
   review?: (input: ReviewInput) => Promise<ReviewResult>;
+  onObserve?: (stage: string, details: Record<string, string>) => Promise<void>;
 };
 
 function stubContext(repo: string, seams: StubContextOptions): SigilContext {
   const base = createContext(repo, {
     artifactRoot: testArtifactDir(repo),
     createAgent: (binding) => seams.createAgent(binding),
+    onObserve: seams.onObserve,
   });
   const ctx = Object.create(base) as SigilContext;
   ctx.evals = seams.evalGate ?? okEval;
@@ -98,6 +115,33 @@ function testArtifactDir(repo: string): string {
 }
 
 describe("implement", () => {
+  test("marks only the acquisition that opens a coder as a new session", async () => {
+    const agents: StubAgent[] = [];
+    const context = {
+      agent: () => {
+        const agent = new StubAgent();
+        agents.push(agent);
+        return agent;
+      },
+      observe: async () => {},
+    } as unknown as SigilContext;
+    await using sessions = new CoderSessionLifecycle(context, "coder", 2);
+
+    const first = await sessions.acquire();
+    const second = await sessions.acquire();
+    const rotated = await sessions.acquire();
+    const reused = await sessions.acquire();
+    await sessions.invalidate("test");
+    const replacement = await sessions.acquire();
+
+    expect(first.newSession).toBe(true);
+    expect(second.newSession).toBe(false);
+    expect(rotated.newSession).toBe(true);
+    expect(reused.newSession).toBe(false);
+    expect(replacement.newSession).toBe(true);
+    expect(agents).toHaveLength(3);
+  });
+
   test("resumes provider-interrupted task work without replaying completed tasks", async () => {
     const initial = fixture([]).repo;
     const tasks = [task(initial, "a"), task(initial, "b", ["a"])];
@@ -105,10 +149,12 @@ describe("implement", () => {
     const canonicalGraphFile = join(testArtifactDir(repo), "implementation", "task-graph.json");
     const checkpointFile = join(testArtifactDir(repo), "implementation", "checkpoint.json");
     const prompted: string[] = [];
+    const prompts: string[] = [];
     let interruptB = true;
     const context = () => stubContext(repo, {
       evalGate: okEval,
       createAgent: () => new StubAgent((_call, prompt) => {
+        prompts.push(prompt);
         const id = prompt.match(/## Your task: (\w+)/)?.[1];
         if (!id) return "";
         prompted.push(id);
@@ -130,9 +176,27 @@ describe("implement", () => {
     expect(existsSync(join(repo, "b-untracked.txt"))).toBe(false);
 
     interruptB = false;
-    const resumed = await implement({ repo, taskFile, branch: "impl/resume", canonicalGraphFile, checkpointFile, resume: true }, context());
+    let resumedPrompted = false;
+    const resumeContext = stubContext(repo, {
+      evalGate: async () => {
+        if (!resumedPrompted) throw new Error("resume reran baseline gates before continuing the task");
+        return { ok: true, log: "ok" };
+      },
+      createAgent: () => new StubAgent((_call, prompt) => {
+        prompts.push(prompt);
+        const id = prompt.match(/## Your task: (\w+)/)?.[1];
+        if (!id) return "";
+        resumedPrompted = true;
+        prompted.push(id);
+        writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+      }),
+      review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
+    });
+    const resumed = await implement({ repo, taskFile, branch: "impl/resume", canonicalGraphFile, checkpointFile, resume: true }, resumeContext);
     expect(resumed.failedTasks).toEqual([]);
     expect(prompted.filter((id) => id === "a")).toHaveLength(1);
+    expect(prompts.at(-1)).toContain("## Coder session handoff");
+    expect(prompts.at(-1)).toContain("- a:");
     expect(readFileSync(join(repo, "b-untracked.txt"), "utf8")).toBe("preserved\n");
     expect(JSON.parse(readFileSync(checkpointFile, "utf8")).tasks.b.status).toBe("completed");
   });
@@ -178,10 +242,11 @@ describe("implement", () => {
 
   test("runs tasks in dependency order and commits each task", async () => {
     const initial = fixture([]).repo;
-    const tasks = [task(initial, "a"), task(initial, "b"), task(initial, "c")];
+    const tasks = [task(initial, "a"), task(initial, "b"), task(initial, "c"), task(initial, "d")];
     const { repo, taskFile } = fixture(tasks, { sessionTaskLimit: 2 });
     const seen: string[] = [];
     const coders: StubAgent[] = [];
+    const promptEvents: Array<Record<string, string>> = [];
 
     const result = await implement({ repo, taskFile, branch: "impl/happy" }, stubContext(repo,
       {
@@ -197,18 +262,33 @@ describe("implement", () => {
         coders.push(coder);
         return coder;
       },
+      onObserve: async (stage, details) => {
+        if (stage === "coder-prompt-prepared") promptEvents.push(details);
+      },
       review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
     }));
 
     expect(result.branch).toBe("impl/happy");
     expect(result.prBody).toContain("## Issues\n- none");
-    expect(seen).toEqual(["a", "b", "c"]);
+    expect(seen).toEqual(["a", "b", "c", "d"]);
     expect(coders).toHaveLength(2);
     expect(coders[0].calls.filter((call) => call.includes("## Your task:"))).toHaveLength(2);
+    expect(coders[0].calls[0]).toContain("Tasks modify fixture files through explicit dependency interfaces.");
+    expect(coders[0].calls[0]).toContain("Produces:\n- a-result");
+    expect(coders[0].calls[0]).toContain("focused verification");
+    expect(coders[0].calls[1]).not.toContain("# Agent Operating Principles");
+    expect(coders[0].calls[1]).not.toContain("Tasks modify fixture files through explicit dependency interfaces.");
+    expect(coders[0].calls[1]).toContain("Produces:\n- b-result");
     expect(coders[1].calls[0]).toContain("## Coder session handoff");
     expect(coders[1].calls[0]).toContain("- a:");
     expect(coders[1].calls[0]).toContain("- b:");
-    expect(run(repo, ["log", "--oneline"]).split("\n").filter((line) => line.includes(": Task"))).toHaveLength(3);
+    expect(coders[1].calls[0]).toContain("produced interfaces: a-result");
+    expect(coders[1].calls[1]).not.toContain("# Agent Operating Principles");
+    expect(coders[1].calls[1]).not.toContain("## Coder session handoff");
+    expect(coders[1].calls[1]).toContain("Produces:\n- d-result");
+    expect(promptEvents.map((event) => event.kind)).toEqual(["session-task", "task", "session-task", "task"]);
+    expect(Number(promptEvents[0].characters)).toBeGreaterThan(Number(promptEvents[1].characters));
+    expect(run(repo, ["log", "--oneline"]).split("\n").filter((line) => line.includes(": Task"))).toHaveLength(4);
   });
 
   test("injects run-specific instructions into task and review context", async () => {
@@ -280,7 +360,8 @@ describe("implement", () => {
       review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
     }));
 
-    expect(coder.calls.some((call) => call.includes("failed build/test"))).toBe(true);
+    expect(coder.calls.some((call) => call.includes("failed focused verification or repository gates"))).toBe(true);
+    expect(coder.calls.find((call) => call.includes("## Your task: c"))).toContain("# Implementation session context");
     expect(result.failedTasks).toContain("a");
     expect(result.failedTasks).not.toContain("b");
     expect(result.issues.join("\n")).toContain("blocked tasks awaiting completed dependencies: b");
@@ -410,7 +491,7 @@ describe("implement", () => {
       {
       evalGate: async (name) => name === "build" && ++buildCalls === 2 ? { ok: false, log: "red" } : { ok: true, log: "ok" },
       createAgent: () => new StubAgent((_call, prompt) => {
-        if (prompt.includes("failed build/test")) {
+        if (prompt.includes("failed focused verification or repository gates")) {
           writeFileSync(join(repo, "a.txt"), "a after repair\n");
           return "final repair reply";
         }
@@ -420,6 +501,33 @@ describe("implement", () => {
     }));
 
     expect(readFileSync(join(replyDir, "a.md"), "utf8")).toBe("final repair reply");
+  });
+
+  test("initializes a fresh final-verification repair agent with current run context", async () => {
+    const base = fixture([]).repo;
+    const tasks = [task(base, "a")];
+    const { repo, taskFile } = fixture(tasks, {
+      context: [{ path: "ARCHITECTURE.md", update: true }],
+      contextFiles: { "ARCHITECTURE.md": "Repair architecture context\n" },
+    });
+    let buildCalls = 0;
+    let finalRepairPrompt = "";
+
+    await implement({ repo, taskFile, branch: "impl/final-repair-context" }, stubContext(repo, {
+      evalGate: async (name) => name === "build" && ++buildCalls === 3
+        ? { ok: false, log: "final verification red" }
+        : { ok: true, log: "ok" },
+      createAgent: () => new StubAgent((_call, prompt) => {
+        const id = prompt.match(/## Your task: (\w+)/)?.[1];
+        if (id) writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+        if (prompt.includes("configured build, test, e2e, and verify gates")) finalRepairPrompt = prompt;
+      }),
+      review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
+    }));
+
+    expect(finalRepairPrompt).toContain("# Agent Operating Principles");
+    expect(finalRepairPrompt).toContain("Tasks modify fixture files through explicit dependency interfaces.");
+    expect(finalRepairPrompt).toContain("Repair architecture context");
   });
 
   test("reply artifact write failures are issues and do not abort the run", async () => {
@@ -535,6 +643,38 @@ describe("implement", () => {
     expect(firstPrompt).toContain("Architecture fact");
   });
 
+  test("reloads configured context when a new coder session opens", async () => {
+    const base = fixture([]).repo;
+    const tasks = [task(base, "a"), task(base, "b"), task(base, "c")];
+    const { repo, taskFile } = fixture(tasks, {
+      sessionTaskLimit: 2,
+      context: [{ path: "ARCHITECTURE.md", update: true }],
+      contextFiles: { "ARCHITECTURE.md": "Original architecture\n" },
+    });
+    const coders: StubAgent[] = [];
+
+    await implement({ repo, taskFile, branch: "impl/context-refresh" }, stubContext(repo, {
+      evalGate: okEval,
+      createAgent: () => {
+        const coder = new StubAgent((_call, prompt) => {
+          const id = prompt.match(/## Your task: (\w+)/)?.[1];
+          if (!id) return;
+          writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+          if (id === "b") writeFileSync(join(repo, "ARCHITECTURE.md"), "Updated architecture\n");
+        });
+        coders.push(coder);
+        return coder;
+      },
+      review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
+    }));
+
+    expect(coders).toHaveLength(2);
+    expect(coders[0].calls[0]).toContain("Original architecture");
+    expect(coders[0].calls[1]).not.toContain("Original architecture");
+    expect(coders[1].calls[0]).toContain("Updated architecture");
+    expect(coders[1].calls[0]).not.toContain("Original architecture");
+  });
+
   test("update-enabled context write-back is allowed outside declared task files", async () => {
     const base = fixture([]).repo;
     const tasks = [task(base, "a")];
@@ -603,5 +743,89 @@ describe("implement", () => {
     expect(result.reviewBlocking).toBe(true);
     expect(result.prBody).toContain("# BLOCKING");
     expect(result.prBody).toContain("review: high remains");
+  });
+
+  test("reuses final verification when review leaves repository state unchanged", async () => {
+    const base = fixture([]).repo;
+    const tasks = [task(base, "a")];
+    const { repo, taskFile } = fixture(tasks);
+    let gateCalls = 0;
+    let callsAtReview = 0;
+
+    await implement({ repo, taskFile, branch: "impl/reuse-final" }, stubContext(repo, {
+      evalGate: async () => {
+        gateCalls++;
+        return { ok: true, log: "ok" };
+      },
+      createAgent: () => new StubAgent((_call, prompt) => {
+        const id = prompt.match(/## Your task: (\w+)/)?.[1];
+        if (id) writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+      }),
+      review: async () => {
+        callsAtReview = gateCalls;
+        return { valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] };
+      },
+    }));
+
+    expect(gateCalls).toBe(callsAtReview);
+  });
+
+  test("reuses successful verification performed by review repair", async () => {
+    const base = fixture([]).repo;
+    const tasks = [task(base, "a")];
+    const { repo, taskFile } = fixture(tasks);
+    let gateCalls = 0;
+    let callsAfterReviewVerification = 0;
+    let context!: SigilContext;
+    context = stubContext(repo, {
+      evalGate: async () => {
+        gateCalls++;
+        return { ok: true, log: "ok" };
+      },
+      createAgent: () => new StubAgent((_call, prompt) => {
+        const id = prompt.match(/## Your task: (\w+)/)?.[1];
+        if (id) writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+      }),
+      review: async () => {
+        writeFileSync(join(repo, "review-fix.txt"), "fixed\n");
+        const verification = await runGateSet(context, ["build", "test", "e2e", "verify"]);
+        callsAfterReviewVerification = gateCalls;
+        return { valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: true, verification, issues: [] };
+      },
+    });
+
+    await implement({ repo, taskFile, branch: "impl/reuse-review" }, context);
+
+    expect(gateCalls).toBe(callsAfterReviewVerification);
+  });
+
+  test("executes command verification from the current task contract", async () => {
+    const base = fixture([]).repo;
+    const focused = task(base, "a");
+    focused.verification = [{ kind: "command", command: "test -f focused.marker", expected: "marker exists" }];
+    const { repo, taskFile } = fixture([focused]);
+    const observations: Array<{ stage: string; details: Record<string, string> }> = [];
+
+    const result = await implement({ repo, taskFile, branch: "impl/focused-gate" }, stubContext(repo, {
+      evalGate: okEval,
+      createAgent: () => new StubAgent((_call, prompt) => {
+        const id = prompt.match(/## Your task: (\w+)/)?.[1];
+        if (!id) return;
+        writeFileSync(join(repo, `${id}.txt`), `${id} after\n`);
+        writeFileSync(join(repo, "focused.marker"), "ready\n");
+      }),
+      onObserve: async (stage, details) => { observations.push({ stage, details }); },
+      review: async () => ({ valid: true, findings: "", findingsFile: "", unresolvedHigh: 0, fixRan: false, issues: [] }),
+    }));
+
+    expect(result.failedTasks).toEqual([]);
+    expect(observations).toContainEqual(expect.objectContaining({
+      stage: "gate-completed",
+      details: expect.objectContaining({ gate: "task:a:1", outcome: "passed" }),
+    }));
+    expect(observations).toContainEqual(expect.objectContaining({
+      stage: "task-finished",
+      details: expect.objectContaining({ task: "a", outcome: "completed", durationMs: expect.any(String) }),
+    }));
   });
 });
