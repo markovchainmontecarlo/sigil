@@ -33,7 +33,7 @@ function tempRepo(): string {
   writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
     agents: { coder: { provider: "codex", model: "gpt-5.5" } },
     evals: {},
-    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder", semanticReviewLimit: 2 },
+    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder" },
     implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }, null, 2));

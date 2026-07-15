@@ -13,7 +13,7 @@ import {
 } from "../../../context.js";
 import type { WorkflowFailure } from "../../../recovery/index.js";
 import { planningPrompts } from "./prompts.js";
-import { convergePlanningReview } from "./review.js";
+import { reviewPlanningGraph } from "./review.js";
 import {
   enrichTaskGraph,
   repairTaskGraphJson,
@@ -304,7 +304,7 @@ export const plan = sigil<PlanInput, PlanResult>("plan", async (ctx, input) => {
     };
   }
 
-  const convergence = await convergePlanningReview(ctx, {
+  const review = await reviewPlanningGraph(ctx, {
     repo: input.repo,
     intent: input.intent,
     brief: input.brief ?? "",
@@ -314,18 +314,18 @@ export const plan = sigil<PlanInput, PlanResult>("plan", async (ctx, input) => {
     rubric: `${plannerRubric}\n\n${synthesisRubric}`,
     config,
   });
-  failures.push(...convergence.failures);
+  failures.push(...review.failures);
 
   const issues = [
     ...synthesized.result.issues,
-    ...convergence.checked.errors,
-    ...convergence.issues,
+    ...review.checked.errors,
+    ...review.issues,
   ];
-  const valid = issues.length === 0 && convergence.checked.raw !== null;
-  if (valid) validateTaskGraph(convergence.checked.raw, { repoRoot: input.repo });
+  const valid = issues.length === 0 && review.checked.raw !== null;
+  if (valid) validateTaskGraph(review.checked.raw, { repoRoot: input.repo });
   return {
     taskFile,
-    taskCount: convergence.checked.graph?.tasks.length ?? 0,
+    taskCount: review.checked.graph?.tasks.length ?? 0,
     valid,
     issues,
     failures,

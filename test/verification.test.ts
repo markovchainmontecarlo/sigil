@@ -16,7 +16,7 @@ function fixture(build = "true", testCommand = "true") {
     agents: { worker: { provider: "codex", model: "gpt-5.5", effort: "medium" } },
     evals: { build, test: testCommand },
     context: [],
-    plan: { planners: ["worker"], synthesizer: "worker", reviewer: "worker", semanticReviewLimit: 2 },
+    plan: { planners: ["worker"], synthesizer: "worker", reviewer: "worker" },
     implement: {
       coder: "worker",
       sessionTaskLimit: 1,

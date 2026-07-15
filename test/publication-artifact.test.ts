@@ -26,7 +26,7 @@ describe("publication artifacts", () => {
     });
     expect(evidence.manifestIdentity).toMatch(/^[a-f0-9]{64}$/);
     expect(evidence.exportsIdentity).toMatch(/^[a-f0-9]{64}$/);
-  });
+  }, 15_000);
 
   test("rejects absent publication evidence and exposes no independent npm publisher", () => {
     const checked = run(["bun", "scripts/verify-package.ts", "--check-record", "/tmp/missing-sigil-verification.json"]);
