@@ -93,6 +93,18 @@ describe("staged package build", () => {
       expect(prompts.loadPromptTemplate(resource.path.slice("resources/".length))).toBeString();
     }
 
+    const installed = await import(pathToFileURL(join(packageRoot, "src", "index.js")).href);
+    const dispatch = await import(pathToFileURL(join(packageRoot, "src", "workflows", "dispatch", "prompts.js")).href);
+    for (const render of [
+      installed.planningPrompts.investigate,
+      installed.implementationPrompts.task,
+      installed.reviewPrompts.findings,
+      installed.breakdownPrompts.cut,
+      dispatch.dispatchPrompts.repair,
+    ]) {
+      expect(render()).toBeString();
+    }
+
     const dashboardModule = await import(pathToFileURL(join(packageRoot, "src", "dashboard", "server.js")).href);
     const dashboard = dashboardModule.startDashboardServer({ host: "127.0.0.1", port: 0, roots: [] });
     try {

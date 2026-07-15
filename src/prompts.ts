@@ -9,17 +9,6 @@ export function interpolate(template: string, vars: Record<string, unknown> = {}
 
 const SEGMENT = /^[a-zA-Z0-9][a-zA-Z0-9.-]*$/;
 
-function loadTemplateFromRoot(root: string, group: string, name: string): string {
-  if ((group && !SEGMENT.test(group)) || !SEGMENT.test(name)) throw new Error(`invalid prompt path: ${group ? `${group}/` : ""}${name}`);
-  const file = join(root, group, `${name}.md`);
-  try {
-    return readFileSync(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error(`prompt not found: ${group ? `${group}/` : ""}${name}`);
-    throw error;
-  }
-}
-
 export type Prompt = (vars?: Record<string, unknown>) => string;
 export type PromptGroup = Record<string, Prompt>;
 
@@ -64,7 +53,19 @@ export function createPromptGroup(relativeRoot: string): PromptGroup {
     {
       get(_group, name): Prompt {
         if (typeof name !== "string") return undefined as unknown as Prompt;
-        return (vars = {}) => interpolate(loadTemplateFromRoot(packageResource(relativeRoot), "", name), vars);
+        return (vars = {}) => {
+          if (!SEGMENT.test(name)) throw new Error(`invalid prompt path: ${name}`);
+
+          const identifier = `${relativeRoot}/${name}.md`;
+          try {
+            return loadPromptTemplate(identifier, vars);
+          } catch (error) {
+            if (error instanceof Error && error.message === `resource not found: ${identifier}`) {
+              throw new Error(`prompt not found: ${name}`);
+            }
+            throw error;
+          }
+        };
       },
     },
   );
