@@ -5,8 +5,8 @@ Use placeholder names. Profile names appear in status and telemetry, so never en
 ## Subscription only
 
 ```sh
-sigil profile add subscription --provider codex --class subscription --home /path/to/provider-managed/codex-home --concurrency 1 --reserve-floor 20
-sigil profile add subscription --provider claude --class subscription --default-config --concurrency 1
+sigil profile add subscription --provider codex --class subscription --home /path/to/provider-managed/codex-home
+sigil profile add subscription --provider claude --class subscription --default-config
 sigil profile status --json
 ```
 
@@ -35,4 +35,4 @@ sigil profile inspect claude:overflow --json
 sigil profile status --provider claude --json
 ```
 
-Overflow becomes eligible only after subscriptions are ineligible. Automatic authorization permits direct selection but still enforces admission and per-operation limits. Disable a profile to revoke future assignments. An assigned profile stays fixed for the agent lifetime; rerouting waits for process cleanup and reservation release.
+Overflow becomes eligible only after subscriptions are ineligible. Automatic authorization permits direct selection but still enforces admission and per-operation limits. Disable a profile to revoke future assignments. A selected subscription profile stays fixed for the agent lifetime. Metered rerouting waits for process cleanup and reservation release.

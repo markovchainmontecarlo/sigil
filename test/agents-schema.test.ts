@@ -8,9 +8,7 @@ import { agent } from "../src/agents.js";
 import { createTextAgentFromGenerate, isSchemaPromptError } from "../src/agent.js";
 import { createClaudeAgentFromGenerate } from "../src/providers/claude.js";
 import { createCopilotAgentFromClient, createCopilotAgentFromGenerate } from "../src/providers/copilot.js";
-import { monitorActiveCodexCapacity } from "../src/providers/codex.js";
-import { codexProfileStore, readCodexRoutingState, writeCodexProfiles } from "../src/codex-profiles.js";
-import { releaseCodexProfile, reserveCodexProfile } from "../src/codex-router.js";
+import { codexProfileStore, writeCodexProfiles } from "../src/codex-profiles.js";
 
 describe("schema prompts", () => {
   test("inline bindings pass through the common runtime schema", () => {
@@ -126,36 +124,6 @@ describe("schema prompts", () => {
     expect(turns).toEqual(["plain text"]);
   });
 
-  test("blocked routed Codex admission does not start ACP", async () => {
-    const root = mkdtempSync(join(tmpdir(), "sigil-agent-admission-"));
-    mkdirSync(root, { recursive: true });
-    const profiles = codexProfileStore(root);
-    await writeCodexProfiles([{
-      name: "blocked",
-      home: join(root, "codex-home"),
-      enabled: true,
-      profileClass: "subscription",
-    }], profiles);
-    const previous = process.env.SIGIL_CODEX_ACP_BIN;
-    process.env.SIGIL_CODEX_ACP_BIN = join(root, "must-not-start");
-    const codex = agent({ provider: "codex", model: "test", effort: "medium" }, {
-      profileStore: profiles,
-      capacityReader: async () => ({
-        kind: "unknown",
-        available: false,
-        observedAt: new Date().toISOString(),
-      }),
-    });
-
-    try {
-      await expect(codex.prompt("blocked")).rejects.toThrow("capacity blocked");
-    } finally {
-      await codex.close();
-      if (previous === undefined) delete process.env.SIGIL_CODEX_ACP_BIN;
-      else process.env.SIGIL_CODEX_ACP_BIN = previous;
-    }
-  });
-
   test("invalid routed Codex configuration does not start ACP", async () => {
     const root = mkdtempSync(join(tmpdir(), "sigil-agent-configuration-"));
     const profiles = codexProfileStore(root);
@@ -179,85 +147,6 @@ describe("schema prompts", () => {
       if (previous === undefined) delete process.env.SIGIL_CODEX_ACP_BIN;
       else process.env.SIGIL_CODEX_ACP_BIN = previous;
     }
-  });
-
-  test("active subscription protection cancels once and retains the reservation until release", async () => {
-    const root = mkdtempSync(join(tmpdir(), "sigil-active-capacity-"));
-    const profiles = codexProfileStore(root);
-    await writeCodexProfiles([{
-      name: "protected",
-      home: join(root, "codex-home"),
-      enabled: true,
-      profileClass: "subscription",
-      reserveFloorPercentage: 20,
-      activeCapacityPollIntervalMs: 5,
-    }], profiles);
-    const admission = await reserveCodexProfile(async () => ({
-      available: true,
-      remainingPercentage: 80,
-    }), profiles);
-    if (admission.status !== "assigned") throw new Error("expected assignment");
-    const events: string[] = [];
-    const telemetry: unknown[] = [];
-    const guard = monitorActiveCodexCapacity(
-      admission.assignment,
-      async () => ({ available: true, remainingPercentage: 20 }),
-      profiles,
-      async (event) => {
-        events.push("cancel");
-        telemetry.push(event);
-      },
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    await guard.stop();
-    const activeState = await readCodexRoutingState(profiles);
-    expect(events).toEqual(["cancel"]);
-    expect(activeState.reservations[admission.assignment.reservation.id]).toBeDefined();
-    expect(activeState.circuits.protected?.reason).toBe("capacity");
-    expect(telemetry).toEqual([{
-      profile: "protected",
-      capacityClass: "at-or-below-floor",
-      configuredFloor: 20,
-      admissionOutcome: "assigned",
-      capacityTriggeredCancellation: true,
-    }]);
-
-    await releaseCodexProfile(admission.assignment.reservation.id, undefined, profiles);
-    expect(Object.keys((await readCodexRoutingState(profiles)).reservations)).toEqual([]);
-    expect((await reserveCodexProfile(async () => ({
-      available: true,
-      remainingPercentage: 80,
-    }), profiles)).status).toBe("assigned");
-  });
-
-  test("active subscription protection stops when a capacity observation never settles", async () => {
-    const root = mkdtempSync(join(tmpdir(), "sigil-active-capacity-stop-"));
-    const profiles = codexProfileStore(root);
-    await writeCodexProfiles([{
-      name: "protected",
-      home: join(root, "codex-home"),
-      enabled: true,
-      profileClass: "subscription",
-      activeCapacityPollIntervalMs: 1,
-    }], profiles);
-    const admission = await reserveCodexProfile(async () => ({
-      available: true,
-      remainingPercentage: 80,
-    }), profiles);
-    if (admission.status !== "assigned") throw new Error("expected assignment");
-    const guard = monitorActiveCodexCapacity(
-      admission.assignment,
-      () => new Promise(() => {}),
-      profiles,
-      async () => {},
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    await guard.stop();
-    await releaseCodexProfile(admission.assignment.reservation.id, undefined, profiles);
-
-    expect(Object.keys((await readCodexRoutingState(profiles)).reservations)).toEqual([]);
   });
 
   test("copilot schema prompt uses json retry", async () => {

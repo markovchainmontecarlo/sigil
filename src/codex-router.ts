@@ -44,7 +44,11 @@ type LegacySubscriptionCapacity = {
 export type CapacityReader = (
   profile: CodexProfile,
 ) => Promise<SubscriptionCapacity | LegacySubscriptionCapacity>;
-export type CodexAssignment = { qualifiedIdentity: `codex:${string}`; profile: CodexProfile; reservation: ProfileReservation };
+export type CodexAssignment = {
+  qualifiedIdentity: `codex:${string}`;
+  profile: CodexProfile;
+  reservation?: ProfileReservation;
+};
 export type CodexAdmission =
   | { status: "assigned"; assignment: CodexAssignment; telemetry: CodexCapacityTelemetry[] }
   | { status: "capacity-blocked"; reasons: string[]; telemetry: CodexCapacityTelemetry[] }
@@ -69,7 +73,7 @@ export async function reserveCodexProfile(
     return { status: "configuration-error", errors: configurationErrors, telemetry: [] };
   }
 
-  const capacities = await readCapacities(profiles, readCapacity);
+  const capacities = new Map<string, SubscriptionCapacity>();
   const owner = await readProcessIdentity();
   return updateCodexRoutingState((state) => admitProfile(profiles, capacities, state, owner), store);
 }
@@ -161,8 +165,12 @@ function admitProfile(
   consumeManualAssignment(state, profile.name);
   return {
     status: "assigned",
-    assignment: { qualifiedIdentity: qualifiedProfileIdentity("codex", profile.name), profile, reservation },
-    telemetry: capacityTelemetry(profiles, capacities, profile.name),
+    assignment: {
+      qualifiedIdentity: qualifiedProfileIdentity("codex", profile.name),
+      profile,
+      reservation,
+    },
+    telemetry: [],
   };
 }
 
@@ -171,14 +179,13 @@ function selectProfile(
   capacities: Map<string, SubscriptionCapacity>,
   state: CodexRoutingState,
 ): CodexProfile | undefined {
-  applyProbeCircuits(profiles, capacities, state);
   const manual = selectManualProfile(profiles, capacities, state);
   if (manual) return manual;
 
   const subscriptions = profiles
     .filter((profile) => profile.profileClass === "subscription")
-    .filter((profile) => eligibleSubscription(profile, capacities.get(profile.name), state));
-  const subscription = selectSubscription(subscriptions, capacities, state.roundRobin);
+    .filter((profile) => eligibleSubscription(profile));
+  const subscription = selectSubscription(subscriptions, state.roundRobin);
   if (subscription) state.roundRobin++;
   if (subscription) return subscription;
 
@@ -197,26 +204,13 @@ function selectManualProfile(
   const profile = profiles.find((entry) => entry.name === state.next?.profile);
   if (!profile) return undefined;
   if (profile.profileClass === "metered-api") return eligibleMetered(profile, state) ? profile : undefined;
-  return eligibleSubscription(profile, capacities.get(profile.name), state) ? profile : undefined;
+  return eligibleSubscription(profile) ? profile : undefined;
 }
 
 function eligibleSubscription(
   profile: CodexProfile,
-  capacity: SubscriptionCapacity | undefined,
-  state: CodexRoutingState,
 ): boolean {
-  if (!profile.enabled || state.unavailableProfiles[profile.name]) return false;
-  if (circuitIsOpen(state.circuits[profile.name])) return false;
-  if (profileLedger(state, profile.name).rearmRequired) return false;
-  if (atConcurrencyLimit(profile, state)) return false;
-  if (!isFreshAvailable(capacity)) return false;
-
-  const activeHeadroom = Object.values(state.reservations)
-    .filter((reservation) => reservation.profile === profile.name)
-    .reduce((total, reservation) => total + (reservation.reservedHeadroomPercentage ?? 0), 0);
-  const quantum = profile.percentageQuantum ?? 0;
-  const floor = profile.reserveFloorPercentage ?? 0;
-  return capacity.remainingPercentage - activeHeadroom - quantum >= floor;
+  return profile.enabled;
 }
 
 function eligibleMetered(profile: CodexProfile, state: CodexRoutingState): boolean {
@@ -235,20 +229,17 @@ function reserveProfile(
   capacity: SubscriptionCapacity | undefined,
   state: CodexRoutingState,
   owner: ProcessIdentity,
-): ProfileReservation {
+): ProfileReservation | undefined {
+  if (profile.profileClass === "subscription") return undefined;
+
   const available = capacity?.kind === "available" ? capacity : undefined;
-  const reservedTokens = profile.profileClass === "metered-api"
-    ? reservationTokenAmount(profile, state)
-    : undefined;
+  const reservedTokens = reservationTokenAmount(profile, state);
   const reservation = newReservation(profile.name, {
     owner,
     startingPercentage: available?.remainingPercentage,
     percentageQuantum: profile.percentageQuantum,
     observedAt: available?.observedAt,
     observedRemainingPercentage: available?.remainingPercentage,
-    reservedHeadroomPercentage: profile.profileClass === "subscription"
-      ? profile.percentageQuantum ?? 0
-      : undefined,
     reservedTokens,
   });
   const ledger = profileLedger(state, profile.name);
@@ -271,14 +262,14 @@ function blockedAdmission(
     return {
       status: "configuration-error",
       errors: configuration.map((entry) => entry.message ?? "invalid Codex profile"),
-      telemetry: capacityTelemetry(profiles, capacities),
+      telemetry: [],
     };
   }
   const reasons = profiles.map((profile) => blockReason(profile, capacities.get(profile.name), state));
   return {
     status: "capacity-blocked",
     reasons: [...new Set(reasons)],
-    telemetry: capacityTelemetry(profiles, capacities),
+    telemetry: [],
   };
 }
 
@@ -401,18 +392,10 @@ function reservationTokenAmount(profile: CodexProfile, state: CodexRoutingState)
 
 function selectSubscription(
   profiles: CodexProfile[],
-  capacities: Map<string, SubscriptionCapacity>,
   roundRobin: number,
 ): CodexProfile | undefined {
-  const maximum = Math.max(...profiles.map((profile) => {
-    const capacity = capacities.get(profile.name);
-    return capacity?.kind === "available" ? capacity.remainingPercentage : -1;
-  }));
-  const tied = profiles
-    .filter((profile) => capacities.get(profile.name)?.kind === "available")
-    .filter((profile) => (capacities.get(profile.name) as Extract<SubscriptionCapacity, { kind: "available" }>).remainingPercentage === maximum)
-    .sort((left, right) => left.name.localeCompare(right.name));
-  return tied.length ? tied[roundRobin % tied.length] : undefined;
+  const ordered = profiles.sort((left, right) => left.name.localeCompare(right.name));
+  return ordered.length ? ordered[roundRobin % ordered.length] : undefined;
 }
 
 export async function readCapacities(
