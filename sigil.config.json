@@ -43,8 +43,7 @@
       "luna-medium"
     ],
     "synthesizer": "sol-medium",
-    "reviewer": "luna-medium",
-    "semanticReviewLimit": 2
+    "reviewer": "sol-medium"
   },
   "implement": {
     "coder": "sol-medium",

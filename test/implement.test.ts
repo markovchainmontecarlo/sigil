@@ -62,7 +62,7 @@ function fixture(tasks: Task[], opts: { sessionTaskLimit?: number; baseBranch?: 
     evals: opts.evals ?? { build: "build", test: "test", verify: "verify" },
     workspace: opts.bootstrap ? { bootstrap: opts.bootstrap } : {},
     context: opts.context ?? [],
-    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder", semanticReviewLimit: 2 },
+    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder" },
     implement: { coder: "coder", sessionTaskLimit: opts.sessionTaskLimit ?? 2, repairLimit: 2, branchPrefix: "impl/", baseBranch: opts.baseBranch ?? "master" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));

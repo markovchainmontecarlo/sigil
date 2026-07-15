@@ -29,7 +29,6 @@ export type SigilConfig = {
     planners: string[];
     synthesizer: string;
     reviewer: string;
-    semanticReviewLimit: number;
   };
   implement: {
     coder: string;
@@ -79,7 +78,6 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
     planners: ["sol-medium", "terra-medium", "luna-medium"],
     synthesizer: "sol-medium",
     reviewer: "sol-medium",
-    semanticReviewLimit: 2,
   },
   implement: {
     coder: "sol-medium",
@@ -119,7 +117,6 @@ const ConfigSchema: z.ZodType<SigilConfig> = z.object({
     planners: z.array(z.string().min(1)),
     synthesizer: z.string().min(1),
     reviewer: z.string().min(1),
-    semanticReviewLimit: z.number().int().nonnegative(),
   }),
   implement: z.object({
     coder: z.string().min(1),

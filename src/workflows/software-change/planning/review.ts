@@ -1,7 +1,5 @@
 import { readFile } from "node:fs/promises";
 
-import { z } from "zod";
-
 import { runFreshAgentOperation } from "../../../agent-operation.js";
 import type { SigilConfig } from "../../../config.js";
 import type { SigilContext } from "../../../context.js";
@@ -13,52 +11,19 @@ import {
   type TaskGraphCheck,
 } from "./task-graph.js";
 
-export const PlanningReviewCategorySchema = z.enum([
-  "missing-requirement",
-  "placeholder",
-  "task-too-broad",
-  "task-too-small",
-  "missing-dependency",
-  "interface-conflict",
-  "undefined-symbol",
-  "incorrect-file",
-  "unverifiable-criterion",
-  "missing-test-coverage",
-  "unnecessary-scope",
-  "stale-anchor",
-]);
+export type PlanningReviewSeverity = "high" | "medium" | "low";
 
-export const PlanningReviewFindingSchema = z.object({
-  category: PlanningReviewCategorySchema,
-  taskIds: z.array(z.string().min(1)),
-  evidence: z.string().min(1),
-  rule: z.string().min(1),
-  correction: z.string().min(1),
-}).strict();
-
-export const PlanningReviewOutputSchema = z.object({
-  valid: z.boolean(),
-  findings: z.array(PlanningReviewFindingSchema),
-}).strict().superRefine((value, context) => {
-  if (value.valid === (value.findings.length > 0)) {
-    context.addIssue({
-      code: "custom",
-      message: "valid must be true exactly when findings is empty",
-    });
-  }
-});
-
-export type PlanningReviewFinding = z.infer<typeof PlanningReviewFindingSchema>;
-export type PlanningReviewOutput = z.infer<typeof PlanningReviewOutputSchema>;
+export type PlanningReviewSummary = Record<PlanningReviewSeverity, number>;
 
 export type PlanningConvergenceResult = {
   checked: TaskGraphCheck;
-  findings: PlanningReviewFinding[];
+  reportFile: string;
+  summary: PlanningReviewSummary;
   failures: WorkflowFailure[];
   issues: string[];
 };
 
-type PlanningConvergenceInput = {
+type PlanningReviewInput = {
   repo: string;
   intent: string;
   brief: string;
@@ -69,139 +34,122 @@ type PlanningConvergenceInput = {
   config: SigilConfig;
 };
 
-async function collectPlanningReview(
-  ctx: SigilContext,
-  input: PlanningConvergenceInput,
-  attempt: number,
-): Promise<{ review?: PlanningReviewOutput; failures: WorkflowFailure[]; issue?: string }> {
-  await ctx.observe("planning-review-started", { attempt: String(attempt + 1) });
-  const taskGraph = await readFile(input.taskFile, "utf8");
+const REVIEW_SECTIONS: Array<{
+  severity: PlanningReviewSeverity;
+  heading: string;
+}> = [
+  { severity: "high", heading: "HIGH" },
+  { severity: "medium", heading: "MEDIUM" },
+  { severity: "low", heading: "LOW" },
+];
 
+function sectionBody(report: string, heading: string): string {
+  const section = new RegExp(
+    `^## ${heading}\\s*$([\\s\\S]*?)(?=^## (?:HIGH|MEDIUM|LOW)\\s*$|(?![\\s\\S]))`,
+    "m",
+  ).exec(report);
+  if (!section) throw new Error(`planning review report is missing ## ${heading}`);
+  return section[1]?.trim() ?? "";
+}
+
+export function summarizePlanningReview(report: string): PlanningReviewSummary {
+  return Object.fromEntries(REVIEW_SECTIONS.map(({ severity, heading }) => {
+    const body = sectionBody(report, heading);
+    const count = [...body.matchAll(/^###\s+\S.*$/gm)].length;
+    if (count === 0 && body !== "None.") {
+      throw new Error(`planning review ## ${heading} must contain findings or exactly \"None.\"`);
+    }
+    return [severity, count];
+  })) as PlanningReviewSummary;
+}
+
+export async function reviewPlanningGraph(
+  ctx: SigilContext,
+  input: PlanningReviewInput,
+): Promise<PlanningConvergenceResult> {
+  const reportFile = ctx.artifacts.path("planning/review.md");
   const reviewed = await runFreshAgentOperation(
     ctx,
     input.config.plan.reviewer,
     {
-      stage: "planning:semantic-review",
+      stage: "planning:review",
       limit: input.config.implement.repairLimit,
       timeoutMs: input.config.implement.operationTimeoutMs,
       idleTimeoutMs: input.config.implement.idleTimeoutMs,
     },
-    (reviewer) => reviewer.prompt(
-      planningPrompts.reviewTaskGraph({
-        RUBRIC: input.rubric,
-        INTENT: input.intent,
-        BRIEF: input.brief,
-        CROSSWALK: input.crosswalk,
-        TASK_GRAPH: taskGraph,
-      }),
-      PlanningReviewOutputSchema,
-    ),
-  );
-
-  if (!reviewed.ok) {
-    return { failures: reviewed.failures, issue: reviewed.failure.evidence };
-  }
-
-  await ctx.artifacts.write(
-    `planning/review-${String(attempt + 1)}.json`,
-    `${JSON.stringify(reviewed.value, null, 2)}\n`,
-  );
-  await ctx.observe("planning-review-completed", {
-    attempt: String(attempt + 1),
-    outcome: reviewed.value.valid ? "valid" : "findings",
-    findingCount: String(reviewed.value.findings.length),
-  });
-  return { review: reviewed.value, failures: reviewed.failures };
-}
-
-async function repairPlanningFindings(
-  ctx: SigilContext,
-  input: PlanningConvergenceInput,
-  findings: PlanningReviewFinding[],
-  attempt: number,
-): Promise<{ checked: TaskGraphCheck; failures: WorkflowFailure[]; issue?: string }> {
-  await ctx.observe("planning-review-repair-started", { attempt: String(attempt + 1) });
-
-  const repaired = await runFreshAgentOperation(
-    ctx,
-    input.config.plan.synthesizer,
-    {
-      stage: "planning:semantic-repair",
-      limit: input.config.implement.repairLimit,
-      timeoutMs: input.config.implement.operationTimeoutMs,
-      idleTimeoutMs: input.config.implement.idleTimeoutMs,
-    },
-    async (synthesizer) => {
+    async (reviewer) => {
+      const taskGraph = await readFile(input.taskFile, "utf8");
       const emitted = await ctx.emit(
-        synthesizer,
+        reviewer,
+        planningPrompts.reviewTaskGraph({
+          RUBRIC: input.rubric,
+          INTENT: input.intent,
+          BRIEF: input.brief,
+          CROSSWALK: input.crosswalk,
+          TASK_GRAPH: taskGraph,
+          OUT_FILE: reportFile,
+        }),
+        reportFile,
+        { minBytes: 1 },
+      );
+      if (!emitted.ok) throw new Error(`planning review failed: ${emitted.issue}`);
+
+      const report = emitted.contents[0] ?? "";
+      const summary = summarizePlanningReview(report);
+      await ctx.observe("planning-review-completed", {
+        high: String(summary.high),
+        medium: String(summary.medium),
+        low: String(summary.low),
+      });
+
+      if (summary.high === 0) {
+        return {
+          checked: await readTaskGraph(input.taskFile, input.repo),
+          summary,
+        };
+      }
+
+      const repaired = await ctx.emit(
+        reviewer,
         planningPrompts.repairTaskGraph({
           TASK_FILE: input.taskFile,
           CONTRACT: input.contract,
-          FINDINGS: JSON.stringify(findings, null, 2),
+          FINDINGS: report,
         }),
         input.taskFile,
         { minBytes: 1, mustChange: true },
       );
-      if (!emitted.ok) throw new Error(`planning repair failed: ${emitted.issue}`);
+      if (!repaired.ok) throw new Error(`planning repair failed: ${repaired.issue}`);
 
-      return repairTaskGraphJson(ctx, synthesizer, {
+      const checked = await repairTaskGraphJson(ctx, reviewer, {
         taskFile: input.taskFile,
         repo: input.repo,
         contract: input.contract,
         limit: input.config.implement.repairLimit,
         issuePrefix: "reviewed task graph",
       });
+      await ctx.observe("planning-review-repair-completed", {
+        outcome: checked.errors.length ? "invalid" : "valid",
+      });
+      return { checked, summary };
     },
   );
 
-  if (!repaired.ok) {
+  if (!reviewed.ok) {
     return {
       checked: await readTaskGraph(input.taskFile, input.repo),
-      failures: repaired.failures,
-      issue: repaired.failure.evidence,
+      reportFile,
+      summary: { high: 0, medium: 0, low: 0 },
+      failures: reviewed.failures,
+      issues: [reviewed.failure.evidence],
     };
   }
 
-  await ctx.observe("planning-review-repair-completed", {
-    attempt: String(attempt + 1),
-    outcome: repaired.value.errors.length ? "invalid" : "valid",
-  });
-  return { checked: repaired.value, failures: repaired.failures };
-}
-
-export async function convergePlanningReview(
-  ctx: SigilContext,
-  input: PlanningConvergenceInput,
-): Promise<PlanningConvergenceResult> {
-  const failures: WorkflowFailure[] = [];
-  let checked = await readTaskGraph(input.taskFile, input.repo);
-  let findings: PlanningReviewFinding[] = [];
-
-  for (let attempt = 0; attempt <= input.config.plan.semanticReviewLimit; attempt++) {
-    const reviewed = await collectPlanningReview(ctx, input, attempt);
-    failures.push(...reviewed.failures);
-    if (!reviewed.review) {
-      return { checked, findings, failures, issues: [reviewed.issue ?? "planning review failed"] };
-    }
-
-    findings = reviewed.review.findings;
-    if (reviewed.review.valid) return { checked, findings: [], failures, issues: [] };
-    if (attempt === input.config.plan.semanticReviewLimit) break;
-
-    const repaired = await repairPlanningFindings(ctx, input, findings, attempt);
-    failures.push(...repaired.failures);
-    checked = repaired.checked;
-    if (repaired.issue) return { checked, findings, failures, issues: [repaired.issue] };
-    if (checked.errors.length) return { checked, findings, failures, issues: checked.errors };
-  }
-
-  await ctx.observe("planning-review-exhausted", {
-    findingCount: String(findings.length),
-  });
   return {
-    checked,
-    findings,
-    failures,
-    issues: findings.map((finding) => `${finding.category}: ${finding.correction}`),
+    checked: reviewed.value.checked,
+    reportFile,
+    summary: reviewed.value.summary,
+    failures: reviewed.failures,
+    issues: [],
   };
 }

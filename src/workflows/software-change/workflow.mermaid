@@ -29,10 +29,10 @@ flowchart TD
     Enrich["enrich task graph"]
     RepairGraph["repair and deterministically validate task graph"]
     CloseSynthesis["close synthesis session"]
-    PlanningReview["fresh configured semantic reviewer"]
-    ReviewValid{"semantic review valid?"}
-    ReviewRepair["fresh synthesizer repairs typed findings"]
-    ReviewLimit{"semantic repair limit exhausted?"}
+    PlanningReview["configured planning reviewer writes severity report"]
+    HighFindings{"high findings?"}
+    ReviewRepair["same reviewer repairs high findings"]
+    ValidateReviewRepair["deterministically validate reviewed graph"]
     PlanResult["PlanResult"]
 
     PlanConfig --> Planners
@@ -51,12 +51,11 @@ flowchart TD
     Enrich --> RepairGraph
     RepairGraph --> CloseSynthesis
     CloseSynthesis --> PlanningReview
-    PlanningReview --> ReviewValid
-    ReviewValid -->|yes| PlanResult
-    ReviewValid -->|no| ReviewLimit
-    ReviewLimit -->|no| ReviewRepair
-    ReviewRepair --> RepairGraph
-    ReviewLimit -->|yes| PlanResult
+    PlanningReview --> HighFindings
+    HighFindings -->|no| PlanResult
+    HighFindings -->|yes| ReviewRepair
+    ReviewRepair --> ValidateReviewRepair
+    ValidateReviewRepair --> PlanResult
   end
 
   PlanResult --> PlanValid{"planning result valid?"}
@@ -173,7 +172,7 @@ flowchart TD
   classDef boundary fill:#f3e8ff,stroke:#7c3aed,color:#3b0764;
   classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
   class Planners,Synthesizer,PlanningReview,ReviewRepair,Coder,TaskRepair,NoChangeRepair,NoopVerdict,FinalRepair,ReviewStage agent;
-  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,ReviewValid,ReviewLimit,PlanValid,ResumeGate,CleanGate,BaselineGate,DependencyGate,NewCoder,ProviderInterruption,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,AllCompleted,FinalGates,FinalRepairCommitResult,StrongestGate gate;
+  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,HighFindings,ValidateReviewRepair,PlanValid,ResumeGate,CleanGate,BaselineGate,DependencyGate,NewCoder,ProviderInterruption,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,AllCompleted,FinalGates,FinalRepairCommitResult,StrongestGate gate;
   class PlannerArtifacts,BuildGraph,ImplementationCheckpoint,RecoveryBundle,ReplyArtifact,TaskCommitIssue,RetryCommitIssue,FinalRepairCommit,FinalRepairCommitIssue artifact;
   class Delivery boundary;
   class SuppliedGraphFailure,CleanFailure failure;

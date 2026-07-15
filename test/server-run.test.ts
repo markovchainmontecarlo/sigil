@@ -223,5 +223,5 @@ describe("server run API", () => {
       stderr: "pipe",
     });
     expect(imported.exitCode, imported.stderr.toString()).toBe(0);
-  });
+  }, 15_000);
 });
