@@ -1,4 +1,4 @@
-import { launchTypeScriptSigil, SigilRunnerError } from "../sigil-runner.js";
+import { launchTypeScriptSigil, runTypeScriptSigil, SigilRunnerError } from "../sigil-runner.js";
 import type { RunPersistence } from "../storage.js";
 import { runYamlWorkflowFile } from "../yaml/run.js";
 import { UsageError } from "./errors.js";
@@ -25,18 +25,22 @@ export async function runSigilCommand(args: string[]): Promise<number> {
     out: { type: "string" },
     "run-dir": { type: "string" },
     persistence: { type: "string" },
+    foreground: { type: "boolean" },
   });
   rejectPositionals(parsed);
 
   try {
-    const result = await launchTypeScriptSigil({
+    const input = {
       repo: requireValue(parsed, "repo"),
       file: requireValue(parsed, "file"),
       inputFile: value(parsed, "input"),
       outFile: value(parsed, "out"),
       runDir: value(parsed, "run-dir"),
       persistence: parsePersistence(value(parsed, "persistence")),
-    });
+    };
+    const result = parsed.values.foreground === true
+      ? await runTypeScriptSigil(input)
+      : await launchTypeScriptSigil(input);
     printJson(result);
     return 0;
   } catch (error) {

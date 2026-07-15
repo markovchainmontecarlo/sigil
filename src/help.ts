@@ -1,3 +1,9 @@
+const foregroundFlag = {
+  name: "--foreground",
+  description: "Wait for completion and return the workflow's final exit status.",
+};
+const detachedExitCode = "0 when the detached worker launches; with --foreground, the workflow's final exit status is returned.";
+
 export type HelpFlag = { name: string; description: string };
 export type CommandHelp = {
   name: string;
@@ -71,57 +77,61 @@ export const commandHelps = [
   {
     name: "migrate",
     summary: "Apply a dependency-ordered repository migration with verified commit checkpoints.",
-    usage: "sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir>",
+    usage: "sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir> [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Clean named branch to migrate." },
       { name: "--target <file>", description: "Required. Target architecture and invariants." },
       { name: "--backlog <file>", description: "Required. Dependency-ordered migration backlog JSON." },
       { name: "--run-dir <dir>", description: "Required. Durable external checkpoint, event, and review directory; temporary storage is rejected." },
+      foregroundFlag,
     ],
-    exitCode: "0 when every item, final review, build, and test passes; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "refactor",
     summary: "Apply a behavior-preserving structural change with analysis, gates, and independent review.",
-    usage: "sigil refactor --repo <dir> --intent <text> [--brief <file>] [--focus <path>]... [--protected-path <path>]...",
+    usage: "sigil refactor --repo <dir> --intent <text> [--brief <file>] [--focus <path>]... [--protected-path <path>]... [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Clean target repository to refactor in place." },
       { name: "--intent <text>", description: "Required. Structural change to make while preserving behavior." },
       { name: "--brief <file>", description: "Optional file with refactor constraints and invariants." },
       { name: "--focus <path>", description: "Optional repeatable starting path; additional relevant paths remain available." },
       { name: "--protected-path <path>", description: "Optional repeatable path the refactor must not modify." },
+      foregroundFlag,
     ],
-    exitCode: "0 when final build and test gates pass without recorded issues; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "probe",
     summary: "Run sandboxed probes, synthesize findings, and produce a task graph.",
-    usage: "sigil probe --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--max-probes <n>]",
+    usage: "sigil probe --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--max-probes <n>] [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository to investigate without modifying." },
       { name: "--intent <text>", description: "Required. Product or workflow improvement intent to probe." },
       { name: "--brief <file>", description: "Optional file with extra non-authoritative probe context." },
       { name: "--out <file>", description: "Optional task graph output path." },
       { name: "--max-probes <n>", description: "Optional maximum number of generated probe commands to run." },
+      foregroundFlag,
     ],
-    exitCode: "0 when the produced task graph is valid and the target working tree is preserved; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "plan",
     summary: "Turn an intent and optional brief into a task graph.",
-    usage: "sigil plan --repo <dir> --intent <text> [--brief <file>] [--out <file>]",
+    usage: "sigil plan --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--intent <text>", description: "Required. Change intent to plan." },
       { name: "--brief <file>", description: "Optional file with extra planning context." },
       { name: "--out <file>", description: "Optional task graph output path." },
+      foregroundFlag,
     ],
-    exitCode: "0 when the produced task graph is valid; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "software-change",
     summary: "Plan, implement, verify, review, and report one local change without publishing.",
-    usage: "sigil software-change --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--task-file <file>] [--branch <name>] [--instructions <file>]",
+    usage: "sigil software-change --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--task-file <file>] [--branch <name>] [--instructions <file>] [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--intent <text>", description: "Required. Change intent to plan and implement." },
@@ -130,13 +140,14 @@ export const commandHelps = [
       { name: "--task-file <file>", description: "Optional existing typed task graph file to implement without planning." },
       { name: "--branch <name>", description: "Optional implementation branch name." },
       { name: "--instructions <file>", description: "Optional run-specific implementation instructions." },
+      foregroundFlag,
     ],
-    exitCode: "0 when the workflow result is valid and reports no issues; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "implement",
     summary: "Apply a task graph, commit verified tasks, run gates, and review locally.",
-    usage: "sigil implement --repo <dir> --task-file <file> [--branch <name>] [--brief <file>] [--instructions <file>] [--publish]",
+    usage: "sigil implement --repo <dir> --task-file <file> [--branch <name>] [--brief <file>] [--instructions <file>] [--publish] [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--task-file <file>", description: "Required. Task graph JSON file." },
@@ -144,36 +155,39 @@ export const commandHelps = [
       { name: "--brief <file>", description: "Optional confirmed development brief." },
       { name: "--instructions <file>", description: "Optional run-specific implementation instructions." },
       { name: "--publish", description: "After local success, push the branch and open a pull request." },
+      foregroundFlag,
     ],
-    exitCode: "0 when review is not blocking and no failed tasks or issues are reported; with --publish, pull-request creation must also succeed.",
+    exitCode: detachedExitCode,
   },
   {
     name: "review",
     summary: "Review the current diff against a base ref.",
-    usage: "sigil review --repo <dir> --base <ref> [--autofix] [--context <text>]",
+    usage: "sigil review --repo <dir> --base <ref> [--autofix] [--context <text>] [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--base <ref>", description: "Required. Base ref for the diff." },
       { name: "--autofix", description: "Repair actionable findings in the checkout." },
       { name: "--context <text>", description: "Optional review context." },
+      foregroundFlag,
     ],
-    exitCode: "0 when there are no unresolved high findings and no reported issues; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "breakdown",
     summary: "Turn a mission into an ordered backlog file.",
-    usage: "sigil breakdown --repo <dir> --mission <text> [--out <file>]",
+    usage: "sigil breakdown --repo <dir> --mission <text> [--out <file>] [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--mission <text>", description: "Required. Mission text." },
       { name: "--out <file>", description: "Optional backlog output path." },
+      foregroundFlag,
     ],
-    exitCode: "0 when the produced backlog is valid; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "dispatch",
     summary: "Call software-change for backlog items, then merge and verify by policy.",
-    usage: "sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen|integrationBranch --run-dir <dir> [...] | sigil dispatch --resume <dir>",
+    usage: "sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen|integrationBranch --run-dir <dir> [...] | sigil dispatch --resume <dir> [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--backlog <file>", description: "Required. Backlog JSON file." },
@@ -183,8 +197,9 @@ export const commandHelps = [
       { name: "--production-gate <name>", description: "Configured gate run after a successful final merge." },
       { name: "--run-dir <dir>", description: "Required durable dispatch manifest, operation, and recovery directory." },
       { name: "--resume <dir>", description: "Resume the recorded operation after validating repository state and live process ownership." },
+      foregroundFlag,
     ],
-    exitCode: "0 when dispatch finishes; 1 when it stops on a deterministic failure; 75 when durable capacity waiting is retryable.",
+    exitCode: detachedExitCode,
   },
   {
     name: "validate-workflow",
@@ -208,17 +223,18 @@ export const commandHelps = [
   {
     name: "run-workflow",
     summary: "Run a static YAML workflow file against a target repository.",
-    usage: "sigil run-workflow --repo <dir> --file <workflow-file>",
+    usage: "sigil run-workflow --repo <dir> --file <workflow-file> [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--file <workflow-file>", description: "Required. YAML workflow file." },
+      foregroundFlag,
     ],
-    exitCode: "0 when the workflow completes without recorded issues; 1 otherwise.",
+    exitCode: detachedExitCode,
   },
   {
     name: "run-sigil",
     summary: "Launch a detached TypeScript sigil run against a target repository.",
-    usage: "sigil run-sigil --repo <dir> --file <workflow.ts> [--input <input.json>] [--out <result.json>] [--run-dir <dir>] [--persistence durable|ephemeral]",
+    usage: "sigil run-sigil --repo <dir> --file <workflow.ts> [--input <input.json>] [--out <result.json>] [--run-dir <dir>] [--persistence durable|ephemeral] [--foreground]",
     flags: [
       { name: "--repo <dir>", description: "Required. Target repository." },
       { name: "--file <workflow.ts>", description: "Required. TypeScript sigil file exporting default or named workflow." },
@@ -226,8 +242,9 @@ export const commandHelps = [
       { name: "--out <result.json>", description: "Optional final result path written by the detached worker." },
       { name: "--run-dir <dir>", description: "Optional run directory for the manifest, PID, status, events, log, artifacts, result, and error; durable runs default to <repo>/.sigil/runs/." },
       { name: "--persistence durable|ephemeral", description: "Storage policy. Durable is the default and rejects temporary repositories, inputs, outputs, and run directories." },
+      foregroundFlag,
     ],
-    exitCode: "0 when the detached worker launches; 1 when launch validation fails.",
+    exitCode: detachedExitCode,
   },
   {
     name: "setup",
