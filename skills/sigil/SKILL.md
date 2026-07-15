@@ -56,7 +56,7 @@ Do not infer this choice. A validated task graph is accepted implementation stat
 - **Bounded change already discussed with the current assistant**: confirm the brief, use the `sigil-task-graph` skill to author and validate the graph, then run `implement` when authorized.
 - **Active Markdown plan**: confirm the brief, then ask whether to replan and implement or convert and implement locally.
 - **User explicitly requests Sigil-owned planning for one change**: use `software-change`; pass relevant context through `--brief`. When the planning input does not exist yet, author it with the `sigil-brief` skill first.
-- **One ordinary software change requiring detached execution or a custom authority boundary**: use a temporary TypeScript Sigil that composes `softwareChange`; do not promote it to dispatch unless delivery policy is required.
+- **One ordinary software change**: invoke `software-change` directly; long-running workflow commands launch detached durable runs by default, and `--foreground` is reserved for synchronous automation or debugging.
 - **Planning is the requested output**: use `plan`.
 - **The correct change requires safe behavioral experiments**: use `probe`, then reuse its task graph through `software-change --task-file` or `implement` according to the requested boundary.
 - **Accepted task graph**: skip planning and use `implement`. Use `software-change --task-file` only when its combined result shape or composition boundary is specifically needed.

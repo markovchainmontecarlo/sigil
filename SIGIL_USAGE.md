@@ -170,28 +170,30 @@ For the complete provider boundary, see the [configuration reference](./docs/ref
 
 Run `sigil --help`, `sigil <command> --help`, or `man sigil` for the installed reference. CLI help and command parsers are the executable authority for supported syntax and exit behavior; this guide is the canonical human-facing explanation of how to choose and operate those commands.
 
+For long-running workflow commands, exit code `0` means the detached worker launched. With `--foreground`, the command waits and exit code `0` means the workflow completed successfully.
+
 | Command | What it does | Exit code `0` means |
 | --- | --- | --- |
 | `sigil dashboard [--host 127.0.0.1] [--port <number>] [--root <dir>]...` | Serve a read-only live dashboard for discoverable local runs. | The dashboard shut down normally. |
 | `sigil setup [--dir <repo>] [--force]` | Write the default repo config. | The config was written. |
 | `sigil discover-env [--repo <dir>]` | Print a read-only environment report. | The report was printed. |
-| `sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir>` | Apply a dependency-ordered repository migration with commit checkpoints. | Every item, final review, build, and test passed. |
-| `sigil refactor --repo <dir> --intent <text> [--brief <file>] [--focus <path>]... [--protected-path <path>]...` | Apply one behavior-preserving structural change from advisory focus paths while respecting protected paths. | Final build and test gates passed without issues. |
-| `sigil probe --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--max-probes <n>]` | Run sandboxed probes, synthesize findings, and produce a task graph. | The produced task graph is valid and the target working tree is preserved. |
-| `sigil plan --repo <dir> --intent <text> [--brief <file>] [--out <file>]` | Plan one change into a task graph. | The produced task graph is valid. |
-| `sigil software-change --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--task-file <file>] [--branch <name>] [--instructions <file>]` | Run the unified local single-change workflow without publishing. | The workflow result is valid and reports no issues. |
+| `sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir> [--foreground]` | Apply a dependency-ordered repository migration with commit checkpoints. | Every item, final review, build, and test passed. |
+| `sigil refactor --repo <dir> --intent <text> [--brief <file>] [--focus <path>]... [--protected-path <path>]... [--foreground]` | Apply one behavior-preserving structural change from advisory focus paths while respecting protected paths. | Final build and test gates passed without issues. |
+| `sigil probe --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--max-probes <n>] [--foreground]` | Run sandboxed probes, synthesize findings, and produce a task graph. | The produced task graph is valid and the target working tree is preserved. |
+| `sigil plan --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--foreground]` | Plan one change into a task graph. | The produced task graph is valid. |
+| `sigil software-change --repo <dir> --intent <text> [--brief <file>] [--out <file>] [--task-file <file>] [--branch <name>] [--instructions <file>] [--foreground]` | Run the unified local single-change workflow without publishing. | The workflow result is valid and reports no issues. |
 | `sigil task-graph validate [--repo <dir>] [--json] <task-file>` | Validate an assistant-authored or agentically produced task graph. | The graph satisfies structural, dependency, and repository-path rules. |
 | `sigil task-graph schema [--out <file>]` | Print or write the public task-graph JSON Schema. | The schema was produced. |
-| `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--brief <file>] [--instructions <file>] [--publish]` | Apply and review an accepted task graph locally, with optional confirmed context and explicit publication. | Local implementation succeeds; when `--publish` is supplied, publication also succeeds. |
-| `sigil review --repo <dir> --base <ref> [--autofix] [--context <text>]` | Review the current diff without editing by default. Add `--autofix` to repair actionable findings in the checkout. | There are no unresolved high findings and no issues. |
-| `sigil breakdown --repo <dir> --mission <text> [--out <file>]` | Turn a mission into a backlog. | The produced backlog is valid. |
-| `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch --run-dir <dir>` | Start durable backlog delivery through main or an accumulating integration branch. | Dispatch finished without stopping. |
-| `sigil dispatch --resume <dir>` | Resume the recorded operation after repository and process ownership checks. | Dispatch finished without stopping. |
+| `sigil implement --repo <dir> --task-file <file> [--branch <name>] [--brief <file>] [--instructions <file>] [--publish] [--foreground]` | Apply and review an accepted task graph locally, with optional confirmed context and explicit publication. | Local implementation succeeds; when `--publish` is supplied, publication also succeeds. |
+| `sigil review --repo <dir> --base <ref> [--autofix] [--context <text>] [--foreground]` | Review the current diff without editing by default. Add `--autofix` to repair actionable findings in the checkout. | There are no unresolved high findings and no issues. |
+| `sigil breakdown --repo <dir> --mission <text> [--out <file>] [--foreground]` | Turn a mission into a backlog. | The produced backlog is valid. |
+| `sigil dispatch --repo <dir> --backlog <file> --policy mergeWhenGreen\|integrationBranch --run-dir <dir> [--foreground]` | Start durable backlog delivery through main or an accumulating integration branch. | Dispatch finished without stopping. |
+| `sigil dispatch --resume <dir> [--foreground]` | Resume the recorded operation after repository and process ownership checks. | Dispatch finished without stopping. |
 | `sigil profile <action>` | Manage local Codex and Claude profiles, inspect stored policy, and observe current eligibility. | Profile operation completed. |
 | `sigil validate-workflow [--repo <dir>] <workflow-file>` | Validate a static YAML workflow. | The workflow error array is empty. |
-| `sigil run-workflow --repo <dir> --file <workflow-file>` | Run a static YAML workflow inline. | The workflow completed without recorded issues. |
+| `sigil run-workflow --repo <dir> --file <workflow-file> [--foreground]` | Run a static YAML workflow. | The worker launched, or the workflow completed without issues in foreground mode. |
 | `sigil validate-sigil <workflow.ts>` | Validate a TypeScript sigil without running it. | The workflow imports and has a callable export. |
-| `sigil run-sigil --repo <dir> --file <workflow.ts> [--input <input.json>] [--out <result.json>] [--run-dir <dir>] [--persistence durable|ephemeral]` | Launch a detached TypeScript sigil. | The detached worker launched successfully. |
+| `sigil run-sigil --repo <dir> --file <workflow.ts> [--input <input.json>] [--out <result.json>] [--run-dir <dir>] [--persistence durable|ephemeral] [--foreground]` | Launch a detached TypeScript sigil. | The detached worker launched successfully. |
 
 ## Built-in software workflows
 
@@ -208,16 +210,19 @@ Use `--brief <file>` when Sigil planning should read confirmed requirements or c
 
 A brief states outcomes and boundaries, not mechanisms. A strong brief carries the outcome as one testable scenario; the decision hierarchy that orders competing solutions; named non-goals so settled decisions are not replanned; and completion as observable checks. Attach verified findings and any prior plan as referenced context: planners may correct referenced context with evidence, but not cross the stated boundaries. Choose `--brief` when planning must still discover file-level truth; choose `--task-file` when the caller already holds it. The `sigil-brief` skill authors this shape from an accepted conversation.
 
-### Single changes, detached execution, and dispatch
+### Detached workflow commands
 
-Workflow selection and execution mode are separate decisions. `software-change`
-owns one code change. `dispatch` owns backlog delivery policy. `run-sigil` launches
-a composed workflow as a detached durable run; it does not turn that workflow into
-a dispatch.
+Long-running workflow commands launch detached durable workers by default. The
+command returns a run handle with the PID, run directory, status, events, log,
+result, and error paths. Use `--foreground` only when a script, CI job, or debugger
+must wait and receive the workflow's final exit status.
+
+`software-change` owns one code change. `dispatch` owns backlog delivery policy.
+`run-sigil` remains the general-purpose entry point for custom TypeScript workflows.
 
 | Delivery requirement | Surface |
 |---|---|
-| One change requiring detached execution or a custom authority boundary | A temporary TypeScript Sigil that calls `ctx.run(softwareChange, ...)`, launched with `run-sigil` |
+| One change requiring agentic planning and implementation | `software-change` |
 | One backlog item requiring dispatch-owned publication, merge, delivery-base verification, or delivery recovery | A one-item backlog passed to `dispatch` |
 | Several dependent deliverables | `breakdown`, then `dispatch` |
 
@@ -225,23 +230,6 @@ Dispatch accepts a one-item backlog, but use that shape only when dispatch must 
 publication, merging, delivery-base verification, or resumable delivery state. Do
 not create a one-item backlog merely to combine planning and implementation;
 `software-change` already owns that transition.
-
-When one change needs detached execution without dispatch delivery, compose the
-built-in workflow in a temporary TypeScript Sigil:
-
-```ts
-import { sigil, softwareChange } from "sigil";
-
-export default sigil("detached-software-change", (ctx, input: {
-  repo: string;
-  intent: string;
-  brief?: string;
-}) => ctx.run(softwareChange, input));
-```
-
-Launch that wrapper with `run-sigil` and a durable run directory. The wrapper adds
-detached execution, logs, artifacts, and a caller-owned authority boundary while
-preserving `software-change` semantics.
 
 Use the stage commands when the stage boundary is the object you need to inspect or compose. `plan` writes a task graph. `implement` consumes a task graph, requires a clean target working tree, owns one local implementation branch, runs configured gates and review, and returns a PR body. The CLI keeps the result local by default and publishes only with explicit `--publish`. `review` can also be run by itself against an existing diff.
 

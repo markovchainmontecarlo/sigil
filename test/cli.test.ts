@@ -137,12 +137,51 @@ describe("cli", () => {
       ].join("\n"),
     );
 
-    const result = run(["run-workflow", "--repo", dir, "--file", workflowFile]);
+    const result = run(["run-workflow", "--foreground", "--repo", dir, "--file", workflowFile]);
     const output = JSON.parse(text(result.stdout));
 
     expect(result.exitCode).toBe(0);
     expect(output.workflow).toBe("deterministic-demo");
     expect(output.stageResults[0].jobResults[0].stepResults[0].output).toBe("hello");
+  });
+
+  test("run-workflow launches a detached durable command by default", async () => {
+    const dir = mkdtempSync(join(homedir(), ".sigil-cli-detached-workflow-"));
+    const workflowFile = join(dir, "workflow.yaml");
+    writeFileSync(
+      workflowFile,
+      [
+        "name: detached-demo",
+        "stages:",
+        "  - id: report",
+        "    jobs:",
+        "      - id: render",
+        "        steps:",
+        "          - id: hello",
+        "            script: echo hello",
+      ].join("\n"),
+    );
+
+    const result = run(["run-workflow", "--repo", dir, "--file", workflowFile]);
+    const handle = JSON.parse(text(result.stdout));
+
+    expect(result.exitCode).toBe(0);
+    expect(handle.state).toBe("started");
+    expect(handle.pid).toBeGreaterThan(0);
+    for (
+      let attempt = 0;
+      attempt < 100 && JSON.parse(readFileSync(handle.statusFile, "utf8")).state !== "succeeded";
+      attempt++
+    ) {
+      await Bun.sleep(20);
+    }
+    expect(JSON.parse(readFileSync(handle.statusFile, "utf8"))).toMatchObject({
+      state: "succeeded",
+      exitCode: 0,
+    });
+    expect(JSON.parse(readFileSync(handle.resultFile, "utf8"))).toEqual({ exitCode: 0 });
+
+    rmSync(dir, { recursive: true, force: true });
   });
 
   test("no arguments exits 2 and prints usage naming every subcommand", () => {
@@ -417,6 +456,7 @@ describe("cli", () => {
 
     const result = run([
       "migrate",
+      "--foreground",
       "--repo",
       dir,
       "--target",
@@ -432,21 +472,21 @@ describe("cli", () => {
   });
 
   test("dispatch missing backlog exits 2 with usage on stderr", () => {
-    const result = run(["dispatch", "--repo", "."]);
+    const result = run(["dispatch", "--foreground", "--repo", "."]);
 
     expect(result.exitCode).toBe(2);
     expect(text(result.stderr)).toContain("Usage:");
   });
 
   test("dispatch bogus policy exits 2 with usage on stderr", () => {
-    const result = run(["dispatch", "--repo", ".", "--backlog", "x", "--policy", "bogus"]);
+    const result = run(["dispatch", "--foreground", "--repo", ".", "--backlog", "x", "--policy", "bogus"]);
 
     expect(result.exitCode).toBe(2);
     expect(text(result.stderr)).toContain("Usage:");
   });
 
   test("dispatch requires an explicit delivery policy", () => {
-    const result = run(["dispatch", "--repo", ".", "--backlog", "x"]);
+    const result = run(["dispatch", "--foreground", "--repo", ".", "--backlog", "x"]);
 
     expect(result.exitCode).toBe(2);
     expect(text(result.stderr)).toContain("Usage:");
@@ -455,6 +495,7 @@ describe("cli", () => {
   test("integration-branch policy requires its target branch", () => {
     const result = run([
       "dispatch",
+      "--foreground",
       "--repo",
       ".",
       "--backlog",
@@ -468,7 +509,7 @@ describe("cli", () => {
   });
 
   test("breakdown missing mission exits 2 with usage on stderr", () => {
-    const result = run(["breakdown", "--repo", "."]);
+    const result = run(["breakdown", "--foreground", "--repo", "."]);
 
     expect(result.exitCode).toBe(2);
     expect(text(result.stderr)).toContain("Usage:");
@@ -574,7 +615,7 @@ describe("cli", () => {
       tasks: [],
     }));
 
-    const result = run(["software-change", "--repo", dir, "--intent", "Use the ready graph.", "--task-file", taskFile]);
+    const result = run(["software-change", "--foreground", "--repo", dir, "--intent", "Use the ready graph.", "--task-file", taskFile]);
 
     expect(result.exitCode).toBe(1);
     expect(text(result.stderr)).toContain("tasks: Too small");
@@ -678,7 +719,7 @@ describe("cli", () => {
   });
 
   test("review subcommand exits 1 when diff setup fails", () => {
-    const result = run(["review", "--repo", ".", "--base", "definitely-not-a-ref"]);
+    const result = run(["review", "--foreground", "--repo", ".", "--base", "definitely-not-a-ref"]);
 
     expect(result.exitCode).toBe(1);
     expect(text(result.stdout)).toContain("fatal: bad revision");

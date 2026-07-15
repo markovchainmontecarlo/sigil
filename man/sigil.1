@@ -10,31 +10,31 @@ sigil \- composable workflow CLI with built-in software-change workflows
 .br
 .B sigil task\-graph validate [\-\-repo <dir>] [\-\-json] <task\-file> | sigil task\-graph schema [\-\-out <file>]
 .br
-.B sigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir>
+.B sigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir> [\-\-foreground]
 .br
-.B sigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]...
+.B sigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]... [\-\-foreground]
 .br
-.B sigil probe \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-max\-probes <n>]
+.B sigil probe \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-max\-probes <n>] [\-\-foreground]
 .br
-.B sigil plan \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>]
+.B sigil plan \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-foreground]
 .br
-.B sigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>]
+.B sigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>] [\-\-foreground]
 .br
-.B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-brief <file>] [\-\-instructions <file>] [\-\-publish]
+.B sigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-brief <file>] [\-\-instructions <file>] [\-\-publish] [\-\-foreground]
 .br
-.B sigil review \-\-repo <dir> \-\-base <ref> [\-\-autofix] [\-\-context <text>]
+.B sigil review \-\-repo <dir> \-\-base <ref> [\-\-autofix] [\-\-context <text>] [\-\-foreground]
 .br
-.B sigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]
+.B sigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>] [\-\-foreground]
 .br
-.B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch \-\-run\-dir <dir> [...] | sigil dispatch \-\-resume <dir>
+.B sigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch \-\-run\-dir <dir> [...] | sigil dispatch \-\-resume <dir> [\-\-foreground]
 .br
 .B sigil validate\-workflow [\-\-repo <dir>] <workflow\-file>
 .br
 .B sigil validate\-sigil <workflow.ts>
 .br
-.B sigil run\-workflow \-\-repo <dir> \-\-file <workflow\-file>
+.B sigil run\-workflow \-\-repo <dir> \-\-file <workflow\-file> [\-\-foreground]
 .br
-.B sigil run\-sigil \-\-repo <dir> \-\-file <workflow.ts> [\-\-input <input.json>] [\-\-out <result.json>] [\-\-run\-dir <dir>] [\-\-persistence durable|ephemeral]
+.B sigil run\-sigil \-\-repo <dir> \-\-file <workflow.ts> [\-\-input <input.json>] [\-\-out <result.json>] [\-\-run\-dir <dir>] [\-\-persistence durable|ephemeral] [\-\-foreground]
 .br
 .B sigil setup [\-\-dir <repo>] [\-\-force]
 .br
@@ -162,7 +162,7 @@ Exit codes: 0 when validation succeeds or the schema is written; 1 when validati
 .SS migrate
 Apply a dependency\-ordered repository migration with verified commit checkpoints.
 .P
-Usage: \fBsigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir>\fR
+Usage: \fBsigil migrate \-\-repo <dir> \-\-target <file> \-\-backlog <file> \-\-run\-dir <dir> [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -177,12 +177,15 @@ Required. Dependency\-ordered migration backlog JSON.
 .TP
 \fB\-\-run\-dir <dir>\fR
 Required. Durable external checkpoint, event, and review directory; temporary storage is rejected.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when every item, final review, build, and test passes; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS refactor
 Apply a behavior\-preserving structural change with analysis, gates, and independent review.
 .P
-Usage: \fBsigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]...\fR
+Usage: \fBsigil refactor \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-focus <path>]... [\-\-protected\-path <path>]... [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -200,12 +203,15 @@ Optional repeatable starting path; additional relevant paths remain available.
 .TP
 \fB\-\-protected\-path <path>\fR
 Optional repeatable path the refactor must not modify.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when final build and test gates pass without recorded issues; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS probe
 Run sandboxed probes, synthesize findings, and produce a task graph.
 .P
-Usage: \fBsigil probe \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-max\-probes <n>]\fR
+Usage: \fBsigil probe \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-max\-probes <n>] [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -223,12 +229,15 @@ Optional task graph output path.
 .TP
 \fB\-\-max\-probes <n>\fR
 Optional maximum number of generated probe commands to run.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when the produced task graph is valid and the target working tree is preserved; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS plan
 Turn an intent and optional brief into a task graph.
 .P
-Usage: \fBsigil plan \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>]\fR
+Usage: \fBsigil plan \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -243,12 +252,15 @@ Optional file with extra planning context.
 .TP
 \fB\-\-out <file>\fR
 Optional task graph output path.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when the produced task graph is valid; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS software\-change
 Plan, implement, verify, review, and report one local change without publishing.
 .P
-Usage: \fBsigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>]\fR
+Usage: \fBsigil software\-change \-\-repo <dir> \-\-intent <text> [\-\-brief <file>] [\-\-out <file>] [\-\-task\-file <file>] [\-\-branch <name>] [\-\-instructions <file>] [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -272,12 +284,15 @@ Optional implementation branch name.
 .TP
 \fB\-\-instructions <file>\fR
 Optional run\-specific implementation instructions.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when the workflow result is valid and reports no issues; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS implement
 Apply a task graph, commit verified tasks, run gates, and review locally.
 .P
-Usage: \fBsigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-brief <file>] [\-\-instructions <file>] [\-\-publish]\fR
+Usage: \fBsigil implement \-\-repo <dir> \-\-task\-file <file> [\-\-branch <name>] [\-\-brief <file>] [\-\-instructions <file>] [\-\-publish] [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -298,12 +313,15 @@ Optional run\-specific implementation instructions.
 .TP
 \fB\-\-publish\fR
 After local success, push the branch and open a pull request.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when review is not blocking and no failed tasks or issues are reported; with \-\-publish, pull\-request creation must also succeed.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS review
 Review the current diff against a base ref.
 .P
-Usage: \fBsigil review \-\-repo <dir> \-\-base <ref> [\-\-autofix] [\-\-context <text>]\fR
+Usage: \fBsigil review \-\-repo <dir> \-\-base <ref> [\-\-autofix] [\-\-context <text>] [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -318,12 +336,15 @@ Repair actionable findings in the checkout.
 .TP
 \fB\-\-context <text>\fR
 Optional review context.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when there are no unresolved high findings and no reported issues; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS breakdown
 Turn a mission into an ordered backlog file.
 .P
-Usage: \fBsigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>]\fR
+Usage: \fBsigil breakdown \-\-repo <dir> \-\-mission <text> [\-\-out <file>] [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -335,12 +356,15 @@ Required. Mission text.
 .TP
 \fB\-\-out <file>\fR
 Optional backlog output path.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when the produced backlog is valid; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS dispatch
 Call software\-change for backlog items, then merge and verify by policy.
 .P
-Usage: \fBsigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch \-\-run\-dir <dir> [...] | sigil dispatch \-\-resume <dir>\fR
+Usage: \fBsigil dispatch \-\-repo <dir> \-\-backlog <file> \-\-policy mergeWhenGreen|integrationBranch \-\-run\-dir <dir> [...] | sigil dispatch \-\-resume <dir> [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -367,8 +391,11 @@ Required durable dispatch manifest, operation, and recovery directory.
 .TP
 \fB\-\-resume <dir>\fR
 Resume the recorded operation after validating repository state and live process ownership.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when dispatch finishes; 1 when it stops on a deterministic failure; 75 when durable capacity waiting is retryable.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS validate\-workflow
 Validate a static YAML workflow file.
 .P
@@ -397,7 +424,7 @@ Exit codes: 0 when the sigil imports and has a callable export; 1 otherwise.
 .SS run\-workflow
 Run a static YAML workflow file against a target repository.
 .P
-Usage: \fBsigil run\-workflow \-\-repo <dir> \-\-file <workflow\-file>\fR
+Usage: \fBsigil run\-workflow \-\-repo <dir> \-\-file <workflow\-file> [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -406,12 +433,15 @@ Required. Target repository.
 .TP
 \fB\-\-file <workflow\-file>\fR
 Required. YAML workflow file.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when the workflow completes without recorded issues; 1 otherwise.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS run\-sigil
 Launch a detached TypeScript sigil run against a target repository.
 .P
-Usage: \fBsigil run\-sigil \-\-repo <dir> \-\-file <workflow.ts> [\-\-input <input.json>] [\-\-out <result.json>] [\-\-run\-dir <dir>] [\-\-persistence durable|ephemeral]\fR
+Usage: \fBsigil run\-sigil \-\-repo <dir> \-\-file <workflow.ts> [\-\-input <input.json>] [\-\-out <result.json>] [\-\-run\-dir <dir>] [\-\-persistence durable|ephemeral] [\-\-foreground]\fR
 .P
 Arguments and flags:
 .TP
@@ -432,8 +462,11 @@ Optional run directory for the manifest, PID, status, events, log, artifacts, re
 .TP
 \fB\-\-persistence durable|ephemeral\fR
 Storage policy. Durable is the default and rejects temporary repositories, inputs, outputs, and run directories.
+.TP
+\fB\-\-foreground\fR
+Wait for completion and return the workflow's final exit status.
 .P
-Exit codes: 0 when the detached worker launches; 1 when launch validation fails.
+Exit codes: 0 when the detached worker launches; with \-\-foreground, the workflow's final exit status is returned.
 .SS setup
 Write the default sigil.config.json and ignore local run state.
 .P
