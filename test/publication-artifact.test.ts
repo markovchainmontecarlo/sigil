@@ -28,17 +28,18 @@ describe("publication artifacts", () => {
     expect(evidence.exportsIdentity).toMatch(/^[a-f0-9]{64}$/);
   }, 15_000);
 
-  test("rejects absent publication evidence and exposes no independent npm publisher", () => {
+  test("rejects absent publication evidence and leaves publication to the verified local process", () => {
     const checked = run(["bun", "scripts/verify-package.ts", "--check-record", "/tmp/missing-sigil-verification.json"]);
     const manifest = JSON.parse(readFileSync("package.json", "utf8"));
-    const release = readFileSync(".github/workflows/release.yml", "utf8");
+    const continuousIntegration = readFileSync(".github/workflows/ci.yml", "utf8");
     const scripts = Object.values(manifest.scripts).join("\n");
 
     expect(checked.exitCode).not.toBe(0);
     expect(checked.stderr.toString()).toContain("verification record is missing");
     expect(scripts).not.toContain("npm publish");
-    expect(release).not.toContain("npm publish");
-    expect(release).not.toContain("id-token: write");
-    expect(release).toContain("-installer.tgz");
+    expect(continuousIntegration).not.toContain("npm publish");
+    expect(continuousIntegration).not.toContain("id-token: write");
+    expect(continuousIntegration).not.toContain("pull_request:");
+    expect(continuousIntegration).toContain("branches: [main]");
   });
 });
