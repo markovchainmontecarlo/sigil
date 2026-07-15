@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 
 import { runFreshAgentOperation } from "../../../agent-operation.js";
 import { loadConfig, type SigilConfig } from "../../../config.js";
-import { CONTRACT_VERSION, validateTaskGraph } from "../../../contracts/task-graph.js";
+import { CONTRACT_VERSION } from "../../../contracts/task-graph.js";
 import {
   loadConfiguredContext,
   renderContextBlock,
@@ -13,7 +13,6 @@ import {
 } from "../../../context.js";
 import type { WorkflowFailure } from "../../../recovery/index.js";
 import { planningPrompts } from "./prompts.js";
-import { reviewPlanningGraph } from "./review.js";
 import {
   enrichTaskGraph,
   repairTaskGraphJson,
@@ -24,7 +23,7 @@ export type PlanInput = { intent: string; repo: string; brief?: string; outFile?
 export type PlanResult = { taskFile: string; taskCount: number; valid: boolean; issues: string[]; failures: WorkflowFailure[] };
 
 type CandidatePlan = { name: string; text: string };
-type SynthesizedPlan = { checked: TaskGraphCheck; crosswalk: string; issues: string[] };
+type SynthesizedPlan = { checked: TaskGraphCheck; issues: string[] };
 
 const contract = JSON.stringify({
   contractVersion: CONTRACT_VERSION,
@@ -232,7 +231,7 @@ async function synthesizeTaskGraph(
         contract,
         limit: config.implement.repairLimit,
       });
-      return { checked, crosswalk: evidence.crosswalk, issues: [...ctx.issues] };
+      return { checked, issues: [...ctx.issues] };
     },
   );
 
@@ -304,30 +303,11 @@ export const plan = sigil<PlanInput, PlanResult>("plan", async (ctx, input) => {
     };
   }
 
-  const review = await reviewPlanningGraph(ctx, {
-    repo: input.repo,
-    intent: input.intent,
-    brief: input.brief ?? "",
-    taskFile,
-    crosswalk: synthesized.result.crosswalk,
-    contract,
-    rubric: `${plannerRubric}\n\n${synthesisRubric}`,
-    config,
-  });
-  failures.push(...review.failures);
-
-  const issues = [
-    ...synthesized.result.issues,
-    ...review.checked.errors,
-    ...review.issues,
-  ];
-  const valid = issues.length === 0 && review.checked.raw !== null;
-  if (valid) validateTaskGraph(review.checked.raw, { repoRoot: input.repo });
   return {
     taskFile,
-    taskCount: review.checked.graph?.tasks.length ?? 0,
-    valid,
-    issues,
+    taskCount: synthesized.result.checked.graph?.tasks.length ?? 0,
+    valid: synthesized.result.issues.length === 0,
+    issues: synthesized.result.issues,
     failures,
   };
 });

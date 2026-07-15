@@ -109,7 +109,7 @@ const config = {
     failing: "node -e \"console.log('setup ok\\n'.repeat(4000) + 'ERROR boom\\n' + 'tail ok\\n'.repeat(4000)); process.exit(7)\"",
     cancellable: "node process-tree.mjs",
   },
-  plan: { planners: ["explorer"], synthesizer: "explorer", reviewer: "explorer" },
+  plan: { planners: ["explorer"], synthesizer: "explorer" },
   implement: { coder: "implementer", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
   review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
 };

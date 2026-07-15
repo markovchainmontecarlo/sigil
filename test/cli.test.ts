@@ -520,7 +520,7 @@ describe("cli", () => {
     writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
       agents: { claudeReviewer: { provider: "claude", model: "private-model" } },
       evals: {}, context: [],
-      plan: { planners: ["claudeReviewer"], synthesizer: "claudeReviewer", reviewer: "claudeReviewer" },
+      plan: { planners: ["claudeReviewer"], synthesizer: "claudeReviewer" },
       implement: { coder: "claudeReviewer", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
       review: { reviewers: ["claudeReviewer"], synthesizer: "claudeReviewer" },
     }));

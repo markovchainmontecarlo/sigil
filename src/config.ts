@@ -28,7 +28,6 @@ export type SigilConfig = {
   plan: {
     planners: string[];
     synthesizer: string;
-    reviewer: string;
   };
   implement: {
     coder: string;
@@ -77,7 +76,6 @@ export const DEFAULT_SIGIL_CONFIG: SigilConfig = {
   plan: {
     planners: ["sol-medium", "terra-medium", "luna-medium"],
     synthesizer: "sol-medium",
-    reviewer: "sol-medium",
   },
   implement: {
     coder: "sol-medium",
@@ -116,7 +114,6 @@ const ConfigSchema: z.ZodType<SigilConfig> = z.object({
   plan: z.object({
     planners: z.array(z.string().min(1)),
     synthesizer: z.string().min(1),
-    reviewer: z.string().min(1),
   }),
   implement: z.object({
     coder: z.string().min(1),
@@ -270,7 +267,6 @@ function validateAgentReferences(config: SigilConfig, path: string): void {
   const refs = [
     ...config.plan.planners.map((name, i) => [`plan.planners[${i}]`, name] as const),
     ["plan.synthesizer", config.plan.synthesizer] as const,
-    ["plan.reviewer", config.plan.reviewer] as const,
     ["implement.coder", config.implement.coder] as const,
     ...config.review.reviewers.map((name, i) => [`review.reviewers[${i}]`, name] as const),
     ["review.synthesizer", config.review.synthesizer] as const,

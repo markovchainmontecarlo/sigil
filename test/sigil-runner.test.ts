@@ -12,7 +12,7 @@ function tempRepo(): string {
     agents: { coder: { provider: "codex", model: "gpt-5.5" } },
     evals: { build: "printf build-ok" },
     context: [],
-    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder" },
+    plan: { planners: ["coder"], synthesizer: "coder" },
     implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }, null, 2));

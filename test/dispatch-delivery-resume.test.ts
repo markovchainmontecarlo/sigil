@@ -12,7 +12,7 @@ test("delivery stages retain evidence and final effects resume independently", a
   const repo = mkdtempSync(join(tmpdir(), "sigil-delivery-resume-"));
   writeFileSync(join(repo, "sigil.config.json"), JSON.stringify({
     agents: { coder: { provider: "codex", model: "gpt-5.5" } }, evals: { production: "true" },
-    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder" },
+    plan: { planners: ["coder"], synthesizer: "coder" },
     implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }));

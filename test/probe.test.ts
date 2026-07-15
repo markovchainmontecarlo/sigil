@@ -69,7 +69,7 @@ function tempGitRepo(): string {
     agents: { planner: { provider: "codex", model: "gpt-5.5" }, synthesizer: { provider: "codex", model: "gpt-5.5" } },
     evals: {},
     context: [],
-    plan: { planners: ["planner"], synthesizer: "synthesizer", reviewer: "synthesizer" },
+    plan: { planners: ["planner"], synthesizer: "synthesizer" },
     implement: { coder: "planner", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["synthesizer"], synthesizer: "synthesizer" },
   }, null, 2));

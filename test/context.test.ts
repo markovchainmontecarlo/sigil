@@ -13,7 +13,7 @@ function tempRepo(): string {
     agents: { coder: { provider: "codex", model: "gpt-5.5" }, reviewer: { provider: "codex", model: "gpt-5.5" } },
     evals: {},
     context: [],
-    plan: { planners: ["coder"], synthesizer: "reviewer", reviewer: "reviewer" },
+    plan: { planners: ["coder"], synthesizer: "reviewer" },
     implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));
@@ -264,7 +264,7 @@ describe("createContext", () => {
         { path: "a.md", update: true },
         { path: "missing.md", update: false },
       ],
-      plan: { planners: ["coder"], synthesizer: "reviewer", reviewer: "reviewer" },
+      plan: { planners: ["coder"], synthesizer: "reviewer" },
       implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
       review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
     }, null, 2));

@@ -102,7 +102,7 @@ function fixtureRepo(): string {
     },
     evals: { build: "test -s app.txt", test: "test -s app.txt" },
     context: [],
-    plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst", reviewer: "analyst" },
+    plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst" },
     implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 1, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));

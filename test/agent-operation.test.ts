@@ -13,7 +13,7 @@ function repo(): string {
   writeFileSync(join(directory, "sigil.config.json"), JSON.stringify({
     agents: { coder: { provider: "codex", model: "test" } },
     evals: {},
-    plan: { planners: ["coder"], synthesizer: "coder", reviewer: "coder" },
+    plan: { planners: ["coder"], synthesizer: "coder" },
     implement: { coder: "coder", sessionTaskLimit: 1, repairLimit: 1, branchPrefix: "x/", baseBranch: "main" },
     review: { reviewers: ["coder"], synthesizer: "coder" },
   }));
