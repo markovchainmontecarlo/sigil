@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import type { AgentBinding } from "../config.js";
 import { resolveExecutionPolicy } from "../provider-capabilities.js";
 import { readCodexAccountStatus } from "../codex-rate-limits.js";
-import { recordActiveCapacityExhaustion, releaseCodexProfile, reserveCodexProfile, type CodexAdmission, type CodexAssignment, type CapacityReader, type CodexCapacityTelemetry } from "../codex-router.js";
+import { releaseCodexProfile, reserveCodexProfile, type CodexAdmission, type CodexAssignment, type CapacityReader } from "../codex-router.js";
 import type { CodexProfileStore, CodexUsage, CodexProfile } from "../codex-profiles.js";
 import { ProfileStoreError } from "../provider-profiles.js";
 import { OwnedCodexAcpConnection, type OwnedAcpEvent } from "../codex-acp.js";
@@ -13,8 +13,6 @@ import type { ProcessLifecycle } from "../owned-process.js";
 import { classifyProviderFailure, ProviderError, type ProviderFailure } from "../provider-failure.js";
 import { createTextAgentFromGenerate, type AgentOptions, type AgentPromptOptions, type AgentRuntimeMetadata, type AgentProgressKind, type SigilAgent } from "../agent.js";
 
-const DEFAULT_ACTIVE_CAPACITY_POLL_INTERVAL_MS = 30_000;
-const ACTIVE_CAPACITY_STOP_GRACE_MS = 250;
 function resolveInstalledCodexAcp(): string | undefined {
   const require = createRequire(import.meta.url);
   try {
@@ -96,20 +94,6 @@ export function createCodexAgent(binding: AgentBinding, cwd: string, options: Ag
     const cancelPrompt = () => promptController.abort(promptOptions?.signal?.reason);
     promptOptions?.signal?.addEventListener("abort", cancelPrompt, { once: true });
     if (promptOptions?.signal?.aborted) cancelPrompt();
-    let capacityFailure: ProviderError | undefined;
-    const guard = monitorActiveCodexCapacity(
-      assignment,
-      readCapacity,
-      options.profileStore,
-      async (telemetry) => {
-        capacityFailure = new ProviderError(
-          `Codex capacity floor reached for profile ${telemetry.profile}`,
-          { code: "capacity_exhausted", account: telemetry.profile },
-        );
-        promptController.abort(capacityFailure);
-        await options.onCapacityTelemetry?.(telemetry);
-      },
-    );
     try {
       for await (const event of active.promptStream(text, promptController.signal)) {
         if (event.type === "text") {
@@ -122,15 +106,10 @@ export function createCodexAgent(binding: AgentBinding, cwd: string, options: Ag
         }
       }
     } catch (error) {
-      if (capacityFailure) {
-        failure = classifyProviderFailure(capacityFailure);
-        throw capacityFailure;
-      }
       failure = classifyProviderFailure(error);
       throw error;
     } finally {
       promptOptions?.signal?.removeEventListener("abort", cancelPrompt);
-      await guard.stop();
     }
     usage = addCodexUsage(usage, turnUsage);
     runtime.providerSessionId = active.sessionId;
@@ -142,7 +121,14 @@ export function createCodexAgent(binding: AgentBinding, cwd: string, options: Ag
   return createTextAgentFromGenerate(generate, async () => {
     if (runtimeHeartbeat) clearInterval(runtimeHeartbeat);
     await acp?.disconnect();
-    if (assignment) await releaseCodexProfile(assignment.reservation.id, usage, failure, options.profileStore);
+    if (assignment?.reservation) {
+      await releaseCodexProfile(
+        assignment.reservation.id,
+        usage,
+        failure,
+        options.profileStore,
+      );
+    }
     runtime.active = false;
     await options.onRuntimeUpdate?.(runtime);
   }, runtime);
@@ -161,82 +147,6 @@ async function reserveCodexAdmission(
       cause: error,
     });
   }
-}
-
-type ActiveCapacityGuard = {
-  stop(): Promise<void>;
-};
-
-export function monitorActiveCodexCapacity(
-  assignment: CodexAssignment | undefined,
-  readCapacity: CapacityReader,
-  store: CodexProfileStore | undefined,
-  cancel: (telemetry: CodexCapacityTelemetry) => Promise<void>,
-): ActiveCapacityGuard {
-  const profile = assignment?.profile;
-  if (!assignment || profile?.profileClass !== "subscription") return { stop: async () => {} };
-
-  let stopped = false;
-  let triggered = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let observation: Promise<void> | undefined;
-  const interval = profile.activeCapacityPollIntervalMs
-    ?? DEFAULT_ACTIVE_CAPACITY_POLL_INTERVAL_MS;
-  const observe = async () => {
-    const capacity = normalizeActiveCapacity(await readCapacity(profile));
-    if (stopped || triggered || capacity.kind !== "available") return;
-    const floor = profile.reserveFloorPercentage ?? 0;
-    if (capacity.remainingPercentage > floor) return;
-
-    triggered = await recordActiveCapacityExhaustion(
-      assignment.reservation.id,
-      capacity.observedAt,
-      store,
-    );
-    if (!triggered) return;
-    await cancel({
-      profile: profile.name,
-      capacityClass: "at-or-below-floor",
-      configuredFloor: floor,
-      admissionOutcome: "assigned",
-      capacityTriggeredCancellation: true,
-    });
-  };
-  const schedule = () => {
-    if (stopped || triggered) return;
-    timer = setTimeout(() => {
-      observation = observe().catch(() => {}).finally(schedule);
-    }, interval);
-  };
-  schedule();
-
-  return {
-    async stop() {
-      stopped = true;
-      if (timer) clearTimeout(timer);
-      if (!observation) return;
-      await Promise.race([
-        observation,
-        new Promise<void>((resolve) => setTimeout(resolve, ACTIVE_CAPACITY_STOP_GRACE_MS)),
-      ]);
-    },
-  };
-}
-
-function normalizeActiveCapacity(
-  capacity: Awaited<ReturnType<CapacityReader>>,
-): import("../codex-router.js").SubscriptionCapacity {
-  if ("kind" in capacity) return capacity;
-  const observedAt = new Date().toISOString();
-  if (capacity.available && capacity.remainingPercentage !== undefined) {
-    return {
-      kind: "available",
-      available: true,
-      observedAt,
-      remainingPercentage: capacity.remainingPercentage,
-    };
-  }
-  return { kind: "unavailable", available: false, observedAt };
 }
 
 function createCodexAcp(

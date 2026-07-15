@@ -12,7 +12,6 @@ import {
 } from "../src/codex-profiles.js";
 import {
   readCapacities,
-  recordActiveCapacityExhaustion,
   releaseCodexProfile,
   reserveCodexProfile,
   resolveUnfinishedReservations,
@@ -21,6 +20,12 @@ import {
 function assignment(result: Awaited<ReturnType<typeof reserveCodexProfile>>) {
   if (result.status !== "assigned") throw new Error(`expected assignment, received ${result.status}`);
   return result.assignment;
+}
+
+function meteredAssignment(result: Awaited<ReturnType<typeof reserveCodexProfile>>) {
+  const selected = assignment(result);
+  if (!selected.reservation) throw new Error("expected metered reservation");
+  return { ...selected, reservation: selected.reservation };
 }
 
 function store() {
@@ -40,21 +45,27 @@ function profile(name: string, remainingClass: "subscription" | "metered-api" = 
 }
 
 describe("Codex profile routing", () => {
-  test("reserves the subscription with the greatest remaining percentage", async () => {
+  test("selects subscriptions round-robin without probing capacity", async () => {
     const files = store();
     await writeCodexProfiles([profile("a"), profile("b")], files);
+    let probes = 0;
 
-    const assignment = await reserveCodexProfile(async (entry) => ({
-      available: true,
-      remainingPercentage: entry.name === "a" ? 25 : 70,
-    }), files);
+    const first = await reserveCodexProfile(async () => {
+      probes++;
+      return { available: false };
+    }, files);
+    const second = await reserveCodexProfile(async () => {
+      probes++;
+      return { available: false };
+    }, files);
 
-    expect(assignment.status).toBe("assigned");
-    expect(assignment.status === "assigned" && assignment.assignment.profile.name).toBe("b");
-    expect((await readCodexRoutingState(files)).ledgers.b?.active).toBe(1);
+    expect(assignment(first).profile.name).toBe("a");
+    expect(assignment(second).profile.name).toBe("b");
+    expect(probes).toBe(0);
+    expect((await readCodexRoutingState(files)).reservations).toEqual({});
   });
 
-  test("subscription completion does not accumulate token usage", async () => {
+  test("subscription assignment does not create accounting state", async () => {
     const files = store();
     await writeCodexProfiles([profile("subscription")], files);
     const admission = await reserveCodexProfile(
@@ -62,34 +73,26 @@ describe("Codex profile routing", () => {
       files,
     );
 
-    await releaseCodexProfile(assignment(admission).reservation.id, {
-      inputTokens: 10,
-      cachedInputTokens: 0,
-      outputTokens: 5,
-      reasoningTokens: 0,
-      totalTokens: 15,
-    }, files);
     const state = await readCodexRoutingState(files);
 
-    expect(state.ledgers.subscription).not.toHaveProperty("usage");
-    expect(state.ledgers.subscription).not.toHaveProperty("reservedTokens");
+    expect(assignment(admission).reservation).toBeUndefined();
+    expect(state.ledgers.subscription).toBeUndefined();
   });
 
-  test("holds an immutable reservation until agent close", async () => {
+  test("does not enforce subscription concurrency locally", async () => {
     const files = store();
     await writeCodexProfiles([{ ...profile("only"), concurrencyLimit: 1 }], files);
     const capacity = async () => ({ available: true, remainingPercentage: 50 });
 
     const first = await reserveCodexProfile(capacity, files);
-    const blocked = await reserveCodexProfile(capacity, files);
-    await releaseCodexProfile(assignment(first).reservation.id, undefined, files);
-    const later = await reserveCodexProfile(capacity, files);
+    const second = await reserveCodexProfile(capacity, files);
 
-    expect(blocked.status).toBe("capacity-blocked");
-    expect(assignment(later).profile.name).toBe("only");
+    expect(assignment(first).profile.name).toBe("only");
+    expect(assignment(second).profile.name).toBe("only");
+    expect((await readCodexRoutingState(files)).reservations).toEqual({});
   });
 
-  test("uses bounded metered overflow only after subscriptions are unavailable", async () => {
+  test("does not select metered overflow while an enabled subscription exists", async () => {
     const files = store();
     await writeCodexProfiles([
       profile("subscription"),
@@ -97,16 +100,13 @@ describe("Codex profile routing", () => {
     ], files);
     const unavailable = async () => ({ available: false });
 
-    const overflow = await reserveCodexProfile(unavailable, files);
-    await releaseCodexProfile(assignment(overflow).reservation.id, undefined, files);
-    const exhausted = await reserveCodexProfile(unavailable, files);
+    const selected = await reserveCodexProfile(unavailable, files);
 
-    expect(assignment(overflow).profile.name).toBe("api");
-    expect(exhausted.status).toBe("capacity-blocked");
-    expect((await readCodexRoutingState(files)).ledgers.api?.metered?.usage.totalTokens).toBe(100);
+    expect(assignment(selected).profile.name).toBe("subscription");
+    expect((await readCodexRoutingState(files)).ledgers.api).toBeUndefined();
   });
 
-  test("serializes normal concurrent reservations without lock failures", async () => {
+  test("selects concurrent subscription agents without reservations", async () => {
     const files = store();
     await writeCodexProfiles([{ ...profile("parallel"), concurrencyLimit: 12 }], files);
 
@@ -116,7 +116,7 @@ describe("Codex profile routing", () => {
     )));
 
     expect(assignments.every((entry) => entry.status === "assigned" && entry.assignment.profile.name === "parallel")).toBe(true);
-    expect((await readCodexRoutingState(files)).ledgers.parallel?.active).toBe(12);
+    expect((await readCodexRoutingState(files)).reservations).toEqual({});
   });
 
   test("holds the routing-state lock until an asynchronous update completes", async () => {
@@ -176,9 +176,9 @@ describe("Codex profile routing", () => {
 
     const capacity = async () => ({ available: true, remainingPercentage: 90 });
     const first = await reserveCodexProfile(capacity, files);
-    await releaseCodexProfile(assignment(first).reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
+    await releaseCodexProfile(meteredAssignment(first).reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
     const second = await reserveCodexProfile(capacity, files);
-    await releaseCodexProfile(assignment(second).reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
+    await releaseCodexProfile(meteredAssignment(second).reservation.id, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0, reasoningTokens: 0, totalTokens: 0 }, files);
     const automatic = await reserveCodexProfile(capacity, files);
 
     expect([assignment(first).profile.name, assignment(second).profile.name, assignment(automatic).profile.name]).toEqual(["api", "api", "subscription"]);
@@ -197,13 +197,13 @@ describe("Codex profile routing", () => {
     await resolveUnfinishedReservations(files);
     const state = await readCodexRoutingState(files);
 
-    expect(assignment(first).reservation.reservedTokens).toBe(100);
+    expect(meteredAssignment(first).reservation.reservedTokens).toBe(100);
     expect(blocked.status).toBe("capacity-blocked");
     expect(state.ledgers.api?.metered?.usage.totalTokens).toBe(0);
     expect(state.ledgers.api?.active).toBe(1);
   });
 
-  test("reserves subscription headroom without crossing the reserve floor", async () => {
+  test("ignores subscription capacity floors and percentage reservations", async () => {
     const files = store();
     await writeCodexProfiles([{
       ...profile("limited"),
@@ -219,52 +219,24 @@ describe("Codex profile routing", () => {
 
     expect(first.status).toBe("assigned");
     expect(second.status).toBe("assigned");
-    expect(blocked.status).toBe("capacity-blocked");
-    expect(blocked.telemetry).toEqual([{
-      profile: "limited",
-      capacityClass: "above-floor",
-      configuredFloor: 20,
-      admissionOutcome: "blocked",
-      capacityTriggeredCancellation: false,
-    }]);
+    expect(blocked.status).toBe("assigned");
+    expect((await readCodexRoutingState(files)).reservations).toEqual({});
   });
 
-  test("active exhaustion opens the capacity circuit and honors required rearm", async () => {
+  test("subscription capacity does not create a persistent circuit", async () => {
     const files = store();
     await writeCodexProfiles([{
       ...profile("protected"),
       reserveFloorPercentage: 20,
       requireRearmOnCapacityExhaustion: true,
     }], files);
-    const first = assignment(await reserveCodexProfile(async () => ({
-      available: true,
-      remainingPercentage: 80,
-    }), files));
+    const selected = await reserveCodexProfile(async () => ({ available: false }), files);
 
-    const recorded = await recordActiveCapacityExhaustion(
-      first.reservation.id,
-      new Date().toISOString(),
-      files,
-    );
-    await releaseCodexProfile(first.reservation.id, undefined, files);
-
-    expect(recorded).toBe(true);
-    expect((await readCodexRoutingState(files)).circuits.protected?.reason).toBe("capacity");
-    expect((await reserveCodexProfile(async () => ({
-      available: true,
-      remainingPercentage: 80,
-    }), files)).status).toBe("capacity-blocked");
-
-    await updateCodexRoutingState((state) => {
-      state.ledgers.protected!.rearmRequired = false;
-    }, files);
-    expect((await reserveCodexProfile(async () => ({
-      available: true,
-      remainingPercentage: 80,
-    }), files)).status).toBe("assigned");
+    expect(selected.status).toBe("assigned");
+    expect((await readCodexRoutingState(files)).circuits.protected).toBeUndefined();
   });
 
-  test("stale and unknown observations fail closed without consuming manual next", async () => {
+  test("stale and unknown observations do not block explicit subscription selection", async () => {
     const files = store();
     await writeCodexProfiles([profile("only")], files);
     await updateCodexRoutingState((state) => { state.next = { profile: "only", remaining: 1 }; }, files);
@@ -280,9 +252,9 @@ describe("Codex profile routing", () => {
       observedAt: new Date().toISOString(),
     }), files);
 
-    expect(stale.status).toBe("capacity-blocked");
-    expect(unknown.status).toBe("capacity-blocked");
-    expect((await readCodexRoutingState(files)).next?.remaining).toBe(1);
+    expect(stale.status).toBe("assigned");
+    expect(unknown.status).toBe("assigned");
+    expect((await readCodexRoutingState(files)).next).toBeUndefined();
   });
 
   test("invalid persisted configuration fails closed before routing", async () => {
@@ -348,6 +320,51 @@ describe("Codex profile routing", () => {
     expect(state.ledgers.pro?.metered?.reservedTokens).toBe(0);
     expect(state.ledgers.pro?.metered?.usage.totalTokens).toBe(25);
     expect(state.ledgers.pro?.rearmRequired).toBe(true);
+  });
+
+  test("discards persisted subscription admission state", async () => {
+    const files = store();
+    await writeCodexProfiles([profile("subscription")], files);
+    mkdirSync(dirname(files.stateFile), { recursive: true });
+    writeFileSync(files.stateFile, JSON.stringify({
+      version: 2,
+      state: {
+        roundRobin: 1,
+        reservations: {
+          stale: {
+            id: "stale",
+            profile: "subscription",
+            owner: { pid: 999_999_999, startIdentity: "missing" },
+            startedAt: new Date().toISOString(),
+            reservedHeadroomPercentage: 10,
+            unresolved: true,
+          },
+        },
+        ledgers: {
+          subscription: {
+            starts: 1,
+            active: 1,
+            runtimeMs: 0,
+            rearmRequired: true,
+          },
+        },
+        circuits: {
+          subscription: {
+            reason: "capacity",
+            openedAt: new Date().toISOString(),
+          },
+        },
+        unavailableProfiles: {},
+      },
+    }));
+    chmodSync(files.stateFile, 0o600);
+
+    const state = await readCodexRoutingState(files);
+
+    expect(state.reservations).toEqual({});
+    expect(state.ledgers.subscription?.active).toBe(0);
+    expect(state.ledgers.subscription?.rearmRequired).toBe(false);
+    expect(state.circuits.subscription).toBeUndefined();
   });
 
   test("clears obsolete rearm state when a subscription policy does not require it", async () => {

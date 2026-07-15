@@ -235,13 +235,24 @@ function migrateRoutingState(
   const legacyReservations: PersistedReservation[] = [];
 
   for (const reservation of Object.values(state.reservations)) {
+    const profile = profiles.find((entry) => entry.name === reservation.profile);
+    if (profile?.profileClass === "subscription") {
+      const ledger = ledgers[reservation.profile];
+      if (ledger) ledger.active = Math.max(0, ledger.active - 1);
+      continue;
+    }
     if (reservation.owner) reservations[reservation.id] = reservation as ProfileReservation;
     else legacyReservations.push(reservation);
   }
 
   reconcileLegacyReservations(ledgers, legacyReservations, profiles);
   normalizeRearmState(ledgers, profiles);
-  return { ...state, ledgers, reservations };
+  const circuits = Object.fromEntries(
+    Object.entries(state.circuits).filter(([name]) => (
+      profiles.find((entry) => entry.name === name)?.profileClass === "metered-api"
+    )),
+  );
+  return { ...state, ledgers, reservations, circuits };
 }
 
 function normalizeLedgers(
@@ -310,9 +321,7 @@ function profileRequiresRearm(
   name: string,
 ): boolean {
   const profile = profiles.find((entry) => entry.name === name);
-  if (profile?.profileClass === "subscription") {
-    return profile.requireRearmOnCapacityExhaustion === true;
-  }
+  if (profile?.profileClass === "subscription") return false;
   return profile?.budget?.requireRearm === true;
 }
 

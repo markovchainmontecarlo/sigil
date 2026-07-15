@@ -30,52 +30,7 @@ function assigned(result: Awaited<ReturnType<typeof reserveCodexProfile>>) {
   return result.assignment;
 }
 
-describe("Codex routing circuits", () => {
-  test("release removes the reservation and persists a reason-specific circuit atomically", async () => {
-    const store = fixture();
-    await writeCodexProfiles([profile], store);
-    const admission = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 80 }), store);
-    const failure = classifyProviderFailure(new ProviderError("authentication failed", {
-      code: "authentication_failed",
-    }));
-
-    await releaseCodexProfile(assigned(admission).reservation.id, undefined, failure, store);
-    const state = await readCodexRoutingState(store);
-
-    expect(state.reservations).toEqual({});
-    expect(state.circuits.subscription?.reason).toBe("authentication");
-  });
-
-  test("a fresh healthy observation closes a capacity circuit", async () => {
-    const store = fixture();
-    await writeCodexProfiles([profile], store);
-    const first = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 80 }), store);
-    const failure = classifyProviderFailure(new ProviderError("capacity exhausted", {
-      code: "capacity_exhausted",
-    }));
-    await releaseCodexProfile(assigned(first).reservation.id, undefined, failure, store);
-
-    const next = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 70 }), store);
-
-    expect(next.status).toBe("assigned");
-    expect((await readCodexRoutingState(store)).circuits.subscription).toBeUndefined();
-  });
-
-  test("transient provider failures do not create persistent capacity state", async () => {
-    const store = fixture();
-    await writeCodexProfiles([profile], store);
-    const admission = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 80 }), store);
-    const failure = classifyProviderFailure(new ProviderError("idle timeout", {
-      code: "idle_timeout",
-    }));
-
-    await releaseCodexProfile(assigned(admission).reservation.id, undefined, failure, store);
-    const next = await reserveCodexProfile(async () => ({ available: true, remainingPercentage: 70 }), store);
-
-    expect(next.status).toBe("assigned");
-    expect((await readCodexRoutingState(store)).circuits.subscription).toBeUndefined();
-  });
-
+describe("Codex routing state", () => {
   test("unsupported state versions fail closed", async () => {
     const store = fixture();
     await writeCodexProfiles([profile], store);

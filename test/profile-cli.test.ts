@@ -87,9 +87,10 @@ describe("profile CLI", () => {
     expect(subscription.evidence.capacity).toMatchObject({
       kind: "available",
       remainingPercentage: 69,
-      reservedPercentage: 0,
-      availablePercentage: 69,
     });
+    expect(subscription.evidence.capacity).not.toHaveProperty("reservedPercentage");
+    expect(subscription.evidence.capacity).not.toHaveProperty("availablePercentage");
+    expect(subscription.eligibility).toBe("eligible");
     expect(subscription.state).not.toHaveProperty("ledger.usage");
     expect(text(human.stdout)).toContain("69% remaining");
   });

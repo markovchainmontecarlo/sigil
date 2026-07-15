@@ -36,14 +36,9 @@ type CommonProfile =
   | { provider: "claude"; name: string; profile: ClaudeProfile };
 
 type OutputRecord = { version: 1; kind: string; [key: string]: unknown };
-type AvailableCapacity = Extract<SubscriptionCapacity, { kind: "available" }> & {
-  reservedPercentage: number;
-  availablePercentage: number;
-};
 type CapacityEvidence =
   | { kind: "metered" }
-  | Exclude<SubscriptionCapacity, { kind: "available" }>
-  | AvailableCapacity;
+  | SubscriptionCapacity;
 
 export async function runProfileCommand(args: string[]): Promise<number> {
   const [action, ...rest] = args;
@@ -80,10 +75,6 @@ async function addCodexProfile(name: string, accessClass: "subscription" | "mete
     enabled: true,
     profileClass: accessClass,
     concurrencyLimit: optionalPositive(value(parsed, "concurrency")),
-    percentageQuantum: optionalPositive(value(parsed, "quantum")),
-    reserveFloorPercentage: optionalPercentage(value(parsed, "reserve-floor")),
-    activeCapacityPollIntervalMs: optionalPositive(value(parsed, "capacity-poll-ms")),
-    requireRearmOnCapacityExhaustion: parsed.values["require-rearm"] === true,
   };
   const verified = await readCodexAccountStatus(candidate);
   if (candidate.profileClass !== verified.profileClass) throw new UsageError(`declared profile class does not match account/read: ${verified.profileClass}`);
@@ -186,7 +177,9 @@ function safeProfile(selected: CommonProfile): SafeProfileDto & { policy: Record
     version: 1, provider: "codex", name: profile.name, qualifiedIdentity: identity(selected), accessClass: profile.profileClass,
     enabled: profile.enabled, mode: profile.meteredMode,
     admissionLimit: codexAdmissionLimit(profile), operationLimit: profile.budget?.reservationTokens ? { unit: "tokens", value: profile.budget.reservationTokens } : undefined,
-    policy: { concurrencyLimit: profile.concurrencyLimit, percentageQuantum: profile.percentageQuantum, reserveFloorPercentage: profile.reserveFloorPercentage, activeCapacityPollIntervalMs: profile.activeCapacityPollIntervalMs, requireRearmOnCapacityExhaustion: profile.requireRearmOnCapacityExhaustion },
+    policy: profile.profileClass === "metered-api"
+      ? { concurrencyLimit: profile.concurrencyLimit }
+      : {},
   };
 }
 
@@ -198,16 +191,14 @@ async function storedState(selected: CommonProfile): Promise<Record<string, unkn
     return { ledger: state.ledgers[selected.name], activeAssignments: Object.values(state.reservations).filter((entry) => entry.profile === selected.name).length, circuit: state.circuits[selected.name] ? { state: "open", reason: state.circuits[selected.name].reason } : { state: "closed" } };
   }
   const state = await readCodexRoutingState();
-  const reservations = Object.values(state.reservations).filter((entry) => entry.profile === selected.name);
+  const reservations = selected.profile.profileClass === "metered-api"
+    ? Object.values(state.reservations).filter((entry) => entry.profile === selected.name)
+    : [];
   const circuit = state.circuits[selected.name];
   const activity = profileLedger(state, selected.name);
   const usage = selected.profile.profileClass === "metered-api"
     ? { meteredUsage: meteredUsage(state, selected.name) }
     : {};
-  const reservedHeadroomPercentage = reservations.reduce(
-    (sum, entry) => sum + (entry.reservedHeadroomPercentage ?? 0),
-    0,
-  );
   const circuitState = circuit
     ? { state: circuitIsOpen(circuit) ? "open" : "tracking", reason: circuit.reason }
     : { state: "closed" };
@@ -215,7 +206,6 @@ async function storedState(selected: CommonProfile): Promise<Record<string, unkn
     activity,
     ...usage,
     activeAssignments: reservations.length,
-    reservedHeadroomPercentage,
     circuit: circuitState,
   };
 }
@@ -225,12 +215,9 @@ async function statusRecord(selected: CommonProfile): Promise<Record<string, unk
   if (selected.provider === "claude") return { profile: safeProfile(selected), state, eligibility: selected.profile.enabled && (state.circuit as { state: string }).state === "closed" ? "eligible" : "ineligible", evidence: { authentication: { kind: "unknown" }, capacity: { kind: "unknown" } } };
   const profile = selected.profile;
   const routing = await readCodexRoutingState();
-  const reservations = Object.values(routing.reservations).filter((entry) => entry.profile === selected.name);
-  const reserved = reservations.reduce((sum, entry) => sum + (entry.reservedHeadroomPercentage ?? 0), 0);
   const account = await readCodexAccountStatus(profile);
-  const capacity = capacityEvidence(profile, account.capacity, reserved);
-  const eligible = basicCodexEligibility(profile, routing)
-    && canAdmitFromCapacity(profile, capacity);
+  const capacity = capacityEvidence(profile, account.capacity);
+  const eligible = basicCodexEligibility(profile, routing);
   return {
     profile: safeProfile(selected),
     state,
@@ -247,25 +234,9 @@ async function statusRecord(selected: CommonProfile): Promise<Record<string, unk
 function capacityEvidence(
   profile: CodexProfile,
   capacity: Awaited<ReturnType<typeof readCodexAccountStatus>>["capacity"],
-  reservedPercentage: number,
 ): CapacityEvidence {
   if (profile.profileClass === "metered-api") return { kind: "metered" };
-  if (capacity.kind !== "available") return capacity;
-  return {
-    ...capacity,
-    reservedPercentage,
-    availablePercentage: Math.max(0, capacity.remainingPercentage - reservedPercentage),
-  };
-}
-
-function canAdmitFromCapacity(
-  profile: CodexProfile,
-  capacity: CapacityEvidence,
-): boolean {
-  if (profile.profileClass === "metered-api") return true;
-  if (capacity.kind !== "available") return false;
-  return capacity.availablePercentage - (profile.percentageQuantum ?? 0)
-    >= (profile.reserveFloorPercentage ?? 0);
+  return capacity;
 }
 
 async function removeSelected(selected: CommonProfile): Promise<void> {
@@ -302,7 +273,9 @@ async function assertNextEligible(selected: CommonProfile, checkBudget = true): 
 }
 
 function basicCodexEligibility(profile: CodexProfile, state: Awaited<ReturnType<typeof readCodexRoutingState>>): boolean {
-  if (!profile.enabled || circuitIsOpen(state.circuits[profile.name]) || profileLedger(state, profile.name).rearmRequired) return false;
+  if (!profile.enabled) return false;
+  if (profile.profileClass === "subscription") return true;
+  if (circuitIsOpen(state.circuits[profile.name]) || profileLedger(state, profile.name).rearmRequired) return false;
   const ledger = profileLedger(state, profile.name);
   if (profile.profileClass === "metered-api") {
     if (profile.budget?.startLimit !== undefined && ledger.starts >= profile.budget.startLimit) return false;
@@ -312,9 +285,7 @@ function basicCodexEligibility(profile: CodexProfile, state: Awaited<ReturnType<
   }
   const reservations = Object.values(state.reservations).filter((entry) => entry.profile === profile.name);
   if ((profile.concurrencyLimit ?? profile.budget?.concurrencyLimit) !== undefined && reservations.length >= (profile.concurrencyLimit ?? profile.budget?.concurrencyLimit)!) return false;
-  const observed = reservations.find((entry) => entry.observedRemainingPercentage !== undefined)?.observedRemainingPercentage;
-  const reserved = reservations.reduce((sum, entry) => sum + (entry.reservedHeadroomPercentage ?? 0), 0);
-  return profile.profileClass !== "subscription" || observed === undefined || observed - reserved - (profile.percentageQuantum ?? 0) >= (profile.reserveFloorPercentage ?? 0);
+  return true;
 }
 
 function output(record: OutputRecord, json: boolean): 0 {
@@ -336,15 +307,13 @@ function humanProfile(value: unknown): string {
       capacity?: {
         kind?: string;
         remainingPercentage?: number;
-        reservedPercentage?: number;
-        availablePercentage?: number;
       };
     };
   };
   const profile = record.profile ?? record;
   const capacity = record.evidence?.capacity;
   const percentage = capacity?.kind === "available"
-    ? `${capacity.remainingPercentage}% remaining, ${capacity.reservedPercentage}% reserved, ${capacity.availablePercentage}% available`
+    ? `${capacity.remainingPercentage}% remaining`
     : capacity?.kind;
   return [
     profile.qualifiedIdentity,
@@ -355,7 +324,7 @@ function humanProfile(value: unknown): string {
   ].filter(Boolean).join(" ");
 }
 
-function parseProfileArgs(args: string[]) { return parseCommandArgs(args, { provider: { type: "string" }, class: { type: "string" }, home: { type: "string" }, "config-dir": { type: "string" }, "default-config": { type: "boolean" }, "credential-source": { type: "string" }, mode: { type: "string" }, concurrency: { type: "string" }, "token-limit": { type: "string" }, "start-limit": { type: "string" }, "runtime-limit-ms": { type: "string" }, "reservation-tokens": { type: "string" }, "admission-usd": { type: "string" }, "operation-usd": { type: "string" }, quantum: { type: "string" }, "reserve-floor": { type: "string" }, "capacity-poll-ms": { type: "string" }, "require-rearm": { type: "boolean" }, json: { type: "boolean" } }); }
+function parseProfileArgs(args: string[]) { return parseCommandArgs(args, { provider: { type: "string" }, class: { type: "string" }, home: { type: "string" }, "config-dir": { type: "string" }, "default-config": { type: "boolean" }, "credential-source": { type: "string" }, mode: { type: "string" }, concurrency: { type: "string" }, "token-limit": { type: "string" }, "start-limit": { type: "string" }, "runtime-limit-ms": { type: "string" }, "reservation-tokens": { type: "string" }, "admission-usd": { type: "string" }, "operation-usd": { type: "string" }, "require-rearm": { type: "boolean" }, json: { type: "boolean" } }); }
 function jsonRequested(parsed: { values: Record<string, unknown> }): boolean { return parsed.values.json === true; }
 function identity(selected: CommonProfile) { return qualifiedProfileIdentity(selected.provider, selected.name); }
 function parseProvider(raw: string): ProfileProvider { if (raw === "codex" || raw === "claude") return raw; throw new UsageError(`invalid provider: ${raw}`); }
