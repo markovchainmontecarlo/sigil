@@ -42,8 +42,7 @@
       "terra-medium",
       "luna-medium"
     ],
-    "synthesizer": "sol-medium",
-    "reviewer": "sol-medium"
+    "synthesizer": "sol-medium"
   },
   "implement": {
     "coder": "sol-medium",

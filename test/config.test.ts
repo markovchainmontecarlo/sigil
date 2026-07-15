@@ -22,7 +22,6 @@ const validConfig = {
   plan: {
     planners: ["explorer", "implementer"],
     synthesizer: "explorer",
-    reviewer: "reviewer",
   },
   implement: { coder: "implementer", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
   review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
@@ -42,7 +41,7 @@ describe("loadConfig", () => {
     expect(config.evals.build).toBe("bun run typecheck");
     expect(config.context).toEqual([]);
     expect(config.plan.planners).toEqual(["explorer", "implementer"]);
-    expect(config.plan.reviewer).toBe("reviewer");
+    expect(config.plan).toEqual({ planners: ["explorer", "implementer"], synthesizer: "explorer" });
     expect(config.review.followUpReviews).toBe(0);
     expect(config.implement.idleTimeoutMs).toBePositive();
   });
@@ -208,9 +207,4 @@ describe("loadConfig", () => {
     expect(() => loadConfig(root)).toThrow("missing-planner");
   });
 
-  test("planning reviewer must exist", () => {
-    const missing = tempRepo();
-    writeConfig(missing, { ...validConfig, plan: { ...validConfig.plan, reviewer: "missing-reviewer" } });
-    expect(() => loadConfig(missing)).toThrow("missing-reviewer");
-  });
 });

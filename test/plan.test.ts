@@ -31,10 +31,10 @@ class StubAgent implements SigilAgent {
 function tempRepo(planners = ["planner-a"], synthesizer = "synthesizer", context: Array<{ path: string; update?: boolean }> = []): string {
   const dir = mkdtempSync(join(tmpdir(), "sigil-plan-test-"));
   writeFileSync(join(dir, "sigil.config.json"), JSON.stringify({
-    agents: Object.fromEntries([...planners, synthesizer, "planning-reviewer"].map((name) => [name, { provider: "codex", model: "gpt-5.5" }])),
+    agents: Object.fromEntries([...planners, synthesizer].map((name) => [name, { provider: "codex", model: "gpt-5.5" }])),
     evals: {},
     context,
-    plan: { planners, synthesizer, reviewer: "planning-reviewer" },
+    plan: { planners, synthesizer },
     implement: { coder: planners[0], sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: [synthesizer], synthesizer: synthesizer },
   }, null, 2));
@@ -73,31 +73,6 @@ function firstPathAfter(prompt: string, marker: string): string {
   const match = prompt.slice(index).match(/\s(\/\S+\.(?:md|json))/);
   if (!match) throw new Error(`missing path after ${marker}`);
   return match[1];
-}
-
-const noPlanningFindings = `# Planning review
-
-## HIGH
-
-None.
-
-## MEDIUM
-
-None.
-
-## LOW
-
-None.
-`;
-
-function planningReviewer(): StubAgent {
-  return new StubAgent((_call, prompt) => {
-    if (!prompt.includes("# Planning review")) return;
-    const match = prompt.match(/(\/[^\s`]+\.md)/);
-    if (!match?.[1]) throw new Error("missing planning review path");
-    mkdirSync(dirname(match[1]), { recursive: true });
-    writeFileSync(match[1], noPlanningFindings);
-  });
 }
 
 function writePlanAgent(text: string): StubAgent {
@@ -166,7 +141,11 @@ function fastPathSynthAgent(repo: string, opts: { invalidFirst?: boolean } = {})
 
 function testContext(repo: string, agents: Record<string, StubAgent>, observations: Array<{ stage: string; details: Record<string, string> }> = []) {
   return createContext(repo, {
-    createAgent: (binding) => agents[binding as string] ?? planningReviewer(),
+    createAgent: (binding) => {
+      const agent = agents[binding as string];
+      if (!agent) throw new Error(`unexpected agent ${String(binding)}`);
+      return agent;
+    },
     onObserve: async (stage, details) => {
       observations.push({ stage, details });
     },

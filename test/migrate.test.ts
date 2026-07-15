@@ -90,7 +90,7 @@ function fixtureRepo(): string {
     },
     evals: { build: "test -s app.txt", test: "test -s app.txt" },
     context: [],
-    plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst", reviewer: "analyst" },
+    plan: { planners: ["analyst", "reviewer"], synthesizer: "analyst" },
     implement: {
       coder: "coder",
       sessionTaskLimit: 5,

@@ -119,8 +119,7 @@ A representative config shape is:
   ],
   "plan": {
     "planners": ["explorer", "implementer"],
-    "synthesizer": "explorer",
-    "reviewer": "reviewer"
+    "synthesizer": "explorer"
   },
   "implement": {
     "coder": "implementer",
@@ -142,7 +141,7 @@ Config sections:
 - `evals`: named non-interactive shell commands. A string defines one command. An object may also declare `covers`, listing configured gates whose successful work is included in that command. When covered and covering gates are requested together, Sigil runs only the covering gate.
 - `workspace.bootstrap`: optional deterministic preparation command run before implementation or refactor baseline gates. It must leave tracked files unchanged.
 - `context`: repo-relative files loaded when a workflow or coder session needs orientation. Paths cannot escape the repo.
-- `plan`: planner agent names, one synthesizer, and one independent planning reviewer.
+- `plan`: planner agent names and one synthesizer.
 - `implement`: coder agent, live-session task limit, repair limit, branch prefix, base branch, and optional test report settings. A new coder receives graph context, current configured context, and any checkpoint-backed handoff with its first task. Consecutive tasks reuse that session and receive only their task contracts. Rotation, invalidation, and resume initialize the replacement from current repository and checkpoint state. The checkpoint retains the original baseline evidence for resumed verification. Retryable turn failures use the bounded session retry budget; capacity failures return to implementation recovery before another provider can be selected. Pull-request completion closes the session.
 - `review`: reviewer agent and the number of fresh reviews allowed after repair. `followUpReviews` defaults to `0`; repairs still run configured verification gates.
 
@@ -233,7 +232,7 @@ not create a one-item backlog merely to combine planning and implementation;
 
 Use the stage commands when the stage boundary is the object you need to inspect or compose. `plan` writes a task graph. `implement` consumes a task graph, requires a clean target working tree, owns one local implementation branch, runs configured gates and review, and returns a PR body. The CLI keeps the result local by default and publishes only with explicit `--publish`. `review` can also be run by itself against an existing diff.
 
-Agentic `plan` runs independent planners in parallel. Each planner investigates scope, architecture, file responsibilities, task interfaces, acceptance, and verification. Synthesis builds a requirements crosswalk, verifies repository claims, resolves disagreements, writes and enriches the graph, and applies deterministic validation. One configured reviewer writes a Markdown report with high, medium, and low findings. In a second prompt, the same reviewer repairs high findings in the graph. Medium and low findings remain advisory, and no repeated model review blocks implementation.
+Agentic `plan` runs independent planners in parallel. Each planner investigates scope, architecture, file responsibilities, task interfaces, acceptance, and verification. The synthesizer builds a requirements crosswalk, verifies repository claims, resolves disagreements, writes and enriches the graph, and applies deterministic validation. A valid graph proceeds directly to implementation without a separate planning review stage.
 
 ```sh
 env -u CLAUDECODE sigil plan --repo /path/to/repo --intent "<change intent>" --out /path/to/repo/.sigil/runs/task-graph.json

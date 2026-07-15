@@ -71,7 +71,6 @@ const integration = [
   "test/node-consumer.test.ts",
   "test/owned-process.test.ts",
   "test/plan.test.ts",
-  "test/planning-review.test.ts",
   "test/probe.test.ts",
   "test/profile-cli.test.ts",
   "test/refactor.test.ts",

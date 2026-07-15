@@ -29,7 +29,7 @@ function tempRepo(evals: Record<string, string> = {}): string {
       reviewer: { provider: "codex", model: "gpt-5.5" },
     },
     evals,
-    plan: { planners: ["planner"], synthesizer: "planner", reviewer: "planner" },
+    plan: { planners: ["planner"], synthesizer: "planner" },
     implement: { coder: "coder", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
     review: { reviewers: ["reviewer"], synthesizer: "reviewer" },
   }, null, 2));

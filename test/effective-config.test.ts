@@ -9,7 +9,7 @@ import { EFFECTIVE_CONFIG_VERSION, projectEffectiveConfig } from "../src/effecti
 const project = {
   agents: { worker: { provider: "codex", model: "project-model", effort: "medium" } },
   evals: {},
-  plan: { planners: ["worker"], synthesizer: "worker", reviewer: "worker" },
+  plan: { planners: ["worker"], synthesizer: "worker" },
   implement: { coder: "worker", sessionTaskLimit: 5, repairLimit: 3, branchPrefix: "sigil/", baseBranch: "main" },
   review: { reviewers: ["worker"], synthesizer: "worker", followUpReviews: 0 },
 };
@@ -32,7 +32,7 @@ describe("effective configuration", () => {
     expect(effective.values["agents.worker.model"]).toMatchObject({ value: "command-model", source: "command" });
     expect(effective.values["implement.sessionTaskLimit"]).toMatchObject({ value: 5, source: "project" });
     expect(effective.values["implement.idleTimeoutMs"]).toMatchObject({ source: "default" });
-    expect(effective.values["plan.reviewer"]).toMatchObject({ value: "worker", source: "project" });
+    expect(effective.values["plan.synthesizer"]).toMatchObject({ value: "worker", source: "project" });
   });
 
   test("preserves explicit values equal to defaults and reports a safe location", () => {
@@ -62,7 +62,7 @@ describe("effective configuration", () => {
     const repo = repoWithConfig(project);
     expect(loadConfig(repo)).toEqual(resolveConfig(repo).config);
 
-    const invalid = repoWithConfig({ ...project, plan: { planners: ["missing"], synthesizer: "worker", reviewer: "worker" } });
+    const invalid = repoWithConfig({ ...project, plan: { planners: ["missing"], synthesizer: "worker" } });
     expect(() => loadConfig(invalid)).toThrow("missing");
   });
 });
