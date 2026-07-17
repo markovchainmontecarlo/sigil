@@ -82,6 +82,7 @@ const integration = [
 
 const all = [...fast, ...integration] as const;
 const suites = { fast, integration } as const;
+const suiteBudgets = { fast: 30_000, integration: 120_000 } as const;
 
 function testFiles(): string[] {
   return readdirSync("test")
@@ -102,16 +103,27 @@ function validateManifest(): void {
   process.exit(2);
 }
 
-function selectedSuite(): readonly string[] {
+function selectedSuite(): { name: keyof typeof suites; files: readonly string[] } {
   const name = process.argv[2] as keyof typeof suites | undefined;
-  if (name && name in suites) return suites[name];
+  if (name && name in suites) return { name, files: suites[name] };
 
   console.error("usage: bun scripts/test-suite.ts <fast|integration> [bun test options]");
   process.exit(2);
 }
 
 validateManifest();
-const files = selectedSuite();
+const suite = selectedSuite();
+const files = suite.files;
 const options = process.argv.slice(3);
-const result = spawnSync("bun", ["test", ...files, ...options], { stdio: "inherit" });
-process.exit(result.status ?? 1);
+
+for (const file of files) runTests([file], suiteBudgets[suite.name]);
+
+function runTests(files: readonly string[], timeout: number): void {
+  if (files.length === 0) return;
+  const result = spawnSync(
+    "bun",
+    ["test", ...files, "--max-concurrency", "1", "--timeout", String(timeout), ...options],
+    { stdio: "inherit" },
+  );
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}

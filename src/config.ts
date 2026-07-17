@@ -139,7 +139,13 @@ export function loadConfig(rootDir = process.cwd()): SigilConfig {
 
 export function resolveConfig(rootDir = process.cwd(), commandOverlay: ConfigOverlay = {}): ResolvedConfig {
   const path = findConfigPath(rootDir);
-  if (!path) throw new Error(`Missing ${join(resolve(rootDir), CONFIG_FILE)}`);
+  if (!path) {
+    const root = resolve(rootDir);
+    throw new Error([
+      `Missing ${join(root, CONFIG_FILE)}`,
+      `Run: sigil setup --dir ${root}`,
+    ].join("\n"));
+  }
 
   const rawProject = JSON.parse(readFileSync(path, "utf8")) as unknown;
   if (!isRecord(rawProject)) throw new Error(`Invalid ${path}: configuration must be an object`);

@@ -198,6 +198,7 @@ describe("loadConfig", () => {
     const root = tempRepo();
 
     expect(() => loadConfig(root)).toThrow(join(root, "sigil.config.json"));
+    expect(() => loadConfig(root)).toThrow(`sigil setup --dir ${root}`);
   });
 
   test("unknown plan planner throws naming the entry", () => {

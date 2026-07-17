@@ -1,4 +1,6 @@
-import { readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
@@ -7,6 +9,7 @@ import { CONTRACT_VERSION } from "../src/contracts/task-graph.js";
 import { implement, type ImplementInput, type ImplementResult } from "../src/workflows/software-change/implementation/index.js";
 import { plan, type PlanInput, type PlanResult } from "../src/workflows/software-change/planning/index.js";
 import { softwareChange } from "../src/workflows/software-change/workflow.js";
+import { DEFAULT_SIGIL_CONFIG } from "../src/config.js";
 
 function resultPlan(overrides: Partial<PlanResult> = {}): PlanResult {
   return {
@@ -49,6 +52,29 @@ function workflowContext(
 }
 
 describe("softwareChange", () => {
+  test("rejects missing implementation evals before planning", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-software-change-readiness-"));
+    const calls: string[] = [];
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "sigil.config.json"), JSON.stringify(DEFAULT_SIGIL_CONFIG));
+
+    await expect(softwareChange({
+      repo,
+      intent: "Make the change.",
+    }, workflowContext(repo, {
+      plan: async () => {
+        calls.push("plan");
+        return resultPlan();
+      },
+      implement: async () => {
+        calls.push("implement");
+        return resultImplementation();
+      },
+    }))).rejects.toThrow("No build or test commands are configured");
+
+    expect(calls).toEqual([]);
+  });
+
   test("plans, passes the produced task graph artifact to implementation, and combines evidence", async () => {
     const repo = process.cwd();
     const calls: Array<{ stage: string; input: unknown }> = [];

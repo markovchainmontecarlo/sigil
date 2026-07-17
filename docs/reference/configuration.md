@@ -6,6 +6,8 @@
 
 The top-level fields are `agents`, `evals`, `workspace`, `context`, `plan`, `implement`, `review`, `probe`, `breakdown`, `dispatch`, `refactor`, and `migrate`. An agent binding has the same shape for every provider: `provider` (`codex`, `claude`, or `copilot`), a nonempty provider-owned `model`, optional `effort` (`low`, `medium`, or `high`), and optional `execution`. Effort defaults to `medium`. Execution requests describe approval, sandbox, and network policy; Sigil validates them against the selected adapter and reports requested and effective behavior separately.
 
+`sigil setup` resolves the Git root and adds exact `build`, `test`, and `verify` package scripts only when it can identify one package manager from the manifest or lockfiles. It reports these commands without running them. Implementation workflows require at least one configured build or test eval; planning-only and configuration-independent custom Sigils do not.
+
 Comparable values use this precedence: command option, project file, schema default. `sigil config show --effective` retains field provenance rather than inferring it from a defaulted object. Each projected field contains `value`, `source` (`command`, `project`, `user`, or `default`), and, when safe, `location`, `redacted`, and capability `support` (`supported`, `unsupported`, or `unknown`).
 
 ```sh

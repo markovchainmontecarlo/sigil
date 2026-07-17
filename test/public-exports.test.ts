@@ -204,7 +204,16 @@ beforeAll(() => {
   mkdirSync(temporary);
   writeFileSync(join(consumer, "package.json"), '{"private":true,"type":"module"}\n');
   const installed = Bun.spawnSync({
-    cmd: ["bun", "add", join(process.cwd(), "dist", "package"), "--offline"],
+    cmd: [
+      "npm",
+      "install",
+      "--prefix",
+      consumer,
+      join(process.cwd(), "dist", "package"),
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ],
     cwd: consumer,
     env: { ...process.env, TMPDIR: temporary },
     stdout: "pipe",

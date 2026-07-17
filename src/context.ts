@@ -428,6 +428,7 @@ export function wrapAgentForContext(
         },
       };
       try {
+        options?.signal?.throwIfAborted();
         const result = await (isWriteOptions(arg)
           ? promptWithWrites(base, emit, context.artifactPath, context.issue, text, arg)
           : schema

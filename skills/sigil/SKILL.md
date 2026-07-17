@@ -15,6 +15,8 @@ Answer or edit directly when the request is a quick factual check, short explana
 
 ## Establish the confirmed handoff
 
+Before starting agent work for planning and implementation together, confirm that repository setup has been reviewed and at least one build or test eval is configured. Review the setup report with the developer, and stop with its short configuration guidance when implementation verification is not ready. Planning-only and configuration-independent custom Sigils do not require evals.
+
 Before planning or implementation, inspect the conversation and repository, then write `brief.md` beneath the ignored run directory using the [brief reference](./references/brief.md), show its complete contents, and wait for confirmation or correction. The confirmation establishes the outcome, accepted decisions, and effects boundary. It is not a checkpoint before every internal repair.
 
 Use **AI-assisted development** when the current assistant turns confirmed requirements or a settled Markdown plan into a validated task graph. Sigil then implements that graph without planning again.

@@ -1,4 +1,5 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S node --experimental-strip-types
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
@@ -35,7 +36,11 @@ mkdirSync(join(temporary, "installer"), { recursive: true });
 run("seed installer", ["tar", "-xzf", registry, "-C", join(temporary, "installer")]);
 for (const path of ["skills", "docs", "man"]) cpSync(path, join(installerRoot, path), { recursive: true });
 for (const path of ["ARCHITECTURE.md", "SIGIL_USAGE.md"]) cpSync(path, join(installerRoot, path));
-run("installer lockfile", ["bun", "install", "--lockfile-only", "--ignore-scripts"], installerRoot);
+run(
+  "installer lockfile",
+  ["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
+  installerRoot,
+);
 run("installer archive", ["tar", "-czf", installer, "-C", join(temporary, "installer"), "package"]);
 writeFileSync(`${installer}.sha256`, `${digest(installer)}  ${installer.split("/").at(-1)}\n`);
 
@@ -76,8 +81,12 @@ writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
 console.log(JSON.stringify({ verification: relative(root, recordPath), ...record }));
 
 function run(name: string, command: string[], cwd = root): void {
-  const result = Bun.spawnSync({ cmd: command, cwd, env: { ...process.env, TMPDIR: "/tmp" }, stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode === 0) return;
+  const result = spawnSync(command[0], command.slice(1), {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, TMPDIR: "/tmp" },
+  });
+  if (result.status === 0) return;
   throw new Error(`${name} failed\n${result.stdout}\n${result.stderr}`);
 }
 
@@ -99,9 +108,9 @@ function files(directory: string): string[] {
 }
 
 function archiveFiles(archive: string): string[] {
-  const result = Bun.spawnSync({ cmd: ["tar", "-tzf", archive], stdout: "pipe", stderr: "pipe" });
-  if (result.exitCode !== 0) throw new Error(`cannot inspect ${archive}`);
-  return result.stdout.toString().trim().split("\n").filter((path) => path && !path.endsWith("/"));
+  const result = spawnSync("tar", ["-tzf", archive], { encoding: "utf8" });
+  if (result.status !== 0) throw new Error(`cannot inspect ${archive}`);
+  return result.stdout.trim().split("\n").filter((path) => path && !path.endsWith("/"));
 }
 
 function assertInventory(archive: string, expected: string[]): void {

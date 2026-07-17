@@ -29,6 +29,19 @@ async function waitForIdentity(path: string): Promise<ProcessIdentity> {
 }
 
 describe("owned process groups", () => {
+  test("captures an immediate successful exit", async () => {
+    await using owned = await OwnedProcess.spawn({
+      command: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      kind: "gate",
+    });
+
+    const result = await owned.wait();
+
+    expect(result.exitCode).toBe(0);
+    expect(await processIdentityIsAlive(owned.identity)).toBe(false);
+  });
+
   test("cancellation settles after the child and descendant are gone", async () => {
     const fixture = childScript(`
       import { spawn } from "node:child_process";

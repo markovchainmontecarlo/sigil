@@ -70,7 +70,7 @@ describe("owned Codex ACP connection", () => {
     expect(methods).not.toContain("session/set_model");
     const identity = connection.childIdentity!;
     await connection.disconnect();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitUntil(async () => !(await processIdentityIsAlive(identity)), "ACP child to exit");
     expect(await processIdentityIsAlive(identity)).toBe(false);
     expect(stoppedPid).toBe(startedPid);
     await connection.disconnect();
@@ -107,7 +107,7 @@ describe("owned Codex ACP connection", () => {
       for await (const _event of connection.promptStream("wait", abort.signal)) {}
     };
     const result = prompting();
-    while (!existsSync(descendantFile)) await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitUntil(() => existsSync(descendantFile), "ACP descendant identity");
     const descendant = await readProcessIdentity(Number(readFileSync(descendantFile, "utf8")));
 
     abort.abort(new Error("cancel prompt"));
@@ -117,3 +117,14 @@ describe("owned Codex ACP connection", () => {
     await connection.disconnect();
   });
 });
+
+async function waitUntil(
+  condition: () => boolean | Promise<boolean>,
+  subject: string,
+): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!(await condition())) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${subject}`);
+    await Bun.sleep(10);
+  }
+}

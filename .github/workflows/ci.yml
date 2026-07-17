@@ -1,7 +1,7 @@
 name: CI
 
 on:
-  push:
+  pull_request:
     branches: [main]
 
 permissions:
@@ -19,9 +19,7 @@ jobs:
         with:
           node-version: 24
       - run: bun install --frozen-lockfile
-      - run: bun run typecheck
-      - run: bun run test:all
-      - run: bun run verify:package
+      - run: bun run validate:release
 
   workflow-lint:
     runs-on: ubuntu-latest

@@ -34,6 +34,15 @@ function fixture(build = "true", testCommand = "true") {
   return { repo, artifacts, ctx: createContext(repo, { artifactRoot: artifacts }) };
 }
 
+function emptyEvalFixture() {
+  const result = fixture();
+  const configPath = join(result.repo, "sigil.config.json");
+  const config = JSON.parse(readFileSync(configPath, "utf8"));
+  config.evals = {};
+  writeFileSync(configPath, JSON.stringify(config));
+  return result;
+}
+
 describe("shared verification", () => {
   test("runs build and test and records observable state", async () => {
     const { ctx, artifacts } = fixture();
@@ -52,6 +61,17 @@ describe("shared verification", () => {
     const result = await establishBaseline(ctx, repo, loadConfig(repo));
 
     expect("kind" in result).toBe(true);
+  });
+
+  test("names unconfigured gates when no baseline command can run", async () => {
+    const { repo, ctx } = emptyEvalFixture();
+
+    const result = await establishBaseline(ctx, repo, loadConfig(repo));
+
+    expect("kind" in result).toBe(true);
+    if (!("kind" in result)) throw new Error("expected baseline failure");
+    expect(result.evidence).toContain("build: skipped (not configured)");
+    expect(result.evidence).toContain("test: skipped (not configured)");
   });
 
   test("skips gates covered by a stronger requested gate", async () => {

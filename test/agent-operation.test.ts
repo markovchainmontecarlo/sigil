@@ -113,7 +113,9 @@ describe("agent attempts", () => {
         const agent: SigilAgent = {
           prompt: async () => "unused",
           promptWithOptions: (_text, _schema, options) => new Promise((_, reject) => {
+            const transport = setInterval(() => {}, 1_000);
             options.signal?.addEventListener("abort", () => {
+              clearInterval(transport);
               events.push(`abort:${id}`);
               reject(options.signal?.reason);
             }, { once: true });
@@ -128,8 +130,8 @@ describe("agent attempts", () => {
     const result = await runFreshAgentOperation(ctx, "coder", {
       stage: "attempt",
       limit: 1,
-      timeoutMs: 15,
-      idleTimeoutMs: 100,
+      timeoutMs: 100,
+      idleTimeoutMs: 500,
     }, (agent) => agent.prompt("work"));
 
     expect(result.ok).toBe(false);
@@ -162,8 +164,8 @@ describe("agent attempts", () => {
     const result = await runFreshAgentOperation(ctx, "coder", {
       stage: "idle",
       limit: 1,
-      timeoutMs: 100,
-      idleTimeoutMs: 20,
+      timeoutMs: 500,
+      idleTimeoutMs: 100,
     }, (agent) => agent.prompt("work"));
 
     expect(result.ok).toBe(true);

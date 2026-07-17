@@ -39,7 +39,7 @@ In the repository you want to run Sigil against, create the default config:
 sigil setup
 ```
 
-Then edit [`sigil.config.json`](./sigil.config.json) and define the `evals` commands for that repo, such as build and test. Repositories that need dependencies or generated tool state before baseline gates can also define `workspace.bootstrap`. Unconfigured evals are skipped.
+Setup resolves the Git root and adds exact `build`, `test`, and `verify` package scripts when the package manager is unambiguous. Review the reported agent bindings and verification commands before using Sigil. If setup cannot select verification safely, add at least one repository build or test command under `evals`. Repositories that need dependencies or generated tool state before baseline gates can also define `workspace.bootstrap`.
 
 ## Make your first change with an AI assistant
 

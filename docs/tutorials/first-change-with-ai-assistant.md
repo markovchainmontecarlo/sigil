@@ -14,7 +14,7 @@ Install the CLI from the release archive as described in the root [README](../..
 sigil setup --dir /path/to/repo
 ```
 
-Edit `sigil.config.json`. Configure the agent roles used by implementation and review, and define non-interactive build and test commands under `evals`. Run the environment report if provider prerequisites are uncertain:
+Read the setup report and review `sigil.config.json`. Setup adds exact package `build`, `test`, and `verify` scripts when it can select the package manager safely, but it does not run them. Confirm the agent roles and retain at least one non-interactive build or test command under `evals` before implementation. Run the environment report if provider prerequisites are uncertain:
 
 ```sh
 sigil discover-env --repo /path/to/repo

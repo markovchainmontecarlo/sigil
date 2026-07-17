@@ -1,5 +1,7 @@
 flowchart TD
   Input["softwareChange input"]
+  VerificationReady{"build or test eval configured?"}
+  VerificationFailure["terminal workflow error: configure implementation verification"]
   TaskFile{"taskFile supplied?"}
   ExistingGraph["read supplied task graph"]
   SuppliedGraphValid{"supplied task graph valid?"}
@@ -9,10 +11,13 @@ flowchart TD
 
   Input --> TaskFile
   TaskFile -->|yes| ExistingGraph
-  TaskFile -->|no| PlanConfig
+  TaskFile -->|no| VerificationReady
   ExistingGraph --> SuppliedGraphValid
-  SuppliedGraphValid -->|valid| LoadGraph
+  SuppliedGraphValid -->|valid| VerificationReady
   SuppliedGraphValid -->|invalid| SuppliedGraphFailure
+  VerificationReady -->|no| VerificationFailure
+  VerificationReady -->|yes, intent input| PlanConfig
+  VerificationReady -->|yes, supplied graph| LoadGraph
 
   subgraph Planning["planning stage"]
     PlanConfig["load config and repository context"]
@@ -163,7 +168,7 @@ flowchart TD
   classDef boundary fill:#f3e8ff,stroke:#7c3aed,color:#3b0764;
   classDef failure fill:#fee2e2,stroke:#dc2626,color:#450a0a;
   class Planners,Synthesizer,Coder,TaskRepair,NoChangeRepair,NoopVerdict,FinalRepair,ReviewStage agent;
-  class TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,PlanValid,ResumeGate,CleanGate,BaselineGate,DependencyGate,NewCoder,ProviderInterruption,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,AllCompleted,FinalGates,FinalRepairCommitResult,StrongestGate gate;
+  class VerificationReady,TaskFile,SuppliedGraphValid,AnyPlan,MultiplePlans,PlanValid,ResumeGate,CleanGate,BaselineGate,DependencyGate,NewCoder,ProviderInterruption,TaskGate,CommitResult,NoChangeGate,RetryCommitResult,ConsecutiveNoop,AllCompleted,FinalGates,FinalRepairCommitResult,StrongestGate gate;
   class PlannerArtifacts,BuildGraph,ImplementationCheckpoint,RecoveryBundle,ReplyArtifact,TaskCommitIssue,RetryCommitIssue,FinalRepairCommit,FinalRepairCommitIssue artifact;
   class Delivery boundary;
-  class SuppliedGraphFailure,CleanFailure failure;
+  class VerificationFailure,SuppliedGraphFailure,CleanFailure failure;
