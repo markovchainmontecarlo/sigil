@@ -8,6 +8,7 @@ import { implementExitCode, reviewExitCode, softwareChangeExitCode } from "./exi
 import { readOptionalFile } from "./input.js";
 import { printJson } from "./output.js";
 import { parseCommandArgs, rejectPositionals, requireValue, value } from "./parse.js";
+import { resolveRepositoryRoot } from "../repository-setup.js";
 
 export async function planCommand(args: string[]): Promise<number> {
   const parsed = parseCommandArgs(args, {
@@ -18,8 +19,9 @@ export async function planCommand(args: string[]): Promise<number> {
   });
   rejectPositionals(parsed);
 
+  const repo = await resolveRepositoryRoot(requireValue(parsed, "repo"));
   const result = await plan({
-    repo: requireValue(parsed, "repo"),
+    repo,
     intent: requireValue(parsed, "intent"),
     brief: await readOptionalFile(value(parsed, "brief")),
     outFile: value(parsed, "out"),
@@ -40,8 +42,9 @@ export async function softwareChangeCommand(args: string[]): Promise<number> {
   });
   rejectPositionals(parsed);
 
+  const repo = await resolveRepositoryRoot(requireValue(parsed, "repo"));
   const result = await softwareChange({
-    repo: requireValue(parsed, "repo"),
+    repo,
     intent: requireValue(parsed, "intent"),
     brief: await readOptionalFile(value(parsed, "brief")),
     outFile: value(parsed, "out"),
@@ -73,7 +76,7 @@ export async function implementCommandWith(args: string[], effects: ImplementCom
   });
   rejectPositionals(parsed);
 
-  const repo = requireValue(parsed, "repo");
+  const repo = await resolveRepositoryRoot(requireValue(parsed, "repo"));
   const result = await effects.implement({
     repo,
     taskFile: requireValue(parsed, "task-file"),
@@ -108,8 +111,9 @@ export async function reviewCommandWith(args: string[], effect: ReviewCommandEff
   });
   rejectPositionals(parsed);
 
+  const repo = await resolveRepositoryRoot(requireValue(parsed, "repo"));
   const result = await effect({
-    repo: requireValue(parsed, "repo"),
+    repo,
     base: requireValue(parsed, "base"),
     autofix: parsed.values.autofix === true,
     context: value(parsed, "context"),

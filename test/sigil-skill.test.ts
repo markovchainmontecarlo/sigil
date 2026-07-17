@@ -7,6 +7,14 @@ const briefReference = () => readFileSync("skills/sigil/references/brief.md", "u
 const taskGraphReference = () => readFileSync("skills/sigil/references/task-graph.md", "utf8");
 
 describe("Sigil assistant intake", () => {
+  test("checks repository setup before planning or implementation", () => {
+    const skill = router();
+
+    expect(skill).toContain("Review the setup report");
+    expect(skill).toContain("build or test eval");
+    expect(skill).toContain("Before starting agent work");
+  });
+
   test("requires one structured brief before planning or implementation", () => {
     const skill = router();
     const brief = briefReference();

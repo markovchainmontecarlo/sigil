@@ -260,8 +260,9 @@ function summarize(gates: VerificationGate[]): VerificationResult {
   const configured = gates.filter((gate) => !gate.result.skipped);
   const ok = configured.length > 0 && configured.every((gate) => gate.result.ok);
   const evidence = gates
-    .filter((gate) => !gate.result.skipped)
-    .map((gate) => `${gate.name}: ${gate.result.ok ? "passed" : "failed"}\n${gate.result.log}`)
+    .map((gate) => gate.result.skipped
+      ? `${gate.name}: skipped (not configured)`
+      : `${gate.name}: ${gate.result.ok ? "passed" : "failed"}\n${gate.result.log}`)
     .join("\n");
   return { ok, gates, evidence };
 }

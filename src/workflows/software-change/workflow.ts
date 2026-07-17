@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 
 import { validateTaskGraph } from "../../contracts/task-graph.js";
 import { sigil } from "../../context.js";
+import { requireImplementationVerification } from "../../repository-setup.js";
 import { implement, type ImplementInput, type ImplementResult } from "./implementation/index.js";
 import { plan, type PlanInput, type PlanResult } from "./planning/index.js";
 
@@ -105,7 +106,12 @@ function completed(planned: PlanResult, implemented: ImplementResult): SoftwareC
 
 export const softwareChange = sigil<SoftwareChangeInput, SoftwareChangeResult>("software-change", async (ctx, input) => {
   if (input.resume && !input.taskFile) throw new Error("implementation resume requires an accepted taskFile");
-  const planned = input.taskFile ? await planFromTaskFile(input) : await ctx.run(plan, planInput(input));
+
+  const suppliedPlan = input.taskFile ? await planFromTaskFile(input) : undefined;
+  if (suppliedPlan && !suppliedPlan.valid) return stoppedAfterPlanning(suppliedPlan);
+
+  requireImplementationVerification(input.repo);
+  const planned = suppliedPlan ?? await ctx.run(plan, planInput(input));
   if (!planned.valid) return stoppedAfterPlanning(planned);
 
   const implemented = await ctx.run(implement, implementInput(input, planned));

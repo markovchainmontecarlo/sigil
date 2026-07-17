@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: bun install --frozen-lockfile
+      - run: bun run verify:package
+      - name: Prepare release assets
+        id: release
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p 'require("./package.json").version')"
+          TAG="v${VERSION}"
+          SOURCE="dist/verified-package/sigil-${VERSION}-installer.tgz"
+          ASSET="dist/sigil-${VERSION}.tgz"
+          CHECKSUM="dist/sigil-${VERSION}.tgz.sha256"
+          cp "$SOURCE" "$ASSET"
+          shasum -a 256 "$ASSET" > "$CHECKSUM"
+          {
+            echo "version=${VERSION}"
+            echo "tag=${TAG}"
+            echo "asset=${ASSET}"
+            echo "checksum=${CHECKSUM}"
+          } >> "$GITHUB_OUTPUT"
+      - name: Inspect existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify existing release
+        if: steps.existing.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.release.outputs.tag }}
+          ASSET: ${{ steps.release.outputs.asset }}
+          CHECKSUM: ${{ steps.release.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}"
+          test "$(git rev-list -n 1 "$TAG")" = "$GITHUB_SHA"
+          mkdir -p dist/existing-release
+          gh release download "$TAG" \
+            --pattern "$(basename "$ASSET")" \
+            --pattern "$(basename "$CHECKSUM")" \
+            --dir dist/existing-release
+          cmp "$ASSET" "dist/existing-release/$(basename "$ASSET")"
+          cmp "$CHECKSUM" "dist/existing-release/$(basename "$CHECKSUM")"
+      - name: Create GitHub release
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
+          ASSET: ${{ steps.release.outputs.asset }}
+          CHECKSUM: ${{ steps.release.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" "$ASSET" "$CHECKSUM" \
+            --target "$GITHUB_SHA" \
+            --title "sigil ${VERSION}" \
+            --notes "Automated release for sigil ${VERSION}."

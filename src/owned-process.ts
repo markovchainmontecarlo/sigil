@@ -39,6 +39,13 @@ export type OwnedProcessResult = {
   signal: NodeJS.Signals | null;
 };
 
+type ProcessObservation = {
+  stdout: string;
+  stderr: string;
+  terminated: Promise<void>;
+  exited: Promise<OwnedProcessResult>;
+};
+
 const DEFAULT_TERMINATION_TIMEOUT_MS = 1_000;
 const DEFAULT_MAX_BUFFER_BYTES = 20 * 1024 * 1024;
 
@@ -47,8 +54,6 @@ export class OwnedProcess implements AsyncDisposable {
   readonly identity: ProcessIdentity;
   readonly info: OwnedProcessInfo;
 
-  private stdout = "";
-  private stderr = "";
   private readonly exited: Promise<OwnedProcessResult>;
   private cleanup?: Promise<void>;
   private stopped = false;
@@ -59,6 +64,7 @@ export class OwnedProcess implements AsyncDisposable {
     identity: ProcessIdentity,
     private readonly options: OwnedProcessOptions,
     ownsProcessGroup: boolean,
+    private readonly observation: ProcessObservation,
   ) {
     this.child = child;
     this.identity = identity;
@@ -69,7 +75,7 @@ export class OwnedProcess implements AsyncDisposable {
       kind: options.kind,
       processGroupId: identity.pid,
     };
-    this.exited = this.observeExit();
+    this.exited = observation.exited;
   }
 
   static async spawn(options: OwnedProcessOptions): Promise<OwnedProcess> {
@@ -90,14 +96,15 @@ export class OwnedProcess implements AsyncDisposable {
     ownsProcessGroup?: boolean,
   ): Promise<OwnedProcess> {
     if (!child.pid) throw new Error(`failed to start ${options.kind} process`);
+    const observation = observeChild(child, options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES);
     let owner: OwnedProcess | undefined;
     try {
-      const identity = await readProcessIdentity(child.pid);
+      const identity = await readSpawnedProcessIdentity(child.pid, observation);
       const processGroupId = ownsProcessGroup === undefined
         ? await injectedProcessGroupId(child.pid)
         : child.pid;
       const ownsGroup = ownsProcessGroup ?? processGroupId === child.pid;
-      owner = new OwnedProcess(child, identity, options, ownsGroup);
+      owner = new OwnedProcess(child, identity, options, ownsGroup, observation);
       owner.info.processGroupId = processGroupId;
       owner.info.ownerIdentity = await readProcessIdentity();
       await options.lifecycle?.started?.(owner.info);
@@ -112,7 +119,7 @@ export class OwnedProcess implements AsyncDisposable {
   }
 
   get capturedStderr(): string {
-    return this.stderr;
+    return this.observation.stderr;
   }
 
   async wait(): Promise<OwnedProcessResult> {
@@ -133,21 +140,6 @@ export class OwnedProcess implements AsyncDisposable {
   private readonly abort = (): void => {
     void this.dispose();
   };
-
-  private observeExit(): Promise<OwnedProcessResult> {
-    const limit = this.options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
-    this.child.stdout.on("data", (chunk) => { this.stdout = appendWithin(this.stdout, chunk, limit); });
-    this.child.stderr.on("data", (chunk) => { this.stderr = appendWithin(this.stderr, chunk, limit); });
-    return new Promise((resolve, reject) => {
-      this.child.once("error", reject);
-      this.child.once("close", (exitCode, signal) => resolve({
-        stdout: this.stdout,
-        stderr: this.stderr,
-        exitCode,
-        signal,
-      }));
-    });
-  }
 
   private async stop(): Promise<void> {
     this.options.signal?.removeEventListener("abort", this.abort);
@@ -232,6 +224,50 @@ function spawnOptions(options: OwnedProcessOptions): SpawnOptionsWithoutStdio & 
     detached: process.platform !== "win32",
     stdio: ["pipe", "pipe", "pipe"],
   };
+}
+
+function observeChild(
+  child: ChildProcessWithoutNullStreams,
+  limit: number,
+): ProcessObservation {
+  const observation = {} as ProcessObservation;
+  observation.stdout = "";
+  observation.stderr = "";
+
+  child.stdout.on("data", (chunk) => {
+    observation.stdout = appendWithin(observation.stdout, chunk, limit);
+  });
+  child.stderr.on("data", (chunk) => {
+    observation.stderr = appendWithin(observation.stderr, chunk, limit);
+  });
+  observation.terminated = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", () => resolve());
+  });
+  observation.exited = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (exitCode, signal) => resolve({
+      stdout: observation.stdout,
+      stderr: observation.stderr,
+      exitCode,
+      signal,
+    }));
+  });
+  return observation;
+}
+
+async function readSpawnedProcessIdentity(
+  pid: number,
+  observation: ProcessObservation,
+): Promise<ProcessIdentity> {
+  try {
+    return await readProcessIdentity(pid);
+  } catch (error) {
+    if ((error as { code?: string | number }).code !== 1) throw error;
+  }
+
+  await observation.terminated;
+  return { pid, startIdentity: "exited-before-identity-read" };
 }
 
 function appendWithin(current: string, chunk: unknown, limit: number): string {

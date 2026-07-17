@@ -1,4 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,6 +42,17 @@ function run(args: string[], env: NodeJS.ProcessEnv = {}) {
 
 function text(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
+}
+
+async function waitForState(statusFile: string, expected: string): Promise<Record<string, unknown>> {
+  const deadline = Date.now() + 10_000;
+  let status = JSON.parse(readFileSync(statusFile, "utf8"));
+
+  while (status.state !== expected && Date.now() < deadline) {
+    await Bun.sleep(20);
+    status = JSON.parse(readFileSync(statusFile, "utf8"));
+  }
+  return status;
 }
 
 describe("cli", () => {
@@ -168,14 +180,8 @@ describe("cli", () => {
     expect(result.exitCode).toBe(0);
     expect(handle.state).toBe("started");
     expect(handle.pid).toBeGreaterThan(0);
-    for (
-      let attempt = 0;
-      attempt < 100 && JSON.parse(readFileSync(handle.statusFile, "utf8")).state !== "succeeded";
-      attempt++
-    ) {
-      await Bun.sleep(20);
-    }
-    expect(JSON.parse(readFileSync(handle.statusFile, "utf8"))).toMatchObject({
+    const status = await waitForState(handle.statusFile, "succeeded");
+    expect(status).toMatchObject({
       state: "succeeded",
       exitCode: 0,
     });
@@ -407,15 +413,9 @@ describe("cli", () => {
     expect(result.exitCode).toBe(0);
     expect(handle.state).toBe("started");
     expect(handle.pid).toBeGreaterThan(0);
-    for (
-      let attempt = 0;
-      attempt < 100 && JSON.parse(readFileSync(handle.statusFile, "utf8")).state !== "succeeded";
-      attempt++
-    ) {
-      await Bun.sleep(20);
-    }
+    const status = await waitForState(handle.statusFile, "succeeded");
     expect(JSON.parse(readFileSync(outFile, "utf8"))).toEqual({ repo: dir, value: "ok" });
-    expect(JSON.parse(readFileSync(handle.statusFile, "utf8")).state).toBe("succeeded");
+    expect(status.state).toBe("succeeded");
   });
 
   test("run-sigil durable mode rejects temporary workflow state", () => {
@@ -439,14 +439,8 @@ describe("cli", () => {
 
     expect(result.exitCode).toBe(0);
     expect(handle.runDir.startsWith(join(dir, ".sigil", "runs"))).toBe(true);
-    for (
-      let attempt = 0;
-      attempt < 100 && JSON.parse(readFileSync(handle.statusFile, "utf8")).state !== "succeeded";
-      attempt++
-    ) {
-      await Bun.sleep(20);
-    }
-    expect(JSON.parse(readFileSync(handle.statusFile, "utf8")).state).toBe("succeeded");
+    const status = await waitForState(handle.statusFile, "succeeded");
+    expect(status.state).toBe("succeeded");
 
     rmSync(dir, { recursive: true, force: true });
   });
@@ -566,10 +560,78 @@ describe("cli", () => {
 
     expect(result.exitCode).toBe(0);
     expect(text(result.stdout)).toContain(join(dir, "sigil.config.json"));
-    expect(text(result.stdout)).toContain("create and validate a Sigil task graph");
+    expect(text(result.stdout)).toContain("Review the agent bindings");
     expect(text(result.stdout)).toContain("docs/tutorials/first-change-with-ai-assistant.md");
     expect(loadConfig(dir)).toEqual(DEFAULT_SIGIL_CONFIG);
     expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("node_modules/\n/.sigil/runs/\n");
+  });
+
+  test("setup resolves the Git root and adds exact package verification scripts", () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-setup-root-"));
+    const nested = join(repo, "apps", "web");
+    mkdirSync(nested, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "package-lock.json"), "{}\n");
+    writeFileSync(join(repo, "package.json"), JSON.stringify({
+      scripts: {
+        build: "next build",
+        test: "vitest run",
+        start: "next start",
+      },
+    }));
+
+    const result = run(["setup", "--dir", nested]);
+    const config = loadConfig(repo);
+    const stdout = text(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(config.evals).toEqual({
+      build: "npm run build",
+      test: "npm run test",
+    });
+    expect(existsSync(join(nested, "sigil.config.json"))).toBe(false);
+    expect(stdout).toContain("Repository:");
+    expect(stdout).toContain(repo);
+    expect(stdout).toContain("Verification added:");
+    expect(stdout).toContain("build  npm run build");
+    expect(stdout).toContain("test   npm run test");
+    expect(stdout).toContain("detected but not run");
+    expect(stdout).toContain("Review the agent bindings and verification commands");
+  });
+
+  test("setup leaves evals empty when the package manager is ambiguous", () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-setup-ambiguous-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "package.json"), JSON.stringify({
+      scripts: { build: "vite build", test: "vitest run" },
+    }));
+    writeFileSync(join(repo, "package-lock.json"), "{}\n");
+    writeFileSync(join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+
+    const result = run(["setup", "--dir", repo]);
+    const stdout = text(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(loadConfig(repo).evals).toEqual({});
+    expect(stdout).toContain("No unambiguous build or test commands were found.");
+    expect(stdout).toContain("add repository verification commands under `evals`");
+  });
+
+  test("setup reports when detected verification does not include build or test", () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-setup-verify-only-"));
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "package.json"), JSON.stringify({
+      packageManager: "npm@11.4.2",
+      scripts: { verify: "eslint ." },
+    }));
+
+    const result = run(["setup", "--dir", repo]);
+    const stdout = text(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(loadConfig(repo).evals).toEqual({ verify: "npm run verify" });
+    expect(stdout).toContain("No build or test command was detected.");
+    expect(stdout).toContain("Add one under `evals` before running implementation.");
   });
 
   test("setup refuses existing config unless forced", () => {
@@ -700,6 +762,36 @@ describe("cli", () => {
       brief: "Confirmed implementation context.\n",
       instructions: undefined,
     });
+  });
+
+  test("implement resolves a nested repository path to the Git root", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "sigil-cli-implement-root-"));
+    const nested = join(repo, "apps", "web");
+    mkdirSync(nested, { recursive: true });
+    execFileSync("git", ["init", "-b", "main"], { cwd: repo });
+    writeFileSync(join(repo, "sigil.config.json"), JSON.stringify({
+      ...DEFAULT_SIGIL_CONFIG,
+      evals: { build: "true" },
+    }));
+    let receivedRepo = "";
+    const effects = {
+      implement: async (input: { repo: string }) => {
+        receivedRepo = input.repo;
+        return {
+          branch: "feature/change",
+          prBody: "Ready",
+          reviewBlocking: false,
+          issues: [],
+          failedTasks: [],
+          noopTasks: [],
+        };
+      },
+      publish: async () => ({ push: { ok: true, log: "" }, pr: { ok: true, log: "" } }),
+    };
+
+    await implementCommandWith(["--repo", nested, "--task-file", "graph.json"], effects as never);
+
+    expect(receivedRepo).toBe(realpathSync(repo));
   });
 
   test("review exits 1 when review reports issues without unresolved highs", () => {

@@ -10,6 +10,7 @@ import {
 import { loadConfig } from "../../config.js";
 import { loadConfiguredContext, renderContextBlock, sigil, type RichSigilAgent, type SigilContext } from "../../context.js";
 import { changedPaths, git, isCleanTree } from "../../git.js";
+import { requireImplementationVerification } from "../../repository-setup.js";
 import {
   recover,
   retryOperation,
@@ -77,7 +78,7 @@ export const refactor = sigil<RefactorInput, RefactorResult>("refactor", async (
   const failures: WorkflowFailure[] = [];
   const eventsFile = await ctx.artifacts.write("refactor-events.jsonl", "");
   await recordStage(eventsFile, "starting");
-  const config = loadConfig(input.repo);
+  const config = requireImplementationVerification(input.repo);
   await requireCleanTree(input.repo);
   const branch = await currentBranch(input.repo);
   await bootstrapWorkspace(ctx, input.repo, config);

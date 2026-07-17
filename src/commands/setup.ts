@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { CONFIG_FILE, DEFAULT_SIGIL_CONFIG } from "../config.js";
+import { discoverProjectEvals, resolveRepositoryRoot } from "../repository-setup.js";
 import { parseCommandArgs, rejectPositionals, value } from "./parse.js";
 
 const RUN_DIRECTORY_IGNORE = "/.sigil/runs/";
@@ -13,9 +14,12 @@ export async function setupCommand(args: string[]): Promise<number> {
   });
   rejectPositionals(parsed);
 
-  const repo = resolve(value(parsed, "dir") ?? process.cwd());
+  const requested = resolve(value(parsed, "dir") ?? process.cwd());
+  const repo = await resolveRepositoryRoot(requested);
+  const evals = await discoverProjectEvals(repo);
+  const config = { ...DEFAULT_SIGIL_CONFIG, evals };
   const configPath = join(repo, CONFIG_FILE);
-  const body = `${JSON.stringify(DEFAULT_SIGIL_CONFIG, null, 2)}\n`;
+  const body = `${JSON.stringify(config, null, 2)}\n`;
   try {
     await writeFile(configPath, body, { flag: parsed.values.force ? "w" : "wx" });
   } catch (error) {
@@ -27,10 +31,41 @@ export async function setupCommand(args: string[]): Promise<number> {
   }
 
   await ensureRunDirectoryIgnored(repo);
-  console.log(configPath);
-  console.log("Next: discuss a bounded change with your AI assistant, then ask it to create and validate a Sigil task graph.");
-  console.log("Guide: docs/tutorials/first-change-with-ai-assistant.md");
+  printSetupReport(repo, configPath, config);
   return 0;
+}
+
+function printSetupReport(
+  repo: string,
+  configPath: string,
+  config: typeof DEFAULT_SIGIL_CONFIG,
+): void {
+  console.log(`Created ${configPath}`);
+  console.log(`\nRepository:\n  ${repo}`);
+  console.log("\nAgents added:");
+  for (const [name, binding] of Object.entries(config.agents)) {
+    console.log(`  ${name.padEnd(14)} ${binding.provider}  ${binding.model}`);
+  }
+
+  const evals = Object.entries(config.evals);
+  console.log("\nVerification added:");
+  if (evals.length === 0) {
+    console.log("  No unambiguous build or test commands were found.");
+    console.log("\nReview the agent bindings and add repository verification commands under `evals` before running an implementation workflow.");
+    console.log("Guide: docs/tutorials/first-change-with-ai-assistant.md");
+    return;
+  }
+
+  for (const [name, definition] of evals) {
+    const command = typeof definition === "string" ? definition : definition.command;
+    console.log(`  ${name.padEnd(6)} ${command}`);
+  }
+  console.log("\nThe verification commands were detected but not run.");
+  if (!("build" in config.evals) && !("test" in config.evals)) {
+    console.log("No build or test command was detected. Add one under `evals` before running implementation.");
+  }
+  console.log("Review the agent bindings and verification commands before using Sigil.");
+  console.log("Guide: docs/tutorials/first-change-with-ai-assistant.md");
 }
 
 async function ensureRunDirectoryIgnored(repo: string): Promise<void> {

@@ -28,7 +28,7 @@ describe("publication artifacts", () => {
     expect(evidence.exportsIdentity).toMatch(/^[a-f0-9]{64}$/);
   }, 15_000);
 
-  test("rejects absent publication evidence and leaves publication to the verified local process", () => {
+  test("runs release validation as required pull request CI", () => {
     const checked = run(["bun", "scripts/verify-package.ts", "--check-record", "/tmp/missing-sigil-verification.json"]);
     const manifest = JSON.parse(readFileSync("package.json", "utf8"));
     const continuousIntegration = readFileSync(".github/workflows/ci.yml", "utf8");
@@ -39,7 +39,24 @@ describe("publication artifacts", () => {
     expect(scripts).not.toContain("npm publish");
     expect(continuousIntegration).not.toContain("npm publish");
     expect(continuousIntegration).not.toContain("id-token: write");
-    expect(continuousIntegration).not.toContain("pull_request:");
+    expect(continuousIntegration).toContain("pull_request:");
     expect(continuousIntegration).toContain("branches: [main]");
+    expect(continuousIntegration).toContain("bun run validate:release");
+    expect(continuousIntegration).toContain("validate:");
+    expect(continuousIntegration).toContain("workflow-lint:");
+  });
+
+  test("publishes a verified installer only after public main changes", () => {
+    const release = readFileSync(".github/workflows/release.yml", "utf8");
+
+    expect(release).toContain("push:");
+    expect(release).toContain("branches: [main]");
+    expect(release).not.toContain("pull_request:");
+    expect(release).toContain("contents: write");
+    expect(release).toContain("bun run verify:package");
+    expect(release).toContain("sigil-${VERSION}.tgz");
+    expect(release).toContain("sigil-${VERSION}.tgz.sha256");
+    expect(release).toContain('gh release create "$TAG"');
+    expect(release).toContain('--target "$GITHUB_SHA"');
   });
 });

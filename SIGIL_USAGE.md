@@ -90,7 +90,7 @@ Initialize a target repository:
 sigil setup --dir /path/to/repo
 ```
 
-Then edit `sigil.config.json` in that repository. Setup also adds `/.sigil/runs/` to `.gitignore` so durable local execution state never dirties the worktree. Sigil resolves config by searching upward from the target repo path.
+Setup resolves a nested path to its Git root, writes `sigil.config.json` there, and adds `/.sigil/runs/` to `.gitignore` so durable local execution state never dirties the worktree. When an unambiguous package manager declares exact `build`, `test`, or `verify` scripts, setup adds those commands without running them. Review the reported agent bindings and verification commands. Add at least one build or test eval before implementation when setup cannot select one safely.
 
 After setup, the recommended first action is to ask the current code assistant to create and validate a Sigil task graph for the change already under discussion. See [Make your first change with an AI assistant](./docs/tutorials/first-change-with-ai-assistant.md).
 
@@ -174,7 +174,7 @@ For long-running workflow commands, exit code `0` means the detached worker laun
 | Command | What it does | Exit code `0` means |
 | --- | --- | --- |
 | `sigil dashboard [--host 127.0.0.1] [--port <number>] [--root <dir>]...` | Serve a read-only live dashboard for discoverable local runs. | The dashboard shut down normally. |
-| `sigil setup [--dir <repo>] [--force]` | Write the default repo config. | The config was written. |
+| `sigil setup [--dir <repo>] [--force]` | Initialize repo config and report detected verification. | The config was written. |
 | `sigil discover-env [--repo <dir>]` | Print a read-only environment report. | The report was printed. |
 | `sigil migrate --repo <dir> --target <file> --backlog <file> --run-dir <dir> [--foreground]` | Apply a dependency-ordered repository migration with commit checkpoints. | Every item, final review, build, and test passed. |
 | `sigil refactor --repo <dir> --intent <text> [--brief <file>] [--focus <path>]... [--protected-path <path>]... [--foreground]` | Apply one behavior-preserving structural change from advisory focus paths while respecting protected paths. | Final build and test gates passed without issues. |
@@ -196,7 +196,7 @@ For long-running workflow commands, exit code `0` means the detached worker laun
 
 ## Built-in software workflows
 
-Use `software-change` when Sigil should own agentic planning for one change. It plans from an intent, implements the typed task graph, runs configured verification and review through the implementation stage, and returns combined evidence. It does not push, open a pull request, merge, or apply a dispatch policy.
+Use `software-change` when Sigil should own agentic planning for one change. Before starting planners, it requires at least one configured build or test command so a composed run cannot spend agent time and then stop at implementation setup. It plans from an intent, implements the typed task graph, runs configured verification and review through the implementation stage, and returns combined evidence. It does not push, open a pull request, merge, or apply a dispatch policy.
 
 ```sh
 env -u CLAUDECODE sigil software-change \
@@ -394,7 +394,8 @@ Promote a temporary TypeScript Sigil to maintained project code only when it wil
 
 ## Troubleshooting
 
-- Missing config: run `sigil setup` in the target repo or pass the correct `--repo` path.
+- Missing config: run `sigil setup` from the target repository or pass the correct `--repo` path. Setup writes to the Git root even when invoked from a nested directory.
+- Missing implementation verification: add at least one non-interactive `build` or `test` command under `evals`. `software-change` and `implement` stop before agent work or branch changes when neither is configured.
 - Unknown agent: check that the name appears under `agents` and that `plan`, `implement`, `review`, or YAML jobs reference the same name.
 - Hanging eval: make eval commands non-interactive. Add CI flags, disable first-run prompts, and avoid commands that wait for input.
 - Dirty working tree: `implement` requires a clean target working tree before it starts. Commit, stash, or move unrelated changes before implementation.

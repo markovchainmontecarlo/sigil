@@ -25,6 +25,7 @@ import {
 import { review } from "../review/index.js";
 import { bootstrapWorkspace } from "../../../workspace.js";
 import type { WorkflowFailure } from "../../../recovery/index.js";
+import { requireImplementationVerification } from "../../../repository-setup.js";
 import {
   captureRecoveryBundle,
   discardTaskWork,
@@ -380,7 +381,7 @@ async function recoverNoop(
 }
 
 export const implement = sigil<ImplementInput, ImplementResult>("implement", async (ctx, input) => {
-  const config = loadConfig(input.repo);
+  const config = requireImplementationVerification(input.repo);
   const baseBranch = input.baseBranch ?? config.implement.baseBranch;
   const canonicalGraphFile = input.canonicalGraphFile ?? ctx.artifacts.path("implementation/task-graph.json");
   const checkpointFile = input.checkpointFile ?? ctx.artifacts.path("implementation/checkpoint.json");

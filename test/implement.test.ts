@@ -115,6 +115,18 @@ function testArtifactDir(repo: string): string {
 }
 
 describe("implement", () => {
+  test("rejects missing implementation evals before changing branches", async () => {
+    const { repo, taskFile } = fixture([task("/tmp", "a")], { evals: {} });
+    const branch = run(repo, ["branch", "--show-current"]).trim();
+
+    await expect(implement({ repo, taskFile }, stubContext(repo, {
+      createAgent: () => new StubAgent(),
+    }))).rejects.toThrow("No build or test commands are configured");
+
+    expect(run(repo, ["branch", "--show-current"]).trim()).toBe(branch);
+    expect(run(repo, ["status", "--short"])).toBe("");
+  });
+
   test("marks only the acquisition that opens a coder as a new session", async () => {
     const agents: StubAgent[] = [];
     const context = {

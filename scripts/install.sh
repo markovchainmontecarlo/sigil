@@ -28,6 +28,7 @@ need() {
 }
 
 need bun
+need npm
 need gh
 
 link_managed_skill_into() {
@@ -124,7 +125,7 @@ mkdir -p "$SIGIL_HOME" "$BIN_DIR"
 stage="$tmp/lib"
 mkdir -p "$stage"
 tar -xzf "$tarball" -C "$stage" --strip-components=1
-(cd "$stage" && bun install --production --frozen-lockfile)
+(cd "$stage" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund)
 old="$tmp/old-lib"
 old_skill_names="$tmp/old-skill-names"
 if [ -d "$SKILL_DIR" ]; then

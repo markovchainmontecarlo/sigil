@@ -14,9 +14,11 @@ mkdir -p "$home_dir/.codex/skills"
 
 tarball="${1:?installer archive path required}"
 checksum="${2:?installer checksum path required}"
+npm_cache="${NPM_CONFIG_CACHE:-$HOME/.npm}"
 
 run_install() {
   HOME="$home_dir" \
+  NPM_CONFIG_CACHE="$npm_cache" \
   SIGIL_HOME="$home_dir/.sigil" \
   SIGIL_RELEASE_TARBALL="$(cd "$(dirname "$tarball")" && pwd)/$(basename "$tarball")" \
   SIGIL_RELEASE_CHECKSUM="$(cd "$(dirname "$checksum")" && pwd)/$(basename "$checksum")" \
@@ -34,7 +36,7 @@ test -f "$home_dir/.sigil/lib/src/index.d.ts"
 test -f "$home_dir/.sigil/lib/resources/dashboard/public/index.html"
 test -f "$home_dir/.sigil/lib/resources-manifest.json"
 test -f "$home_dir/.sigil/lib/schemas/task-graph.schema.json"
-test -f "$home_dir/.sigil/lib/bun.lock"
+test -f "$home_dir/.sigil/lib/package-lock.json"
 test -f "$home_dir/.sigil/skills/sigil/SKILL.md"
 test -f "$home_dir/.sigil/skills/sigil/references/brief.md"
 test -f "$home_dir/.sigil/skills/sigil/references/task-graph.md"

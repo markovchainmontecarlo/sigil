@@ -4,6 +4,13 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 
 test("contracts import evaluates only contract modules", () => {
+  const build = Bun.spawnSync({
+    cmd: ["bun", "run", "build"],
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(build.exitCode, build.stderr.toString()).toBe(0);
+
   const directory = mkdtempSync("/tmp/sigil-contract-import-");
   const log = join(directory, "modules.log");
   const loader = join(directory, "loader.mjs");

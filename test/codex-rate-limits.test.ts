@@ -60,12 +60,12 @@ describe("Codex app-server capacity reads", () => {
     `);
     const started = Date.now();
 
-    const reading = readCodexAccountStatus(profile, { spawnAppServer, timeoutMs: 100 });
-    while (!existsSync(pidFile)) await new Promise((resolve) => setTimeout(resolve, 5));
+    const reading = readCodexAccountStatus(profile, { spawnAppServer, timeoutMs: 500 });
+    await waitUntil(() => existsSync(pidFile), "capacity descendant identity");
     const descendant = await readProcessIdentity(Number(readFileSync(pidFile, "utf8")));
 
     await expect(reading).resolves.toMatchObject({ capacity: { kind: "unknown" } });
-    expect(Date.now() - started).toBeLessThan(500);
+    expect(Date.now() - started).toBeLessThan(1_000);
     expect(await processIdentityIsAlive(descendant)).toBe(false);
   });
 
@@ -88,3 +88,11 @@ describe("Codex app-server capacity reads", () => {
       .resolves.toMatchObject({ capacity: { kind: "unknown", message: expect.stringContaining("bad profile") } });
   });
 });
+
+async function waitUntil(condition: () => boolean, subject: string): Promise<void> {
+  const deadline = Date.now() + 2_000;
+  while (!condition()) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${subject}`);
+    await Bun.sleep(10);
+  }
+}

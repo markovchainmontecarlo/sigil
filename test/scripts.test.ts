@@ -9,10 +9,25 @@ function run(cmd: string[]) {
 }
 
 describe("distribution scripts", () => {
-  test("fast tests serialize shared package staging access", () => {
+  test("release validation is repository-owned and test files run in isolated processes", () => {
     const manifest = JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> };
+    const suite = readFileSync("scripts/test-suite.ts", "utf8");
+    const ci = readFileSync(".github/workflows/ci.yml", "utf8");
 
-    expect(manifest.scripts["test:fast"]).toBe("bun scripts/test-suite.ts fast --max-concurrency 1");
+    expect(manifest.scripts["test:fast"]).toBe("bun scripts/test-suite.ts fast");
+    expect(manifest.scripts["test:integration"]).toBe("bun scripts/test-suite.ts integration");
+    expect(manifest.scripts["verify:package"]).toBe(
+      "node --experimental-strip-types scripts/verify-package.ts",
+    );
+    expect(manifest.scripts["validate:release"]).toBe(
+      "bun run typecheck && bun run test:all && bun run verify:package",
+    );
+    expect(suite).toContain("for (const file of files) runTests([file], suiteBudgets[suite.name]);");
+    expect(suite).not.toContain("runTests(grouped");
+    expect(ci).toContain("- run: bun run validate:release");
+    expect(ci).not.toContain("- run: bun run typecheck");
+    expect(ci).not.toContain("- run: bun run test:all");
+    expect(ci).not.toContain("- run: bun run verify:package");
   });
 
   test("pack.sh and install.sh are bash syntax-valid", () => {
@@ -31,7 +46,7 @@ describe("distribution scripts", () => {
     const script = readFileSync("scripts/install.sh", "utf8");
 
     expect(script).toContain("shasum -a 256");
-    expect(script).toContain("bun install --production --frozen-lockfile");
+    expect(script).toContain("npm ci --omit=dev --ignore-scripts --no-audit --no-fund");
     expect(script).toContain("gh release download");
     expect(script).toContain("SIGIL_RELEASE_TARBALL");
     expect(script).toContain("RELEASE_ASSET_GLOB");
@@ -52,6 +67,7 @@ describe("distribution scripts", () => {
 
     expect(script).toContain("-registry.tgz");
     expect(script).toContain("-installer.tgz");
+    expect(script).toContain('"npm", "install", "--package-lock-only"');
     expect(script).toContain("assertSharedBytes");
     expect(script).toContain("assertInventory");
     expect(script).toContain("test-package-consumers.ts");
@@ -65,6 +81,7 @@ describe("distribution scripts", () => {
 
     expect(script).toContain("=== fresh install ===");
     expect(script).toContain("=== update install ===");
+    expect(script).toContain('NPM_CONFIG_CACHE="$npm_cache"');
     expect(script).toContain("SIGIL_RELEASE_TARBALL");
     expect(script).toContain("installer archive path required");
     expect(script).toContain("stale-skill");
